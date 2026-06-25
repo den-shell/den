@@ -141,26 +141,42 @@ pub fn builtinSource(self: *Shell, cmd: *types.ParsedCommand) !void {
             var in_sq = false;
             var in_dq = false;
             var escaped = false;
+            // A '#' comment runs to end of line; quote characters inside it (e.g.
+            // an apostrophe in "Den's") must NOT toggle quote state, otherwise the
+            // following lines get swallowed as one giant quoted "line".
+            var in_comment = false;
             var ci: usize = 0;
             while (ci < content.len) : (ci += 1) {
                 if (escaped) {
+                    // An escaped newline is a line continuation: don't split here.
                     escaped = false;
                     continue;
                 }
                 const ch = content[ci];
-                if (ch == '\\' and !in_sq) {
+                if (ch == '\\' and !in_sq and !in_comment) {
                     escaped = true;
                     continue;
                 }
+                if (ch == '\n') {
+                    in_comment = false;
+                    if (!in_sq and !in_dq) {
+                        if (lines_count >= lines_buffer.len) break;
+                        lines_buffer[lines_count] = content[line_start..ci];
+                        lines_count += 1;
+                        line_start = ci + 1;
+                    }
+                    continue;
+                }
+                if (in_comment) continue;
                 if (ch == '\'' and !in_dq) {
                     in_sq = !in_sq;
                 } else if (ch == '"' and !in_sq) {
                     in_dq = !in_dq;
-                } else if (ch == '\n' and !in_sq and !in_dq) {
-                    if (lines_count >= lines_buffer.len) break;
-                    lines_buffer[lines_count] = content[line_start..ci];
-                    lines_count += 1;
-                    line_start = ci + 1;
+                } else if (ch == '#' and !in_sq and !in_dq) {
+                    // '#' starts a comment only at the start of a word (start of
+                    // line or preceded by whitespace), matching POSIX.
+                    const prev_is_ws = ci == line_start or content[ci - 1] == ' ' or content[ci - 1] == '\t';
+                    if (prev_is_ws) in_comment = true;
                 }
             }
             if (line_start <= content.len and lines_count < lines_buffer.len) {
