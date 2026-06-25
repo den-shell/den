@@ -112,6 +112,17 @@ pub fn parseArgs(allocator: std.mem.Allocator, process_args: std.process.Args) !
             norc = true;
             i += 1;
             continue;
+        } else if (std.mem.eql(u8, arg, "-l") or std.mem.eql(u8, arg, "--login") or
+            std.mem.eql(u8, arg, "-i") or std.mem.eql(u8, arg, "--interactive"))
+        {
+            // Accept the standard login/interactive shell flags. Den is already
+            // interactive when no script/-c is given and sources ~/.denrc unless
+            // --norc, so these are no-ops — but recognizing them is what lets Den
+            // serve as a login shell: tools and GUI apps invoke `$SHELL -l -c ...`
+            // or `$SHELL -i`, and without this they'd be treated as a script path
+            // ("error loading script '-l'") and fail.
+            i += 1;
+            continue;
         }
         try remaining_list.append(allocator, arg);
         i += 1;
