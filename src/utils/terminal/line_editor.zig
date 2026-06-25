@@ -607,6 +607,15 @@ pub const LineEditor = struct {
             // Handle special characters
             switch (byte) {
                 '\r', '\n' => {
+                    // Erase any inline (ghost-text) suggestion before submitting.
+                    // The cursor sits at the end of the typed input with the dim
+                    // suggestion drawn to its right; without this the suggestion
+                    // (e.g. "; exit") gets left on the executed command line.
+                    if (self.suggestion != null) {
+                        try self.writeBytes("\x1b[0K");
+                        self.clearSuggestion();
+                    }
+
                     // Enter key
                     // If in reverse search mode, accept the match
                     if (self.reverse_search_mode) {
