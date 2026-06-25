@@ -40,7 +40,12 @@ pub const AheadBehind = struct {
     behind: usize,
 };
 
-/// Git integration module — reads .git/ files directly (no process spawning)
+/// Git integration module — reads .git/ files directly (no process spawning).
+/// NOTE: working-tree status (staged/unstaged/untracked, ahead/behind) is not
+/// yet computed — those counts stay 0, so the prompt shows a clean ✓ even when
+/// the tree is dirty. Populating them needs either parsing .git/index against
+/// the working tree or a `git status` call (the latter currently no-ops because
+/// this build's std.process.run-based spawning isn't returning output).
 pub const GitModule = struct {
     allocator: std.mem.Allocator,
 
