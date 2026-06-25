@@ -162,11 +162,13 @@ fn captureOutputPosix(allocator: std.mem.Allocator, opts: SpawnOptions) !Capture
         exit_code = @intCast(posix.W.EXITSTATUS(status_u32));
     }
 
-    // Trim trailing newline (matching expansion.zig behavior)
-    var result = try output.toOwnedSlice(allocator);
-    while (result.len > 0 and result[result.len - 1] == '\n') {
-        result = result[0 .. result.len - 1];
+    // Trim trailing newlines (matching expansion.zig behavior) BEFORE taking
+    // ownership: re-slicing the owned slice would leave its length out of sync
+    // with the underlying allocation, tripping the allocator's free-size check.
+    while (output.items.len > 0 and output.items[output.items.len - 1] == '\n') {
+        _ = output.pop();
     }
+    const result = try output.toOwnedSlice(allocator);
 
     return CaptureResult{
         .stdout = result,
