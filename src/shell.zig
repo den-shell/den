@@ -780,8 +780,13 @@ pub const Shell = struct {
     pub fn run(self: *Shell) !void {
         self.running = true;
 
-        try IO.print("Den shell initialized!\n", .{});
-        try IO.print("Type 'exit' to quit or Ctrl+D to exit.\n\n", .{});
+        // Onboarding banner is opt-in (DEN_BANNER=1). A daily-driver login shell
+        // shouldn't greet you on every new terminal, and printing it
+        // unconditionally also pollutes the output of `... | den`.
+        if (std.c.getenv("DEN_BANNER") != null) {
+            try IO.print("Den shell initialized!\n", .{});
+            try IO.print("Type 'exit' to quit or Ctrl+D to exit.\n\n", .{});
+        }
 
         while (self.running) {
             // Check for config hot-reload
@@ -883,7 +888,7 @@ pub const Shell = struct {
 
             if (line == null) {
                 // EOF (Ctrl+D) - graceful shutdown
-                try IO.print("\nGoodbye from Den!\n", .{});
+                if (std.c.getenv("DEN_BANNER") != null) try IO.print("\nGoodbye from Den!\n", .{});
                 self.running = false;
                 break; // Exit loop and let deinit() handle cleanup
             }
@@ -932,7 +937,7 @@ pub const Shell = struct {
 
             // Handle exit command
             if (std.mem.eql(u8, command, "exit")) {
-                try IO.print("Goodbye from Den!\n", .{});
+                if (std.c.getenv("DEN_BANNER") != null) try IO.print("Goodbye from Den!\n", .{});
                 self.running = false;
                 break; // Exit loop and let deinit() handle cleanup
             }
