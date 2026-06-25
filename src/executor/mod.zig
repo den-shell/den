@@ -1200,9 +1200,15 @@ pub const Executor = struct {
         } else if (std.mem.eql(u8, command.name, "tree")) {
             return try file_ops.tree(self.allocator, command);
         } else if (std.mem.eql(u8, command.name, "grep")) {
-            return try file_ops.grep(self.allocator, command);
+            return file_ops.grep(self.allocator, command) catch |err| {
+                if (err == error.FallbackToExternal) return try self.executeExternal(command);
+                return err;
+            };
         } else if (std.mem.eql(u8, command.name, "find")) {
-            return try file_ops.find(self.allocator, command);
+            return file_ops.find(self.allocator, command) catch |err| {
+                if (err == error.FallbackToExternal) return try self.executeExternal(command);
+                return err;
+            };
         } else if (std.mem.eql(u8, command.name, "ft")) {
             return try file_ops.ft(self.allocator, command);
         } else if (std.mem.eql(u8, command.name, "calc")) {
@@ -1210,13 +1216,16 @@ pub const Executor = struct {
         } else if (std.mem.eql(u8, command.name, "json")) {
             return try file_ops.json(self.allocator, command);
         } else if (std.mem.eql(u8, command.name, "ls")) {
-            return try file_ops.ls(self.allocator, command);
+            return file_ops.ls(self.allocator, command) catch |err| {
+                if (err == error.FallbackToExternal) return try self.executeExternal(command);
+                return err;
+            };
         } else if (std.mem.eql(u8, command.name, "seq")) {
             return try builtins.seq_builtins.seqCmd(self.allocator, command);
         } else if (std.mem.eql(u8, command.name, "seq-char")) {
             return try builtins.seq_builtins.seqCharCmd(self.allocator, command);
         } else if (std.mem.eql(u8, command.name, "date")) {
-            // Use enhanced date builtins for subcommands (now, format, to-record, humanize)
+            // Use enhanced date builtins for the den-specific subcommands only.
             if (command.args.len > 0) {
                 const sub = command.args[0];
                 if (std.mem.eql(u8, sub, "now") or std.mem.eql(u8, sub, "format") or
@@ -1226,7 +1235,9 @@ pub const Executor = struct {
                     return try builtins.date_builtins.dateCmd(self.allocator, command);
                 }
             }
-            return try utilities.date(command);
+            // Standard Unix usage (bare `date`, `date +%Y`, `date -u`, …) is not
+            // covered by the builtin, so defer to the real date on PATH.
+            return try self.executeExternal(command);
         } else if (std.mem.eql(u8, command.name, "parallel")) {
             return try builtins.process_builtins.parallel(command);
         } else if (std.mem.eql(u8, command.name, "http")) {

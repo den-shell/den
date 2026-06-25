@@ -91,8 +91,10 @@ pub fn grep(allocator: std.mem.Allocator, command: *types.ParsedCommand) !i32 {
             } else {
                 for (arg[1..]) |c| {
                     if (c == 'i') case_insensitive = true else if (c == 'n') show_line_numbers = true else if (c == 'v') invert_match = true else if (c == 'c') count_only = true else if (c == 'H') show_filename = true else {
-                        try IO.eprint("den: grep: invalid option: -{c}\n", .{c});
-                        return 1;
+                        // The builtin only covers a few common flags. Rather than
+                        // rejecting everything else (-o, -E, -P, -r, -A, …), defer
+                        // to the real grep on PATH so advanced usage just works.
+                        return error.FallbackToExternal;
                     }
                 }
                 pattern_idx = i + 1;
@@ -292,48 +294,51 @@ pub fn find(allocator: std.mem.Allocator, command: *types.ParsedCommand) !i32 {
                 type_filter = type_str[0];
             }
             i += 1;
+        } else if (arg.len > 0 and arg[0] == '-') {
+            // The builtin only understands -name and -type; anything else
+            // (-exec, -maxdepth, -mtime, -iname, -delete, …) would otherwise be
+            // silently ignored, giving wrong results. Defer to the real find.
+            return error.FallbackToExternal;
         }
     }
 
-    try findRecursive(allocator, start_path, name_pattern, type_filter);
+    findRecursive(allocator, start_path, name_pattern, type_filter);
     return 0;
 }
 
-fn findRecursive(allocator: std.mem.Allocator, dir_path: []const u8, name_pattern: ?[]const u8, type_filter: ?u8) !void {
-    var dir = std.Io.Dir.cwd().openDir(std.Options.debug_io, dir_path, .{ .iterate = true }) catch |err| {
-        try IO.eprint("den: find: cannot open {s}: {}\n", .{ dir_path, err });
-        return;
-    };
+fn findRecursive(allocator: std.mem.Allocator, dir_path: []const u8, name_pattern: ?[]const u8, type_filter: ?u8) void {
+    // Skip directories we can't read (e.g. permission denied) and keep going,
+    // rather than aborting the whole traversal — this mirrors real `find`.
+    var dir = std.Io.Dir.cwd().openDir(std.Options.debug_io, dir_path, .{ .iterate = true }) catch return;
     defer dir.close(std.Options.debug_io);
 
     var iter = dir.iterate();
 
-    while (try iter.next(std.Options.debug_io)) |entry| {
+    while (iter.next(std.Options.debug_io) catch null) |entry| {
         if (std.mem.eql(u8, entry.name, ".") or std.mem.eql(u8, entry.name, "..")) {
             continue;
         }
 
-        const full_path = try std.fs.path.join(allocator, &[_][]const u8{ dir_path, entry.name });
+        const full_path = std.fs.path.join(allocator, &[_][]const u8{ dir_path, entry.name }) catch continue;
         defer allocator.free(full_path);
 
+        // The -type/-name filters gate OUTPUT only — never recursion. (A previous
+        // version `continue`d on a type mismatch, so `find dir -type f` skipped
+        // every subdirectory and found nothing below the top level.)
+        var matches = true;
         if (type_filter) |filter| {
-            if (filter == 'f' and entry.kind != .file) continue;
-            if (filter == 'd' and entry.kind != .directory) continue;
+            if (filter == 'f' and entry.kind != .file) matches = false;
+            if (filter == 'd' and entry.kind != .directory) matches = false;
         }
-
         if (name_pattern) |pattern| {
-            if (!matchPattern(entry.name, pattern)) {
-                if (entry.kind == .directory) {
-                    try findRecursive(allocator, full_path, name_pattern, type_filter);
-                }
-                continue;
-            }
+            if (!matchPattern(entry.name, pattern)) matches = false;
         }
 
-        try IO.print("{s}\n", .{full_path});
+        // Stop quietly on a broken pipe (e.g. `find … | head`).
+        if (matches) IO.print("{s}\n", .{full_path}) catch return;
 
         if (entry.kind == .directory) {
-            try findRecursive(allocator, full_path, name_pattern, type_filter);
+            findRecursive(allocator, full_path, name_pattern, type_filter);
         }
     }
 }
@@ -761,8 +766,9 @@ pub fn ls(allocator: std.mem.Allocator, command: *types.ParsedCommand) !i32 {
                     '1' => one_per_line = true,
                     'd' => directory_only = true,
                     else => {
-                        try IO.eprint("den: ls: invalid option -- '{c}'\n", .{c});
-                        return 1;
+                        // Unsupported flag (--color, -G, --group-directories-first,
+                        // …): defer to the real ls rather than erroring.
+                        return error.FallbackToExternal;
                     },
                 }
             }
@@ -776,9 +782,10 @@ pub fn ls(allocator: std.mem.Allocator, command: *types.ParsedCommand) !i32 {
         return 0;
     }
 
-    var dir = std.Io.Dir.cwd().openDir(std.Options.debug_io, target_path, .{ .iterate = true }) catch |err| {
-        try IO.eprint("den: ls: cannot access '{s}': {}\n", .{ target_path, err });
-        return 1;
+    var dir = std.Io.Dir.cwd().openDir(std.Options.debug_io, target_path, .{ .iterate = true }) catch {
+        // Could be a regular file, a broken symlink, a permission error, or just
+        // missing — the real ls handles (and reports) all of these correctly.
+        return error.FallbackToExternal;
     };
     defer dir.close(std.Options.debug_io);
 
