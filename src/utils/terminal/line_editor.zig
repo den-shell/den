@@ -1983,7 +1983,10 @@ pub const LineEditor = struct {
             if (history[i]) |entry| {
                 // If we have a search query, only match entries containing it
                 if (search_query) |query| {
-                    if (std.mem.indexOf(u8, entry, query) != null) {
+                    // Prefix match: typing part of a command and pressing Up/Down
+                    // cycles only through history entries that start with it
+                    // (zsh up-line-or-beginning-search / fish-style).
+                    if (std.mem.startsWith(u8, entry, query)) {
                         // Found a match!
                         try self.replaceLine(entry);
                         self.history_index = i;
@@ -2014,7 +2017,10 @@ pub const LineEditor = struct {
             if (history[i]) |entry| {
                 // If we have a search query, only match entries containing it
                 if (search_query) |query| {
-                    if (std.mem.indexOf(u8, entry, query) != null) {
+                    // Prefix match: typing part of a command and pressing Up/Down
+                    // cycles only through history entries that start with it
+                    // (zsh up-line-or-beginning-search / fish-style).
+                    if (std.mem.startsWith(u8, entry, query)) {
                         // Found a match!
                         try self.replaceLine(entry);
                         self.history_index = i;
