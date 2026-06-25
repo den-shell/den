@@ -4,6 +4,7 @@ const types = @import("../../types/mod.zig");
 const IO = @import("../../utils/io.zig").IO;
 const BuiltinContext = @import("context.zig").BuiltinContext;
 const stdlib_loader = @import("../../stdlib/loader.zig");
+const expansion = @import("../../utils/expansion.zig");
 
 const is_windows = builtin.os.tag == .windows;
 
@@ -71,6 +72,15 @@ pub fn cd(ctx: *BuiltinContext, command: *types.ParsedCommand) !i32 {
                 }
             }
         }
+    }
+
+    // Expand zsh-style "manydots": `cd ...` -> `cd ../..`, `cd .../foo` ->
+    // `cd ../../foo`. (`~` and `.` paths are mutually exclusive, so this never
+    // collides with the named-dir expansion above.)
+    if (try expansion.expandManyDots(ctx.allocator, path)) |many| {
+        if (expanded_path) |p| ctx.allocator.free(p);
+        expanded_path = many;
+        path = many;
     }
 
     // Save current directory as OLDPWD before changing

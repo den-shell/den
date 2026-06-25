@@ -2,6 +2,7 @@ const std = @import("std");
 const types = @import("../types/mod.zig");
 const IO = @import("../utils/io.zig").IO;
 const Expansion = @import("../utils/expansion.zig").Expansion;
+const expansion_mod = @import("../utils/expansion.zig");
 const builtin = @import("builtin");
 const common = @import("builtins/common.zig");
 const c = common.c_exec;
@@ -866,18 +867,25 @@ pub const Executor = struct {
             return try self.executeBuiltin(command);
         }
 
-        // Check if it's a directory path (auto cd feature, like zsh)
-        if (try self.isDirectory(command.name)) {
-            // Auto cd to the directory
-            var args = [_][]const u8{command.name};
-            var redirections = [_]types.Redirection{};
-            var cd_command = types.ParsedCommand{
-                .name = "cd",
-                .args = args[0..],
-                .redirections = redirections[0..],
-                .type = .builtin,
-            };
-            return try self.executeBuiltin(&cd_command);
+        // Auto-cd (like zsh): a bare directory name cds into it. Also handles
+        // the multi-dot shorthand `...` -> `../..`, `....` -> `../../..` by
+        // expanding it first so the directory check (and cd) see a real path.
+        {
+            const many = try expansion_mod.expandManyDots(self.allocator, command.name);
+            defer if (many) |m| self.allocator.free(m);
+            const autocd_target = many orelse command.name;
+
+            if (try self.isDirectory(autocd_target)) {
+                var args = [_][]const u8{autocd_target};
+                var redirections = [_]types.Redirection{};
+                var cd_command = types.ParsedCommand{
+                    .name = "cd",
+                    .args = args[0..],
+                    .redirections = redirections[0..],
+                    .type = .builtin,
+                };
+                return try self.executeBuiltin(&cd_command);
+            }
         }
 
         // Check for suffix alias (zsh-style: typing "hello.ts" runs "bun hello.ts")

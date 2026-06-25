@@ -7,6 +7,55 @@ const process_util = @import("process.zig");
 
 const is_windows = builtin.os.tag == .windows;
 
+/// Expand zsh-style "manydots": a leading run of 3+ dots is shorthand for going
+/// that many levels up. `...` -> `../..`, `....` -> `../../..`,
+/// `.../foo` -> `../../foo`. A run of 3+ dots only counts when it is the whole
+/// token or is immediately followed by `/`, so real filenames like `...rc` or
+/// `..foo` are left untouched. `.` and `..` are never rewritten. Returns null
+/// (no allocation) when there is nothing to expand; otherwise the caller owns
+/// the returned slice.
+pub fn expandManyDots(allocator: std.mem.Allocator, path: []const u8) !?[]const u8 {
+    var dots: usize = 0;
+    while (dots < path.len and path[dots] == '.') : (dots += 1) {}
+    if (dots < 3) return null;
+    if (dots != path.len and path[dots] != '/') return null;
+
+    const levels = dots - 1; // `...` (3 dots) == two levels up
+    const rest = path[dots..]; // "" or "/subpath"
+
+    var buf: std.ArrayList(u8) = .empty;
+    errdefer buf.deinit(allocator);
+    var i: usize = 0;
+    while (i < levels) : (i += 1) {
+        try buf.appendSlice(allocator, if (i == 0) ".." else "/..");
+    }
+    try buf.appendSlice(allocator, rest);
+    return try buf.toOwnedSlice(allocator);
+}
+
+test "expandManyDots" {
+    const a = std.testing.allocator;
+    try std.testing.expect((try expandManyDots(a, ".")) == null);
+    try std.testing.expect((try expandManyDots(a, "..")) == null);
+    try std.testing.expect((try expandManyDots(a, "...rc")) == null);
+    try std.testing.expect((try expandManyDots(a, "foo")) == null);
+    {
+        const r = (try expandManyDots(a, "...")).?;
+        defer a.free(r);
+        try std.testing.expectEqualStrings("../..", r);
+    }
+    {
+        const r = (try expandManyDots(a, "....")).?;
+        defer a.free(r);
+        try std.testing.expectEqualStrings("../../..", r);
+    }
+    {
+        const r = (try expandManyDots(a, ".../foo")).?;
+        defer a.free(r);
+        try std.testing.expectEqualStrings("../../foo", r);
+    }
+}
+
 /// Persistent PRNG state for $RANDOM, shared across all accesses
 var global_random_state: ?std.Random.DefaultPrng = null;
 
