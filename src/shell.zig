@@ -12,6 +12,112 @@ fn getEnvOwned(allocator: std.mem.Allocator, key: [*:0]const u8) ?[]u8 {
     return allocator.dupe(u8, value) catch null;
 }
 
+/// Append `raw` to `list` if it's a non-empty, not-yet-seen path. `list` owns the
+/// duplicated string; `seen` borrows the same pointer for dedup.
+fn addUniquePath(
+    allocator: std.mem.Allocator,
+    list: *std.ArrayList([]const u8),
+    seen: *std.StringHashMap(void),
+    raw: []const u8,
+) !void {
+    const trimmed = std.mem.trim(u8, raw, &std.ascii.whitespace);
+    if (trimmed.len == 0) return;
+    if (seen.contains(trimmed)) return;
+    const owned = try allocator.dupe(u8, trimmed);
+    errdefer allocator.free(owned);
+    try list.append(allocator, owned);
+    try seen.put(owned, {});
+}
+
+/// Read a newline-separated path file (e.g. /etc/paths) and append each entry.
+/// Missing or unreadable files are silently ignored, matching path_helper.
+fn appendPathsFromFile(
+    allocator: std.mem.Allocator,
+    list: *std.ArrayList([]const u8),
+    seen: *std.StringHashMap(void),
+    path: []const u8,
+) void {
+    const file = std.Io.Dir.openFileAbsolute(std.Options.debug_io, path, .{}) catch return;
+    defer file.close(std.Options.debug_io);
+    const content = IO.readFileAlloc(allocator, file, 64 * 1024) catch return;
+    defer allocator.free(content);
+    var it = std.mem.splitScalar(u8, content, '\n');
+    while (it.next()) |line| {
+        addUniquePath(allocator, list, seen, line) catch {};
+    }
+}
+
+/// macOS GUI terminals launch the login shell with a bare PATH
+/// (/usr/bin:/bin:/usr/sbin:/sbin plus the terminal's own dir). The system
+/// convention — implemented by /usr/libexec/path_helper and invoked from
+/// /etc/zprofile — is to build PATH from /etc/paths and /etc/paths.d/*, then
+/// append whatever was already there. We replicate that natively (no subprocess)
+/// so Homebrew, ~/.local/bin, cargo, etc. resolve, while keeping startup fast.
+fn applySystemPaths(allocator: std.mem.Allocator, env: *std.StringHashMap([]const u8)) !void {
+    if (builtin.os.tag != .macos) return;
+
+    var list = std.ArrayList([]const u8).empty;
+    defer {
+        for (list.items) |p| allocator.free(p);
+        list.deinit(allocator);
+    }
+    var seen = std.StringHashMap(void).init(allocator);
+    defer seen.deinit();
+
+    // 1. Base system paths.
+    appendPathsFromFile(allocator, &list, &seen, "/etc/paths");
+
+    // 2. Drop-in fragments, applied in sorted filename order (as path_helper does).
+    if (std.Io.Dir.openDirAbsolute(std.Options.debug_io, "/etc/paths.d", .{ .iterate = true })) |dir_const| {
+        var dir = dir_const;
+        defer dir.close(std.Options.debug_io);
+
+        var names = std.ArrayList([]const u8).empty;
+        defer {
+            for (names.items) |n| allocator.free(n);
+            names.deinit(allocator);
+        }
+        var it = dir.iterate();
+        while (it.next(std.Options.debug_io) catch null) |entry| {
+            if (entry.kind != .file) continue;
+            const name = allocator.dupe(u8, entry.name) catch continue;
+            names.append(allocator, name) catch {
+                allocator.free(name);
+                continue;
+            };
+        }
+        std.mem.sort([]const u8, names.items, {}, struct {
+            fn lessThan(_: void, a: []const u8, b: []const u8) bool {
+                return std.mem.lessThan(u8, a, b);
+            }
+        }.lessThan);
+        for (names.items) |name| {
+            const full = std.fmt.allocPrint(allocator, "/etc/paths.d/{s}", .{name}) catch continue;
+            defer allocator.free(full);
+            appendPathsFromFile(allocator, &list, &seen, full);
+        }
+    } else |_| {}
+
+    // 3. Preserve entries already present in the inherited PATH.
+    if (env.get("PATH")) |existing| {
+        var it = std.mem.splitScalar(u8, existing, ':');
+        while (it.next()) |p| addUniquePath(allocator, &list, &seen, p) catch {};
+    }
+
+    if (list.items.len == 0) return;
+
+    const joined = try std.mem.join(allocator, ":", list.items);
+    errdefer allocator.free(joined);
+    const key = try allocator.dupe(u8, "PATH");
+    errdefer allocator.free(key);
+
+    if (env.fetchRemove("PATH")) |old| {
+        allocator.free(old.key);
+        allocator.free(old.value);
+    }
+    try env.put(key, joined);
+}
+
 const Terminal = @import("utils/terminal.zig");
 const LineEditor = Terminal.LineEditor;
 const Completion = @import("utils/completion.zig").Completion;
@@ -358,6 +464,11 @@ pub const Shell = struct {
             errdefer allocator.free(path_val);
             try env.put(path_key, path_val);
         }
+
+        // On macOS, build the full system PATH from /etc/paths(.d) so commands
+        // installed by Homebrew, cargo, npm, ~/.local/bin, etc. resolve even when
+        // a GUI terminal launches us with only a minimal PATH. No-op elsewhere.
+        applySystemPaths(allocator, &env) catch {};
 
         // Load default environment variables from config
         if (config.environment.enabled) {
