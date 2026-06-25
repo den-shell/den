@@ -135,7 +135,7 @@ pub fn build(b: *std.Build) void {
     const test_runner_cmd = b.addRunArtifact(test_runner_exe);
     test_runner_cmd.step.dependOn(b.getInstallStep());
 
-    test_runner_cmd.addPassthruArgs();
+    if (b.args) |args| test_runner_cmd.addArgs(args);
 
     const test_runner_step = b.step("test-runner", "Run the test runner");
     test_runner_step.dependOn(&test_runner_cmd.step);
@@ -144,7 +144,7 @@ pub fn build(b: *std.Build) void {
     const run_cmd = b.addRunArtifact(exe);
     run_cmd.step.dependOn(b.getInstallStep());
 
-    run_cmd.addPassthruArgs();
+    if (b.args) |args| run_cmd.addArgs(args);
 
     const run_step = b.step("run", "Run the den shell");
     run_step.dependOn(&run_cmd.step);
