@@ -160,13 +160,11 @@ fn expandSymbol(ctx: *const PromptContext, allocator: std.mem.Allocator) ![]cons
         return try allocator.dupe(u8, "\x1b[91m#\x1b[0m ");
     }
 
-    if (ctx.last_exit_code != 0) {
-        // Red ➜ for error
-        return try allocator.dupe(u8, "\x1b[91m\xE2\x9E\x9C\x1b[0m ");
-    }
-
-    // Green ➜ for success
-    return try allocator.dupe(u8, "\x1b[92m\xE2\x9E\x9C\x1b[0m ");
+    // Use the configured prompt symbol (theme.symbols.prompt, e.g. "❯"),
+    // colored green on success / red when the previous command failed.
+    const symbol = if (ctx.prompt_symbol.len > 0) ctx.prompt_symbol else "\xE2\x9E\x9C";
+    const color = if (ctx.last_exit_code != 0) "\x1b[91m" else "\x1b[92m";
+    return try std.fmt.allocPrint(allocator, "{s}{s}\x1b[0m ", .{ color, symbol });
 }
 
 fn expandTime(ctx: *const PromptContext, allocator: std.mem.Allocator) ![]const u8 {

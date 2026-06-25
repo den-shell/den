@@ -71,6 +71,9 @@ pub const PromptContext = struct {
     last_exit_code: i32,
     last_duration_ms: ?u64,
 
+    // Prompt symbol (borrowed from theme.symbols.prompt; not owned, never freed)
+    prompt_symbol: []const u8 = "\xE2\x9E\x9C", // ➜
+
     // Runtime info
     node_version: ?[]const u8,
     bun_version: ?[]const u8,
@@ -112,6 +115,7 @@ pub const PromptContext = struct {
             .is_root = false,
             .last_exit_code = 0,
             .last_duration_ms = null,
+            .prompt_symbol = "\xE2\x9E\x9C",
             .node_version = null,
             .bun_version = null,
             .deno_version = null,

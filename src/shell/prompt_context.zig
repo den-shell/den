@@ -20,9 +20,20 @@ pub fn renderPrompt(self: *Shell) !void {
 
 /// Get the formatted prompt string
 pub fn getPromptString(self: *Shell) ![]const u8 {
-    // Initialize prompt renderer if not already done
+    // Initialize prompt renderer if not already done. Build the template from
+    // the user's prompt config (~/.config/den.jsonc) rather than the hardcoded
+    // default so `format`, `right_prompt` and `transient` are actually honored.
     if (self.prompt_renderer == null) {
-        const template = try PromptTemplate.initDefault(self.allocator);
+        const pcfg = self.config.prompt;
+        const template = PromptTemplate{
+            .left_format = try self.allocator.dupe(u8, pcfg.format),
+            .right_format = if (pcfg.right_prompt) |rp|
+                try self.allocator.dupe(u8, rp)
+            else
+                null,
+            .transient_enabled = pcfg.transient,
+            .transient_format = null,
+        };
         self.prompt_renderer = try PromptRenderer.init(self.allocator, template);
         self.prompt_renderer.?.zsh_escapes = self.config.zsh.enabled and self.config.zsh.prompt_escapes;
     }
@@ -77,6 +88,10 @@ pub fn updatePromptContext(self: *Shell) !void {
 
     self.prompt_context.is_root = sysinfo.isRoot();
     self.prompt_context.last_exit_code = self.last_exit_code;
+
+    // Honor the configured prompt symbol (theme.symbols.prompt, e.g. "❯").
+    // Borrowed from config memory — lives as long as the shell, never freed here.
+    self.prompt_context.prompt_symbol = self.config.theme.symbols.prompt;
 
     // Get git info by reading .git/ files directly (no process spawning)
     const GitModule = @import("../prompt/git.zig").GitModule;
