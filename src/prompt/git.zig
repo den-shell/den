@@ -1,4 +1,5 @@
 const std = @import("std");
+const spawn = @import("../utils/spawn.zig");
 
 /// Git repository information
 pub const GitInfo = struct {
@@ -40,12 +41,9 @@ pub const AheadBehind = struct {
     behind: usize,
 };
 
-/// Git integration module — reads .git/ files directly (no process spawning).
-/// NOTE: working-tree status (staged/unstaged/untracked, ahead/behind) is not
-/// yet computed — those counts stay 0, so the prompt shows a clean ✓ even when
-/// the tree is dirty. Populating them needs either parsing .git/index against
-/// the working tree or a `git status` call (the latter currently no-ops because
-/// this build's std.process.run-based spawning isn't returning output).
+/// Git integration module — branch/commit/stash are read straight from .git/;
+/// working-tree status (dirty/staged/unstaged/untracked, ahead/behind) comes from
+/// one `git status` call via spawn.captureOutput (see populateStatus).
 pub const GitModule = struct {
     allocator: std.mem.Allocator,
 
@@ -72,7 +70,61 @@ pub const GitModule = struct {
         // Check for stash
         info.stash_count = self.countStashes(git_dir) catch 0;
 
+        // Working-tree status: staged/unstaged/untracked counts and ahead/behind.
+        self.populateStatus(cwd, &info);
+
         return info;
+    }
+
+    /// Fill in working-tree status (staged/unstaged/untracked) and ahead/behind
+    /// by running `git status`. Branch/commit/stash are read straight from .git/
+    /// above, but an accurate dirty state means diffing the working tree against
+    /// the index, so we shell out via spawn.captureOutput (the same fork+exec+pipe
+    /// path that command substitution uses; std.process.run isn't usable here as
+    /// its capture comes back empty in this build). On any failure the counts stay
+    /// zero (rendered as a clean ✓), so this never breaks the prompt.
+    fn populateStatus(self: *GitModule, cwd: []const u8, info: *GitInfo) void {
+        const cap = spawn.captureOutput(self.allocator, .{
+            .argv = &[_][]const u8{ "git", "status", "--porcelain=v1", "--branch" },
+            .cwd = cwd,
+        }) catch return;
+        defer cap.deinit(self.allocator);
+        if (cap.exit_code != 0) return;
+
+        var iter = std.mem.splitScalar(u8, cap.stdout, '\n');
+        while (iter.next()) |line| {
+            if (line.len == 0) continue;
+            if (std.mem.startsWith(u8, line, "## ")) {
+                // e.g. "## main...origin/main [ahead 1, behind 2]"
+                if (std.mem.indexOf(u8, line, "[ahead ")) |pos| {
+                    info.ahead = parseLeadingUint(line[pos + "[ahead ".len ..]);
+                }
+                if (std.mem.indexOf(u8, line, "behind ")) |pos| {
+                    info.behind = parseLeadingUint(line[pos + "behind ".len ..]);
+                }
+                continue;
+            }
+            if (line.len < 2) continue;
+            const x = line[0]; // index (staged) status
+            const y = line[1]; // working-tree (unstaged) status
+            if (x == '?' and y == '?') {
+                info.untracked_count += 1;
+            } else {
+                if (x != ' ') info.staged_count += 1;
+                if (y != ' ') info.unstaged_count += 1;
+            }
+        }
+        info.is_dirty = info.staged_count > 0 or info.unstaged_count > 0 or info.untracked_count > 0;
+    }
+
+    /// Parse the run of leading ASCII digits of `s` as a usize (0 if none).
+    fn parseLeadingUint(s: []const u8) usize {
+        var n: usize = 0;
+        var i: usize = 0;
+        while (i < s.len and s[i] >= '0' and s[i] <= '9') : (i += 1) {
+            n = n * 10 + (s[i] - '0');
+        }
+        return n;
     }
 
     /// Find .git directory by walking up from cwd
