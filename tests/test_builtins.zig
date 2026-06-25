@@ -497,3 +497,36 @@ test "builtin: success exit code in $?" {
 
     try test_utils.TestAssert.expectContains(result.stdout, "0");
 }
+
+// These exercise Den's own builtins (DenShellFixture runs the den binary;
+// ShellFixture above runs system sh).
+
+test "builtin find: -type f recurses into subdirectories" {
+    const allocator = std.testing.allocator;
+
+    var fixture = try test_utils.DenShellFixture.init(allocator);
+    defer fixture.deinit();
+
+    // Regression: 'find DIR -type f' used to skip every subdirectory because the
+    // type filter short-circuited recursion, so nested files were never found.
+    const result = try fixture.exec("mkdir -p sub/deep && touch sub/deep/target.txt && find . -type f");
+    defer allocator.free(result.stdout);
+    defer allocator.free(result.stderr);
+
+    try test_utils.TestAssert.expectEqual(@as(u8, 0), result.exit_code);
+    try test_utils.TestAssert.expectContains(result.stdout, "target.txt");
+}
+
+test "builtin find: -type d still recurses and lists dirs" {
+    const allocator = std.testing.allocator;
+
+    var fixture = try test_utils.DenShellFixture.init(allocator);
+    defer fixture.deinit();
+
+    const result = try fixture.exec("mkdir -p sub/deep && find . -type d");
+    defer allocator.free(result.stdout);
+    defer allocator.free(result.stderr);
+
+    try test_utils.TestAssert.expectEqual(@as(u8, 0), result.exit_code);
+    try test_utils.TestAssert.expectContains(result.stdout, "deep");
+}
