@@ -1221,7 +1221,10 @@ pub const Executor = struct {
                 return err;
             };
         } else if (std.mem.eql(u8, command.name, "seq")) {
-            return try builtins.seq_builtins.seqCmd(self.allocator, command);
+            return builtins.seq_builtins.seqCmd(self.allocator, command) catch |err| {
+                if (err == error.FallbackToExternal) return try self.executeExternal(command);
+                return err;
+            };
         } else if (std.mem.eql(u8, command.name, "seq-char")) {
             return try builtins.seq_builtins.seqCharCmd(self.allocator, command);
         } else if (std.mem.eql(u8, command.name, "date")) {
@@ -1243,7 +1246,10 @@ pub const Executor = struct {
         } else if (std.mem.eql(u8, command.name, "http")) {
             return try builtins.http_builtins.httpCmd(self.allocator, command);
         } else if (std.mem.eql(u8, command.name, "base64")) {
-            return try utilities.base64(self.allocator, command);
+            return utilities.base64(self.allocator, command) catch |err| {
+                if (err == error.FallbackToExternal) return try self.executeExternal(command);
+                return err;
+            };
         } else if (std.mem.eql(u8, command.name, "uuid")) {
             return try utilities.uuid(self.allocator, command);
         } else if (std.mem.eql(u8, command.name, "localip")) {

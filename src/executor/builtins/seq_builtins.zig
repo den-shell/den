@@ -3,6 +3,12 @@ const types = @import("../../types/mod.zig");
 const IO = @import("../../utils/io.zig").IO;
 const common = @import("common.zig");
 
+/// True if `s` parses as a number (so a leading '-' is a negative value, not a flag).
+fn isNumeric(s: []const u8) bool {
+    _ = std.fmt.parseFloat(f64, s) catch return false;
+    return true;
+}
+
 /// Generate a sequence of numbers.
 ///
 /// Usage:
@@ -31,6 +37,11 @@ pub fn seqCmd(allocator: std.mem.Allocator, command: *types.ParsedCommand) !i32 
                 try IO.eprint("seq: option '{s}' requires an argument\n", .{arg});
                 return 1;
             }
+        } else if (std.mem.startsWith(u8, arg, "-s") and arg.len > 2) {
+            // GNU attached form: -s,  (separator with no space)
+            separator = arg[2..];
+        } else if (std.mem.startsWith(u8, arg, "--separator=")) {
+            separator = arg["--separator=".len..];
         } else if (std.mem.eql(u8, arg, "--help") or std.mem.eql(u8, arg, "-h")) {
             try IO.print("Usage: seq [options] [start [step]] end\n", .{});
             try IO.print("Print a sequence of numbers.\n\n", .{});
@@ -38,6 +49,10 @@ pub fn seqCmd(allocator: std.mem.Allocator, command: *types.ParsedCommand) !i32 
             try IO.print("  -s, --separator <sep>  Use <sep> as separator (default: newline)\n", .{});
             try IO.print("  -h, --help             Show this help message\n", .{});
             return 0;
+        } else if (arg.len > 1 and arg[0] == '-' and !isNumeric(arg)) {
+            // An unrecognized flag (-w, -f, -t, …) — not a negative number. The
+            // builtin doesn't implement it, so defer to the real seq.
+            return error.FallbackToExternal;
         } else {
             if (positional_len >= 3) {
                 try IO.eprint("seq: too many arguments\n", .{});

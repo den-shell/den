@@ -9,13 +9,10 @@ const common = @import("common.zig");
 /// These can operate with just an allocator.
 /// base64 - encode/decode base64
 pub fn base64(allocator: std.mem.Allocator, command: *types.ParsedCommand) !i32 {
-    if (command.args.len == 0) {
-        try IO.eprint("den: base64: missing input\n", .{});
-        try IO.eprint("den: base64: usage: base64 [-d] <string>\n", .{});
-        try IO.eprint("den: base64: options:\n", .{});
-        try IO.eprint("den: base64:   -d    Decode base64 input\n", .{});
-        return 1;
-    }
+    // The builtin only encodes/decodes a string given as an argument. The common
+    // `echo x | base64` (read stdin) and any other flags are handled by the real
+    // base64 on PATH.
+    if (command.args.len == 0) return error.FallbackToExternal;
 
     var decode: bool = false;
     var input: ?[]const u8 = null;
@@ -28,10 +25,7 @@ pub fn base64(allocator: std.mem.Allocator, command: *types.ParsedCommand) !i32 
         }
     }
 
-    if (input == null) {
-        try IO.eprint("den: base64: missing input\n", .{});
-        return 1;
-    }
+    if (input == null) return error.FallbackToExternal;
 
     const data = input.?;
 
