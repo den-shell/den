@@ -835,3 +835,87 @@ test "scripting: continue in loop" {
     try test_utils.TestAssert.expectTrue(std.mem.indexOf(u8, result.stdout, "2") == null or
         std.mem.indexOf(u8, result.stdout, "2") != null); // 2 might appear in other output
 }
+
+// ----------------------------------------------------------------------------
+// source: comment handling regression tests
+// ----------------------------------------------------------------------------
+
+test "scripting: source skips comments containing an apostrophe" {
+    const allocator = std.testing.allocator;
+
+    var fixture = try test_utils.DenShellFixture.init(allocator);
+    defer fixture.deinit();
+
+    // Regression: an unmatched quote inside a '#' comment used to flip the source
+    // builtin's quote-tracking state, swallowing every following line as one giant
+    // quoted "line" — so neither the export nor the echo below ran. The echo lives
+    // inside the sourced file so the assertion exercises the line splitter directly.
+    // See src/shell/misc_builtins.zig (builtinSource line splitter).
+    const rc = try fixture.createFile("rc.sh",
+        \\# Zig (Den's toolchain) is the .bin shim
+        \\export AFTER_COMMENT=ok
+        \\echo VAL=$AFTER_COMMENT
+        \\
+    );
+    defer allocator.free(rc);
+
+    const cmd = try std.fmt.allocPrint(allocator, "source {s}", .{rc});
+    defer allocator.free(cmd);
+    const result = try fixture.execDirect(cmd);
+    defer allocator.free(result.stdout);
+    defer allocator.free(result.stderr);
+
+    try test_utils.TestAssert.expectEqual(@as(u8, 0), result.exit_code);
+    try test_utils.TestAssert.expectContains(result.stdout, "VAL=ok");
+}
+
+test "scripting: source skips comments containing a double quote" {
+    const allocator = std.testing.allocator;
+
+    var fixture = try test_utils.DenShellFixture.init(allocator);
+    defer fixture.deinit();
+
+    const rc = try fixture.createFile("rc.sh",
+        \\# a stray " double quote in a comment
+        \\export AFTER_DQ=yes
+        \\echo VAL=$AFTER_DQ
+        \\
+    );
+    defer allocator.free(rc);
+
+    const cmd = try std.fmt.allocPrint(allocator, "source {s}", .{rc});
+    defer allocator.free(cmd);
+    const result = try fixture.execDirect(cmd);
+    defer allocator.free(result.stdout);
+    defer allocator.free(result.stderr);
+
+    try test_utils.TestAssert.expectEqual(@as(u8, 0), result.exit_code);
+    try test_utils.TestAssert.expectContains(result.stdout, "VAL=yes");
+}
+
+test "scripting: source still honors genuine multi-line quoted strings" {
+    const allocator = std.testing.allocator;
+
+    var fixture = try test_utils.DenShellFixture.init(allocator);
+    defer fixture.deinit();
+
+    // A real double-quoted string spanning newlines must NOT be split mid-quote:
+    // both halves must survive into the single variable value.
+    const rc = try fixture.createFile("rc.sh",
+        \\export MULTILINE="line1
+        \\line2"
+        \\echo GOT=$MULTILINE
+        \\
+    );
+    defer allocator.free(rc);
+
+    const cmd = try std.fmt.allocPrint(allocator, "source {s}", .{rc});
+    defer allocator.free(cmd);
+    const result = try fixture.execDirect(cmd);
+    defer allocator.free(result.stdout);
+    defer allocator.free(result.stderr);
+
+    try test_utils.TestAssert.expectEqual(@as(u8, 0), result.exit_code);
+    try test_utils.TestAssert.expectContains(result.stdout, "line1");
+    try test_utils.TestAssert.expectContains(result.stdout, "line2");
+}
