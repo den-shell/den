@@ -282,9 +282,38 @@ pub fn builtinWhich(shell: *Shell, cmd: *types.ParsedCommand) !void {
         return;
     }
 
+    const builtin_dispatch = @import("builtin_dispatch.zig");
+    const executor_mod = @import("../executor/mod.zig");
     const path_str = shell.environment.get("PATH") orelse getenv("PATH") orelse "";
 
     for (cmd.args) |name| {
+        // A name containing '/' is already a path (e.g. `which $SHELL`): report it
+        // directly if it exists, rather than fruitlessly searching PATH for it.
+        if (std.mem.indexOfScalar(u8, name, '/') != null) {
+            if (std.Io.Dir.cwd().access(std.Options.debug_io, name, .{})) |_| {
+                try IO.print("{s}\n", .{name});
+            } else |_| {
+                try IO.eprint("den: which: {s}: no such file or directory\n", .{name});
+                shell.last_exit_code = 1;
+            }
+            continue;
+        }
+
+        // Aliases, functions and builtins shadow PATH lookups, so report them
+        // first — matching zsh's `which`.
+        if (shell.aliases.get(name)) |alias_value| {
+            try IO.print("{s}: aliased to {s}\n", .{ name, alias_value });
+            continue;
+        }
+        if (shell.function_manager.getFunction(name) != null) {
+            try IO.print("{s}: function\n", .{name});
+            continue;
+        }
+        if (builtin_dispatch.isShellBuiltin(name) or executor_mod.Executor.isBuiltinName(name)) {
+            try IO.print("{s}: shell built-in command\n", .{name});
+            continue;
+        }
+
         var found = false;
         var path_iter = std.mem.tokenizeScalar(u8, path_str, ':');
 
