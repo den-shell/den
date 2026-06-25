@@ -66,16 +66,21 @@ pub const PlaceholderRegistry = struct {
 fn expandPath(ctx: *const PromptContext, allocator: std.mem.Allocator) ![]const u8 {
     const cwd = ctx.current_dir;
 
-    // If in home directory, show ~
+    // Substitute $HOME with ~ (like zsh's %~), keeping the full home-relative
+    // path: /Users/chris/Code -> ~/Code (not just "Code"), and home itself -> ~.
     if (ctx.home_dir) |home| {
-        if (std.mem.eql(u8, cwd, home)) {
-            return try allocator.dupe(u8, "~");
+        if (home.len > 0) {
+            if (std.mem.eql(u8, cwd, home)) {
+                return try allocator.dupe(u8, "~");
+            }
+            if (cwd.len > home.len and std.mem.startsWith(u8, cwd, home) and cwd[home.len] == '/') {
+                return try std.fmt.allocPrint(allocator, "~{s}", .{cwd[home.len..]});
+            }
         }
     }
 
-    // Otherwise show just the current directory name (basename)
-    const basename = std.fs.path.basename(cwd);
-    return try allocator.dupe(u8, basename);
+    // Outside home: show the absolute path as-is.
+    return try allocator.dupe(u8, cwd);
 }
 
 fn expandGit(ctx: *const PromptContext, allocator: std.mem.Allocator) ![]const u8 {
@@ -511,7 +516,7 @@ test "expandPath returns home tilde" {
     try std.testing.expectEqualStrings("~", result);
 }
 
-test "expandPath returns basename" {
+test "expandPath returns home-relative path" {
     const allocator = std.testing.allocator;
     var ctx = PromptContext.init(allocator);
     ctx.current_dir = "/home/user/projects";
@@ -519,7 +524,29 @@ test "expandPath returns basename" {
 
     const result = try expandPath(&ctx, allocator);
     defer allocator.free(result);
-    try std.testing.expectEqualStrings("projects", result);
+    try std.testing.expectEqualStrings("~/projects", result);
+}
+
+test "expandPath returns absolute path outside home" {
+    const allocator = std.testing.allocator;
+    var ctx = PromptContext.init(allocator);
+    ctx.current_dir = "/usr/local/bin";
+    ctx.home_dir = "/home/user";
+
+    const result = try expandPath(&ctx, allocator);
+    defer allocator.free(result);
+    try std.testing.expectEqualStrings("/usr/local/bin", result);
+}
+
+test "expandPath does not tilde a sibling of home" {
+    const allocator = std.testing.allocator;
+    var ctx = PromptContext.init(allocator);
+    ctx.current_dir = "/home/username"; // shares the "/home/user" prefix
+    ctx.home_dir = "/home/user";
+
+    const result = try expandPath(&ctx, allocator);
+    defer allocator.free(result);
+    try std.testing.expectEqualStrings("/home/username", result);
 }
 
 test "expandSymbol green arrow on success" {
