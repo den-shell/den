@@ -709,16 +709,9 @@ test "CallFrame positional_params capacity" {
 }
 
 test "FunctionDef struct fields" {
-    // Ensure Function has the fields we rely on
-    const has_exported_field = comptime blk: {
-        for (@typeInfo(Function).@"struct".fields) |f| {
-            if (std.mem.eql(u8, f.name, "is_exported")) {
-                break :blk true;
-            }
-        }
-        break :blk false;
-    };
-    try std.testing.expect(has_exported_field);
+    // Ensure Function has the fields we rely on. @hasField is version-agnostic;
+    // the raw @typeInfo().fields shape changed across zig releases.
+    try std.testing.expect(@hasField(Function, "is_exported"));
 }
 
 test "FunctionManager listFunctions is heap-allocated with no truncation" {

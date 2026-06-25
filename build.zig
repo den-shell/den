@@ -1,5 +1,17 @@
 const std = @import("std");
 
+/// Forward `zig build <step> -- <args>` to a Run step, across zig versions.
+/// Newer zig (>= ~0.17.0-dev.200) replaced the `b.args` field + `addArgs` with
+/// `Run.addPassthruArgs`; feature-detect so den builds on whatever toolchain is
+/// installed (pantry currently ships 0.17.0-dev.131, the default `zig` is newer).
+fn forwardRunArgs(b: *std.Build, run: *std.Build.Step.Run) void {
+    if (comptime @hasDecl(std.Build.Step.Run, "addPassthruArgs")) {
+        run.addPassthruArgs();
+    } else {
+        if (b.args) |args| run.addArgs(args);
+    }
+}
+
 pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
@@ -135,7 +147,7 @@ pub fn build(b: *std.Build) void {
     const test_runner_cmd = b.addRunArtifact(test_runner_exe);
     test_runner_cmd.step.dependOn(b.getInstallStep());
 
-    if (b.args) |args| test_runner_cmd.addArgs(args);
+    forwardRunArgs(b, test_runner_cmd);
 
     const test_runner_step = b.step("test-runner", "Run the test runner");
     test_runner_step.dependOn(&test_runner_cmd.step);
@@ -144,7 +156,7 @@ pub fn build(b: *std.Build) void {
     const run_cmd = b.addRunArtifact(exe);
     run_cmd.step.dependOn(b.getInstallStep());
 
-    if (b.args) |args| run_cmd.addArgs(args);
+    forwardRunArgs(b, run_cmd);
 
     const run_step = b.step("run", "Run the den shell");
     run_step.dependOn(&run_cmd.step);

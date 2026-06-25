@@ -231,16 +231,16 @@ pub const BuiltinHooks = struct {
 
     /// Enable all hooks
     pub fn enableAll(self: *BuiltinHooks) !void {
-        inline for (std.meta.fields(BuiltinHook)) |field| {
-            const hook = @field(BuiltinHook, field.name);
+        // std.enums.values works across zig versions; std.meta.fields was removed
+        // when the reflection API moved to parallel field arrays (0.17 dev).
+        inline for (std.enums.values(BuiltinHook)) |hook| {
             try self.enable(hook);
         }
     }
 
     /// Disable all hooks
     pub fn disableAll(self: *BuiltinHooks) !void {
-        inline for (std.meta.fields(BuiltinHook)) |field| {
-            const hook = @field(BuiltinHook, field.name);
+        inline for (std.enums.values(BuiltinHook)) |hook| {
             try self.disable(hook);
         }
     }
@@ -250,8 +250,7 @@ pub const BuiltinHooks = struct {
         var enabled_buffer: [10]BuiltinHook = undefined;
         var count: usize = 0;
 
-        inline for (std.meta.fields(BuiltinHook)) |field| {
-            const hook = @field(BuiltinHook, field.name);
+        inline for (std.enums.values(BuiltinHook)) |hook| {
             if (self.isEnabled(hook)) {
                 if (count < enabled_buffer.len) {
                     enabled_buffer[count] = hook;

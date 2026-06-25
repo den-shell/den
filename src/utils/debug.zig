@@ -88,9 +88,14 @@ pub fn inspect(comptime name: []const u8, value: anytype) void {
     // Print additional type information
     switch (type_info) {
         .pointer => |ptr| {
+            // Newer zig moved pointer constness from `is_const` into `attrs`.
+            const is_const = if (@hasField(@TypeOf(ptr), "is_const"))
+                ptr.is_const
+            else
+                ptr.attrs.@"const";
             print("  -> Pointer (size: {s}, is_const: {})", .{
                 @tagName(ptr.size),
-                ptr.is_const,
+                is_const,
             });
         },
         .array => |arr| {
@@ -100,9 +105,12 @@ pub fn inspect(comptime name: []const u8, value: anytype) void {
             });
         },
         .@"struct" => |s| {
-            print("  -> Struct (fields: {d})", .{
-                s.fields.len,
-            });
+            // Newer zig replaced `fields` with parallel `field_names`/`field_types`.
+            const field_count = if (@hasField(@TypeOf(s), "fields"))
+                s.fields.len
+            else
+                s.field_names.len;
+            print("  -> Struct (fields: {d})", .{field_count});
         },
         .optional => |opt| {
             print("  -> Optional (child: {s})", .{@typeName(opt.child)});

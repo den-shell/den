@@ -671,18 +671,10 @@ test "ScriptManager cache stats" {
 }
 
 test "CachedScript uses i128 for mtime" {
-    // Ensures the i96 → i128 change is in effect
-    const field_info = @typeInfo(CachedScript).@"struct".fields;
-    var found = false;
-    inline for (field_info) |f| {
-        if (std.mem.eql(u8, f.name, "mtime_ns")) {
-            // Type should be i128 now, not i96
-            try std.testing.expectEqual(i128, f.type);
-            found = true;
-            break;
-        }
-    }
-    try std.testing.expect(found);
+    // Ensures the i96 → i128 change is in effect. @hasField/@FieldType are
+    // version-agnostic; the raw @typeInfo().fields shape changed across zig releases.
+    try std.testing.expect(@hasField(CachedScript, "mtime_ns"));
+    try std.testing.expectEqual(i128, @FieldType(CachedScript, "mtime_ns"));
 }
 
 test "extractHeredocDelimiter basic" {
