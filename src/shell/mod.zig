@@ -149,6 +149,7 @@ pub const updatePromptContext = prompt_context.updatePromptContext;
 
 // Re-export command expansion functions
 pub const expandCommandChain = command_expansion.expandCommandChain;
+pub const expandCommand = command_expansion.expandCommand;
 pub const expandAliases = command_expansion.expandAliases;
 
 // Re-export variable handling functions

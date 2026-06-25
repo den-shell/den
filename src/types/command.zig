@@ -44,6 +44,7 @@ pub const ParsedCommand = struct {
     type: CommandType = .external,
     quoted_args: ?[]const bool = null,
     cmd_sub_exit_code: ?i32 = null, // Exit code from command substitution during expansion
+    expanded: bool = false, // Whether variable/brace/glob expansion has been applied
 
     pub fn deinit(self: *ParsedCommand, allocator: std.mem.Allocator) void {
         // Free command name (allocated during parsing/expansion)

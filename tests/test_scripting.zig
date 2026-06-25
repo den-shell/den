@@ -919,3 +919,79 @@ test "scripting: source still honors genuine multi-line quoted strings" {
     try test_utils.TestAssert.expectContains(result.stdout, "line1");
     try test_utils.TestAssert.expectContains(result.stdout, "line2");
 }
+
+// ----------------------------------------------------------------------------
+// Deferred per-segment expansion in command chains
+//
+// Variable/brace/glob expansion is applied to each segment of a chain
+// (&&, ||, ;) at execution time, not up-front for the whole chain. This makes
+// a variable set in an earlier segment visible to a later one. These tests run
+// the real den binary (DenShellFixture) because they verify den-specific
+// timing — ShellFixture.exec would run system /bin/sh and always pass.
+// ----------------------------------------------------------------------------
+
+test "scripting: variable set in earlier && segment is visible to later segment" {
+    const allocator = std.testing.allocator;
+
+    var fixture = try test_utils.DenShellFixture.init(allocator);
+    defer fixture.deinit();
+
+    const result = try fixture.execDirect("export FOO=bar && echo GOT=$FOO");
+    defer allocator.free(result.stdout);
+    defer allocator.free(result.stderr);
+
+    try test_utils.TestAssert.expectEqual(@as(u8, 0), result.exit_code);
+    try test_utils.TestAssert.expectContains(result.stdout, "GOT=bar");
+}
+
+test "scripting: variable set in earlier ; segment is visible to later segment" {
+    const allocator = std.testing.allocator;
+
+    var fixture = try test_utils.DenShellFixture.init(allocator);
+    defer fixture.deinit();
+
+    const result = try fixture.execDirect("BAZ=qux; echo VAL=$BAZ");
+    defer allocator.free(result.stdout);
+    defer allocator.free(result.stderr);
+
+    try test_utils.TestAssert.expectEqual(@as(u8, 0), result.exit_code);
+    try test_utils.TestAssert.expectContains(result.stdout, "VAL=qux");
+}
+
+test "scripting: env accumulates across three chained segments" {
+    const allocator = std.testing.allocator;
+
+    var fixture = try test_utils.DenShellFixture.init(allocator);
+    defer fixture.deinit();
+
+    const result = try fixture.execDirect("export A=1 && export B=2 && echo RES=$A$B");
+    defer allocator.free(result.stdout);
+    defer allocator.free(result.stderr);
+
+    try test_utils.TestAssert.expectEqual(@as(u8, 0), result.exit_code);
+    try test_utils.TestAssert.expectContains(result.stdout, "RES=12");
+}
+
+test "scripting: source with multi-line quoted value works inside a chain" {
+    const allocator = std.testing.allocator;
+
+    var fixture = try test_utils.DenShellFixture.init(allocator);
+    defer fixture.deinit();
+
+    // The quoted value spans two physical lines. A naive split-on-\n would
+    // execute the second line ("line2\"") as a bogus command. This runs through
+    // the executor → script_manager path (vs. the shell builtinSource path that
+    // the single-command source tests above exercise).
+    const script_path = try fixture.createFile("multi.sh", "export MULTI=\"line1\nline2\"\necho DONE=$MULTI\n");
+    defer allocator.free(script_path);
+
+    // fixture.exec prefixes `cd <tmpdir> &&`, so `source` runs as the second
+    // segment of a chain (executor path → script_manager.executeScript).
+    const result = try fixture.exec("source multi.sh");
+    defer allocator.free(result.stdout);
+    defer allocator.free(result.stderr);
+
+    try test_utils.TestAssert.expectEqual(@as(u8, 0), result.exit_code);
+    try test_utils.TestAssert.expectContains(result.stdout, "DONE=line1 line2");
+    try test_utils.TestAssert.expectTrue(std.mem.indexOf(u8, result.stderr, "command not found") == null);
+}

@@ -2365,15 +2365,33 @@ pub const Shell = struct {
         };
         defer chain.deinit(self.allocator);
 
-        // Expand variables in all commands
-        self.expandCommandChain(&chain) catch |err| {
-            if (err == error.UnboundVariable) {
-                self.last_exit_code = 1;
-                if (self.option_errexit) return error.Exit;
-                return;
-            }
-            return err;
-        };
+        // Whether the chain runs in the background (last operator is &).
+        // Background chains are forked and executed by an executor with no
+        // shell reference, so they cannot expand lazily and must be expanded
+        // up-front here.
+        const is_background = chain.operators.len > 0 and
+            chain.operators[chain.operators.len - 1] == .background;
+
+        // Expand variables/braces/globs.
+        //
+        // For a foreground chain with more than one segment, expansion is
+        // DEFERRED to execution time — the executor expands each command right
+        // before it runs (see Executor.ensureExpanded). This makes a variable
+        // set in an earlier segment visible to a later one, e.g.
+        // `export FOO=bar && echo $FOO`. Single commands and background chains
+        // are expanded up-front since they have no "earlier segment" to observe
+        // (or no shell reference at execution time).
+        const defer_expansion = !is_background and chain.commands.len > 1;
+        if (!defer_expansion) {
+            self.expandCommandChain(&chain) catch |err| {
+                if (err == error.UnboundVariable) {
+                    self.last_exit_code = 1;
+                    if (self.option_errexit) return error.Exit;
+                    return;
+                }
+                return err;
+            };
+        }
 
         // Expand aliases in command names
         try self.expandAliases(&chain);
@@ -2549,10 +2567,7 @@ pub const Shell = struct {
             }
         }
 
-        // Check if this is a background job (last operator is &)
-        const is_background = chain.operators.len > 0 and
-            chain.operators[chain.operators.len - 1] == .background;
-
+        // Background jobs (last operator is &) — is_background computed above.
         if (is_background) {
             // Execute in background
             try shell_mod.executeInBackground(self, &chain, input);
@@ -2561,8 +2576,10 @@ pub const Shell = struct {
             // Execute normally
             var executor = executor_mod.Executor.initWithShell(self.allocator, &self.environment, self);
             const exit_code = executor.executeChain(&chain) catch |err| {
-                // BrokenPipe is expected when a downstream pipe consumer closes early
-                if (err != error.BrokenPipe)
+                // BrokenPipe is expected when a downstream pipe consumer closes early.
+                // UnboundVariable (set -u, from deferred per-segment expansion) has
+                // already been reported by the expander.
+                if (err != error.BrokenPipe and err != error.UnboundVariable)
                     try IO.eprint("den: execution error: {}\n", .{err});
                 self.last_exit_code = 1;
                 // Execute post_command hooks even on error
@@ -3805,6 +3822,13 @@ pub const Shell = struct {
 
     pub fn expandCommandChain(self: *Shell, chain: *types.CommandChain) !void {
         try shell_mod.expandCommandChain(self, chain);
+    }
+
+    /// Expand variables/braces/globs in a single command (idempotent).
+    /// Used by the executor to defer expansion to execution time so each
+    /// segment of a chain sees the environment mutated by prior segments.
+    pub fn expandCommand(self: *Shell, cmd: *types.ParsedCommand) !void {
+        try shell_mod.expandCommand(self, cmd);
     }
 
     /// Add command to history (respects config.history.max_entries)

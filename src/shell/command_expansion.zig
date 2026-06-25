@@ -10,8 +10,24 @@ const BraceExpander = @import("../utils/brace.zig").BraceExpander;
 const Shell = @import("../shell.zig").Shell;
 const builtin = @import("builtin");
 
-/// Expand variables, braces, and globs in a command chain
+/// Expand variables, braces, and globs in a command chain.
+///
+/// Each command is expanded at most once (tracked via `cmd.expanded`), so this
+/// can safely run after the executor has already lazily expanded some segments.
 pub fn expandCommandChain(self: *Shell, chain: *types.CommandChain) !void {
+    for (chain.commands) |*cmd| {
+        try expandCommand(self, cmd);
+    }
+}
+
+/// Expand variables, braces, and globs in a single parsed command.
+///
+/// Idempotent: returns immediately if the command was already expanded. This
+/// lets the executor defer expansion to execution time so each segment of a
+/// chain (`a && b`, `a; b`) expands against the environment as mutated by
+/// prior segments, while still being safe if the shell expanded it up-front.
+pub fn expandCommand(self: *Shell, cmd: *types.ParsedCommand) !void {
+    if (cmd.expanded) return;
     // Collect positional params for the expander
     // If inside a function, use function's positional params instead of shell's
     var positional_params_slice: [64][]const u8 = undefined;
@@ -71,7 +87,10 @@ pub fn expandCommandChain(self: *Shell, chain: *types.CommandChain) !void {
     const cwd_result = std.c.getcwd(&cwd_buf, cwd_buf.len) orelse return error.Unexpected;
     const cwd = std.mem.sliceTo(@as([*:0]u8, @ptrCast(cwd_result)), 0);
 
-    for (chain.commands) |*cmd| {
+    // Expand this single command. The body is wrapped in a block so its
+    // per-statement `defer`/`errdefer` cleanups run on scope exit, matching the
+    // original per-iteration semantics when this was a loop over the chain.
+    {
         // Save exit code before expansion to detect command substitution
         const exit_code_before = self.last_exit_code;
 
@@ -271,6 +290,8 @@ pub fn expandCommandChain(self: *Shell, chain: *types.CommandChain) !void {
             cmd.redirections[i].target = expanded_target;
         }
     }
+
+    cmd.expanded = true;
 }
 
 /// Strip backslash escapes before glob metacharacters (*, ?, [)

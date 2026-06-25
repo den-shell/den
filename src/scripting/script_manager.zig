@@ -395,15 +395,51 @@ pub const ScriptManager = struct {
         const shell_name_copy = try self.allocator.dupe(u8, path);
         shell.shell_name = shell_name_copy;
 
-        // Convert lines to array for control flow processing
+        // Convert lines to array for control flow processing.
+        //
+        // Split on newlines QUOTE-AWARE: a newline inside single/double quotes
+        // does not end a logical line, so a multi-line quoted value like
+        //   export X="line1
+        //   line2"
+        // stays a single command. This mirrors the shell's `source` builtin
+        // (see misc_builtins.builtinSource); a naive split-on-\n would execute
+        // `line2"` as its own (bogus) command.
         var lines_buffer: [10000][]const u8 = undefined;
         var lines_count: usize = 0;
-
-        var line_iter = std.mem.splitScalar(u8, content, '\n');
-        while (line_iter.next()) |line| {
-            if (lines_count >= lines_buffer.len) return error.TooManyLines;
-            lines_buffer[lines_count] = try self.allocator.dupe(u8, line);
-            lines_count += 1;
+        {
+            var line_start: usize = 0;
+            var in_sq = false;
+            var in_dq = false;
+            var escaped = false;
+            var ci: usize = 0;
+            while (ci < content.len) : (ci += 1) {
+                if (escaped) {
+                    escaped = false;
+                    continue;
+                }
+                const ch = content[ci];
+                if (ch == '\\' and !in_sq) {
+                    escaped = true;
+                    continue;
+                }
+                if (ch == '\'' and !in_dq) {
+                    in_sq = !in_sq;
+                } else if (ch == '"' and !in_sq) {
+                    in_dq = !in_dq;
+                } else if (ch == '\n' and !in_sq and !in_dq) {
+                    if (lines_count >= lines_buffer.len) return error.TooManyLines;
+                    lines_buffer[lines_count] = try self.allocator.dupe(u8, content[line_start..ci]);
+                    lines_count += 1;
+                    line_start = ci + 1;
+                }
+            }
+            // Trailing segment after the last newline (or the whole content if
+            // it had no unquoted newline).
+            if (line_start < content.len) {
+                if (lines_count >= lines_buffer.len) return error.TooManyLines;
+                lines_buffer[lines_count] = try self.allocator.dupe(u8, content[line_start..content.len]);
+                lines_count += 1;
+            }
         }
         const lines = lines_buffer[0..lines_count];
         defer {

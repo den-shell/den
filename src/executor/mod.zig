@@ -256,6 +256,9 @@ pub const Executor = struct {
     /// Connects stdout of each command to stdin of the next.
     fn executePipeline(self: *Executor, commands: []types.ParsedCommand) !i32 {
         if (commands.len == 0) return 0;
+        // Expand every stage up-front (in the parent, before any fork) so each
+        // segment sees variables set by earlier segments of the chain.
+        for (commands) |*cmd| try self.ensureExpanded(cmd);
         if (commands.len == 1) return try self.executeCommand(&commands[0]);
 
         if (builtin.os.tag == .windows) {
@@ -655,7 +658,24 @@ pub const Executor = struct {
 
     /// Execute a single command, either as a builtin or external program.
     /// Handles shell options like xtrace (-x) and noexec (-n).
+    /// Lazily expand a command's variables/braces/globs immediately before it
+    /// executes. Multi-segment foreground chains defer expansion to here so a
+    /// variable set in an earlier segment is visible to a later one
+    /// (`export FOO=bar && echo $FOO`). Idempotent (guarded by command.expanded)
+    /// and a no-op without a shell reference, e.g. backgrounded chains that were
+    /// already expanded up-front.
+    fn ensureExpanded(self: *Executor, command: *types.ParsedCommand) !void {
+        if (command.expanded) return;
+        if (self.shell) |shell| {
+            try shell.expandCommand(command);
+        }
+    }
+
     pub fn executeCommand(self: *Executor, command: *types.ParsedCommand) !i32 {
+        // Expand this segment now (deferred from the shell for chains) so it
+        // sees the environment mutated by earlier segments.
+        try self.ensureExpanded(command);
+
         // Handle set -x (xtrace): print command before execution
         if (self.shell) |shell| {
             if (shell.option_xtrace) {
@@ -1706,6 +1726,9 @@ pub const Executor = struct {
 
     /// Execute command in background (don't wait for it to complete)
     fn executeCommandBackground(self: *Executor, command: *types.ParsedCommand) !void {
+        // Expand now (deferred from the shell for chains) before forking.
+        try self.ensureExpanded(command);
+
         // Check if it's a builtin - builtins can't run in background
         if (self.isBuiltin(command.name)) {
             try IO.eprint("den: cannot run builtin '{s}' in background\n", .{command.name});
