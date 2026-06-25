@@ -513,9 +513,15 @@ pub const LineEditor = struct {
         // Reset state
         self.cursor = 0;
         self.length = 0;
-        // Fresh line: the prompt was just printed at the current row, so the
-        // cursor is on row 0 of this line's (not-yet-wrapped) block.
-        self.rendered_cursor_row = 0;
+        // Fresh line: the prompt was just printed. For a multi-line prompt the
+        // cursor sits on the prompt's last row, so seed the tracked row with how
+        // many rows the prompt spans (0 for a single-line prompt) — otherwise the
+        // first repaint moves up too little and duplicates the prompt.
+        const init_cols: usize = if (signals.getWindowSize()) |ws|
+            (if (ws.cols == 0) 80 else ws.cols)
+        else |_|
+            80;
+        self.rendered_cursor_row = self.promptLayout(init_cols).rows;
         self.history_index = null;
         if (self.saved_line) |saved| {
             self.allocator.free(saved);
@@ -694,7 +700,7 @@ pub const LineEditor = struct {
                         // Cancel reverse search and clear line
                         try self.cancelReverseSearch();
                         try self.writeBytes("\r\n");
-                        try self.writeBytes(self.prompt);
+                        try self.writePromptCrlf();
                         self.length = 0;
                         self.cursor = 0;
                         continue;
@@ -1067,7 +1073,7 @@ pub const LineEditor = struct {
 
         // Redraw normal prompt and buffer
         try self.writeBytes("\r\x1B[K");
-        try self.writeBytes(self.prompt);
+        try self.writePromptCrlf();
         try self.writeBytes(self.buffer[0..self.length]);
 
         // Move cursor to end
@@ -1136,7 +1142,7 @@ pub const LineEditor = struct {
     /// Redraw line with selection highlighting
     fn redrawWithSelection(self: *LineEditor) !void {
         try self.writeBytes("\r\x1B[K");
-        try self.writeBytes(self.prompt);
+        try self.writePromptCrlf();
 
         const range = self.getSelectionRange();
 
@@ -2054,17 +2060,14 @@ pub const LineEditor = struct {
     }
 
     fn replaceLine(self: *LineEditor, text: []const u8) !void {
-        // Clear current line
-        try self.moveCursorHome();
-        try self.writeBytes("\x1B[K"); // Clear to end of line
-
-        // Copy new text
+        // Swap in the new buffer, then do a full wrap-/multi-line-aware repaint.
+        // (The old manual "home + clear-to-EOL + write" overwrote the prompt's
+        // last line — dropping the prompt symbol — and couldn't handle a prompt
+        // that spans rows.)
         self.length = @min(text.len, self.buffer.len);
         @memcpy(self.buffer[0..self.length], text[0..self.length]);
         self.cursor = self.length;
-
-        // Display new text
-        try self.writeBytes(self.buffer[0..self.length]);
+        try self.redrawLine();
     }
 
     fn writeBytes(self: *LineEditor, bytes: []const u8) !void {
@@ -2624,23 +2627,92 @@ pub const LineEditor = struct {
         return cols;
     }
 
+    /// How the prompt lays out across terminal rows: `rows` is how many rows it
+    /// spans *below* its first row (0 for a single-line prompt), and `last_col`
+    /// is the column where it ends — i.e. where the input buffer begins. Honors
+    /// embedded newlines (multi-line prompts) and wrapping, skipping zero-width
+    /// ANSI/OSC escapes. Without this the redraw assumed a single-row prompt and
+    /// reprinted the whole prompt on every repaint when it contained a newline.
+    fn promptLayout(self: *LineEditor, cols: usize) struct { rows: usize, last_col: usize } {
+        const w = if (cols == 0) 80 else cols;
+        var row: usize = 0;
+        var col: usize = 0;
+        var i: usize = 0;
+        const p = self.prompt;
+        while (i < p.len) {
+            if (p[i] == 0x1B) {
+                i += 1;
+                if (i < p.len and p[i] == '[') {
+                    i += 1;
+                    while (i < p.len and !(p[i] >= 0x40 and p[i] <= 0x7E)) : (i += 1) {}
+                    if (i < p.len) i += 1;
+                } else if (i < p.len and p[i] == ']') {
+                    i += 1;
+                    while (i < p.len and p[i] != 0x07) : (i += 1) {}
+                    if (i < p.len) i += 1;
+                } else {
+                    i += 1;
+                }
+                continue;
+            }
+            if (p[i] == '\n') {
+                row += 1;
+                col = 0;
+                i += 1;
+                continue;
+            }
+            const len = utf8SeqLen(p[i]);
+            const end = @min(i + len, p.len);
+            const cw = codepointWidth(decodeCodepoint(p[i..end], end - i));
+            if (col + cw > w) {
+                row += 1;
+                col = 0;
+            }
+            col += cw;
+            i = end;
+        }
+        return .{ .rows = row, .last_col = col };
+    }
+
+    /// Write the prompt with each `\n` emitted as `\r\n`. In raw mode ONLCR is
+    /// off, so a bare newline moves down without returning to column 0; a
+    /// multi-line prompt repainted that way stair-steps. Used by repaint paths
+    /// (the initial displayPrompt runs in cooked mode and doesn't need this).
+    fn writePromptCrlf(self: *LineEditor) !void {
+        var start: usize = 0;
+        var i: usize = 0;
+        while (i < self.prompt.len) : (i += 1) {
+            if (self.prompt[i] == '\n') {
+                try self.writeBytes(self.prompt[start..i]);
+                try self.writeBytes("\r\n");
+                start = i + 1;
+            }
+        }
+        try self.writeBytes(self.prompt[start..]);
+    }
+
     /// Wrap-aware full-line repaint. Repaints the prompt + buffer and positions
     /// the cursor at its true (row, col), correctly handling lines that wrap
-    /// across multiple terminal rows — replacing the old single-row scheme whose
-    /// relative cursor moves corrupted the display on long input.
+    /// across multiple terminal rows AND prompts that span multiple rows (an
+    /// embedded newline or a prompt wider than the terminal).
     fn redrawLine(self: *LineEditor) !void {
         const cols: usize = if (signals.getWindowSize()) |ws|
             (if (ws.cols == 0) 80 else ws.cols)
         else |_|
             80;
 
-        const pwidth = self.promptVisibleWidth();
-        const total_cols = pwidth + self.displayWidth(0, self.length);
-        const cursor_cols = pwidth + self.displayWidth(0, self.cursor);
+        // The prompt may span several rows (multi-line or wider than the
+        // terminal); the buffer continues from where it ends.
+        const layout = self.promptLayout(cols);
+        const prow = layout.rows; // rows the prompt spans below its first row
+        const pcol = layout.last_col; // column where the buffer begins
 
-        const last_row = total_cols / cols;
-        const cursor_row = cursor_cols / cols;
-        const cursor_col = cursor_cols % cols;
+        const total_tail = pcol + self.displayWidth(0, self.length);
+        const cursor_tail = pcol + self.displayWidth(0, self.cursor);
+
+        const last_row = prow + total_tail / cols;
+        const cursor_row = prow + cursor_tail / cols;
+        const cursor_col = cursor_tail % cols;
 
         var buf: [32]u8 = undefined;
 
@@ -2653,8 +2725,10 @@ pub const LineEditor = struct {
         // 2. Column 0, clear everything below.
         try self.writeBytes("\r\x1B[0J");
 
-        // 3. Prompt.
-        try self.writeBytes(self.prompt);
+        // 3. Prompt. Translate the prompt's own newlines to CRLF: redrawLine runs
+        //    in raw mode (ONLCR off), so a bare \n line-feeds without returning to
+        //    column 0 and a multi-line prompt would stair-step to the right.
+        try self.writePromptCrlf();
 
         // 4. Buffer (optionally syntax-highlighted).
         if (self.syntax_highlighting and self.length > 0) {
@@ -2671,10 +2745,10 @@ pub const LineEditor = struct {
         }
 
         // 5. If content fills the last row exactly, force a wrap so row math holds.
-        if (total_cols > 0 and total_cols % cols == 0) {
+        if (total_tail > 0 and total_tail % cols == 0) {
             try self.writeBytes("\r\n");
         }
-        const end_row = if (total_cols > 0 and total_cols % cols == 0) last_row + 1 else last_row;
+        const end_row = if (total_tail > 0 and total_tail % cols == 0) last_row + 1 else last_row;
 
         // 6. Move up from the end row to the cursor's row.
         if (end_row > cursor_row) {
