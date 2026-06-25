@@ -9,6 +9,7 @@
 //! - Bun, Node.js, Python, Ruby, Go, Rust, Zig versions
 
 const std = @import("std");
+const spawn = @import("../utils/spawn.zig");
 
 /// Detect package version from package.json or pantry.json
 pub fn detectPackageVersion(allocator: std.mem.Allocator, cwd: []const u8) ![]const u8 {
@@ -54,28 +55,22 @@ pub fn detectPackageVersion(allocator: std.mem.Allocator, cwd: []const u8) ![]co
     return error.NotFound;
 }
 
-/// Detect Bun version by running `bun --version`
+/// Detect Bun version by running `bun --version`.
+/// Uses spawn.captureOutput (the working command-substitution path) rather than
+/// std.process.run, whose capture comes back empty in this build. This runs only
+/// in Bun projects (gated by bun.lock in updatePromptContext), so it's one spawn
+/// per prompt there — the other language detectors are intentionally left on the
+/// fast-failing path to avoid spawning a process every render in every directory.
 pub fn detectBunVersion(allocator: std.mem.Allocator) ![]const u8 {
-    const result = std.process.run(allocator, std.Options.debug_io, .{
+    const cap = spawn.captureOutput(allocator, .{
         .argv = &[_][]const u8{ "bun", "--version" },
     }) catch return error.NotFound;
+    defer cap.deinit(allocator);
 
-    defer allocator.free(result.stdout);
-    defer allocator.free(result.stderr);
-
-    switch (result.term) {
-        .exited => |code| {
-            if (code == 0) {
-                const trimmed = std.mem.trim(u8, result.stdout, &std.ascii.whitespace);
-                if (trimmed.len > 0) {
-                    return try allocator.dupe(u8, trimmed);
-                }
-            }
-        },
-        else => {},
-    }
-
-    return error.NotFound;
+    if (cap.exit_code != 0) return error.NotFound;
+    const trimmed = std.mem.trim(u8, cap.stdout, &std.ascii.whitespace);
+    if (trimmed.len == 0) return error.NotFound;
+    return try allocator.dupe(u8, trimmed);
 }
 
 /// Detect Node.js version by running `node --version`
