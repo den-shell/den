@@ -530,3 +530,144 @@ test "builtin find: -type d still recurses and lists dirs" {
     try test_utils.TestAssert.expectEqual(@as(u8, 0), result.exit_code);
     try test_utils.TestAssert.expectContains(result.stdout, "deep");
 }
+
+// ----------------------------------------------------------------------------
+// `which`: paths, builtins, aliases (DenShellFixture → real den binary)
+// ----------------------------------------------------------------------------
+
+test "builtin which: reports an absolute path directly" {
+    const allocator = std.testing.allocator;
+
+    var fixture = try test_utils.DenShellFixture.init(allocator);
+    defer fixture.deinit();
+
+    // Regression: `which /abs/path` (e.g. `which $SHELL`) used to fail because it
+    // only searched PATH for the literal string.
+    const result = try fixture.execDirect("which /bin/sh");
+    defer allocator.free(result.stdout);
+    defer allocator.free(result.stderr);
+
+    try test_utils.TestAssert.expectContains(result.stdout, "/bin/sh");
+}
+
+test "builtin which: identifies a shell builtin" {
+    const allocator = std.testing.allocator;
+
+    var fixture = try test_utils.DenShellFixture.init(allocator);
+    defer fixture.deinit();
+
+    const result = try fixture.execDirect("which cd");
+    defer allocator.free(result.stdout);
+    defer allocator.free(result.stderr);
+
+    try test_utils.TestAssert.expectContains(result.stdout, "built-in");
+}
+
+test "builtin which: reports an alias" {
+    const allocator = std.testing.allocator;
+
+    var fixture = try test_utils.DenShellFixture.init(allocator);
+    defer fixture.deinit();
+
+    const result = try fixture.execDirect("alias ll='ls -la'; which ll");
+    defer allocator.free(result.stdout);
+    defer allocator.free(result.stderr);
+
+    try test_utils.TestAssert.expectContains(result.stdout, "aliased to");
+}
+
+// ----------------------------------------------------------------------------
+// Coreutils builtins fall back to the real tool for unsupported usage
+// (these assume the standard /bin coreutils are on PATH, as on any Unix host)
+// ----------------------------------------------------------------------------
+
+test "builtin grep: -o falls back to real grep" {
+    const allocator = std.testing.allocator;
+
+    var fixture = try test_utils.DenShellFixture.init(allocator);
+    defer fixture.deinit();
+
+    const result = try fixture.execDirect("printf 'a1b2\\n' | grep -o '[0-9]'");
+    defer allocator.free(result.stdout);
+    defer allocator.free(result.stderr);
+
+    try test_utils.TestAssert.expectContains(result.stdout, "1");
+    try test_utils.TestAssert.expectContains(result.stdout, "2");
+    try test_utils.TestAssert.expectTrue(std.mem.indexOf(u8, result.stderr, "invalid option") == null);
+}
+
+test "builtin grep: supported flags still use the builtin" {
+    const allocator = std.testing.allocator;
+
+    var fixture = try test_utils.DenShellFixture.init(allocator);
+    defer fixture.deinit();
+
+    const result = try fixture.execDirect("printf 'yes\\nno\\n' | grep yes");
+    defer allocator.free(result.stdout);
+    defer allocator.free(result.stderr);
+
+    try test_utils.TestAssert.expectContains(result.stdout, "yes");
+    try test_utils.TestAssert.expectTrue(std.mem.indexOf(u8, result.stdout, "no") == null);
+}
+
+test "builtin date: +FORMAT falls back to real date" {
+    const allocator = std.testing.allocator;
+
+    var fixture = try test_utils.DenShellFixture.init(allocator);
+    defer fixture.deinit();
+
+    // Regression: the builtin printed epoch garbage ("Jan 1 +6:+12:+4 1970").
+    const result = try fixture.execDirect("date +%Y");
+    defer allocator.free(result.stdout);
+    defer allocator.free(result.stderr);
+
+    try test_utils.TestAssert.expectEqual(@as(u8, 0), result.exit_code);
+    try test_utils.TestAssert.expectTrue(std.mem.indexOf(u8, result.stdout, "1970") == null);
+    try test_utils.TestAssert.expectTrue(std.mem.indexOf(u8, result.stdout, ":") == null);
+}
+
+test "builtin base64: reads stdin via fallback" {
+    const allocator = std.testing.allocator;
+
+    var fixture = try test_utils.DenShellFixture.init(allocator);
+    defer fixture.deinit();
+
+    // Regression: 'echo x | base64' used to fail with "missing input".
+    const result = try fixture.execDirect("printf abc | base64");
+    defer allocator.free(result.stdout);
+    defer allocator.free(result.stderr);
+
+    try test_utils.TestAssert.expectContains(result.stdout, "YWJj");
+}
+
+test "builtin seq: attached -s separator and plain range" {
+    const allocator = std.testing.allocator;
+
+    var fixture = try test_utils.DenShellFixture.init(allocator);
+    defer fixture.deinit();
+
+    const sep = try fixture.execDirect("seq -s, 1 3");
+    defer allocator.free(sep.stdout);
+    defer allocator.free(sep.stderr);
+    try test_utils.TestAssert.expectContains(sep.stdout, "1,2,3");
+
+    const plain = try fixture.execDirect("seq 1 3");
+    defer allocator.free(plain.stdout);
+    defer allocator.free(plain.stderr);
+    try test_utils.TestAssert.expectContains(plain.stdout, "1");
+    try test_utils.TestAssert.expectContains(plain.stdout, "3");
+}
+
+test "builtin ls: unsupported flag falls back without erroring" {
+    const allocator = std.testing.allocator;
+
+    var fixture = try test_utils.DenShellFixture.init(allocator);
+    defer fixture.deinit();
+
+    const result = try fixture.execDirect("ls --color=never /");
+    defer allocator.free(result.stdout);
+    defer allocator.free(result.stderr);
+
+    try test_utils.TestAssert.expectEqual(@as(u8, 0), result.exit_code);
+    try test_utils.TestAssert.expectTrue(std.mem.indexOf(u8, result.stderr, "invalid option") == null);
+}
