@@ -718,6 +718,13 @@ pub const ControlFlowExecutor = struct {
     fn evaluateCondition(self: *ControlFlowExecutor, condition: []const u8) bool {
         const trimmed = std.mem.trim(u8, condition, &std.ascii.whitespace);
 
+        // Fast-path: integer test comparisons `[ A -op B ]` / `[[ A -op B ]]`.
+        // Hot loops re-evaluate their condition every iteration, so matching the
+        // common integer-comparison form here avoids the full tokenize→expand→
+        // dispatch-to-`test` pipeline. Returns null for anything that doesn't
+        // cleanly match, so all other conditions behave exactly as before.
+        if (self.fastIntTest(trimmed)) |result| return result;
+
         // Handle ! negation prefix
         if (std.mem.startsWith(u8, trimmed, "! ")) {
             const inner = std.mem.trim(u8, trimmed[2..], &std.ascii.whitespace);
@@ -734,6 +741,80 @@ pub const ControlFlowExecutor = struct {
 
         // Condition is true if exit code is 0
         return self.shell.last_exit_code == 0;
+    }
+
+    /// Fast-path for integer test conditions `[ A -op B ]` / `[[ A -op B ]]`.
+    /// Returns the comparison result, or null if the condition is anything other
+    /// than a single integer comparison of two plain-integer operands — in which
+    /// case the caller falls back to the full `test` builtin path unchanged.
+    fn fastIntTest(self: *ControlFlowExecutor, trimmed: []const u8) ?bool {
+        var inner: []const u8 = undefined;
+        if (trimmed.len > 6 and std.mem.startsWith(u8, trimmed, "[[ ") and std.mem.endsWith(u8, trimmed, " ]]")) {
+            inner = trimmed[3 .. trimmed.len - 3];
+        } else if (trimmed.len > 4 and std.mem.startsWith(u8, trimmed, "[ ") and std.mem.endsWith(u8, trimmed, " ]")) {
+            inner = trimmed[2 .. trimmed.len - 2];
+        } else return null;
+
+        // Expect exactly three whitespace-separated fields: A OP B.
+        var it = std.mem.tokenizeAny(u8, inner, " \t");
+        const a = it.next() orelse return null;
+        const op = it.next() orelse return null;
+        const b = it.next() orelse return null;
+        if (it.next() != null) return null;
+
+        const a_val = self.resolveIntOperand(a) orelse return null;
+        const b_val = self.resolveIntOperand(b) orelse return null;
+
+        const result = if (std.mem.eql(u8, op, "-lt"))
+            a_val < b_val
+        else if (std.mem.eql(u8, op, "-le"))
+            a_val <= b_val
+        else if (std.mem.eql(u8, op, "-gt"))
+            a_val > b_val
+        else if (std.mem.eql(u8, op, "-ge"))
+            a_val >= b_val
+        else if (std.mem.eql(u8, op, "-eq"))
+            a_val == b_val
+        else if (std.mem.eql(u8, op, "-ne"))
+            a_val != b_val
+        else
+            return null;
+
+        self.shell.last_exit_code = if (result) 0 else 1;
+        return result;
+    }
+
+    /// Resolve a test operand to an integer, or null if it is anything other than
+    /// a plain integer literal or a simple `$name`/`${name}` holding an integer.
+    /// Variable lookup matches the expander's priority: function-locals, then
+    /// namerefs/environment. Special/dynamic vars and complex forms return null.
+    fn resolveIntOperand(self: *ControlFlowExecutor, operand: []const u8) ?i64 {
+        // Plain integer literal (optionally signed).
+        if (std.fmt.parseInt(i64, operand, 10)) |n| {
+            return n;
+        } else |_| {}
+
+        if (operand.len < 2 or operand[0] != '$') return null;
+        var name = operand[1..];
+        if (name[0] == '{') {
+            if (name[name.len - 1] != '}') return null;
+            name = name[1 .. name.len - 1];
+        }
+        if (name.len == 0) return null;
+        // Simple identifier only: [A-Za-z_][A-Za-z0-9_]*
+        if (!std.ascii.isAlphabetic(name[0]) and name[0] != '_') return null;
+        for (name) |c| {
+            if (!std.ascii.isAlphanumeric(c) and c != '_') return null;
+        }
+
+        const raw = blk: {
+            if (self.shell.function_manager.currentFrame()) |frame| {
+                if (frame.local_vars.get(name)) |v| break :blk v;
+            }
+            break :blk self.shell.getVariableValue(name) orelse return null;
+        };
+        const t = std.mem.trim(u8, raw, &std.ascii.whitespace);
+        return std.fmt.parseInt(i64, t, 10) catch null;
     }
 
     /// Execute a body of commands
