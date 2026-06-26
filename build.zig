@@ -635,6 +635,36 @@ pub fn build(b: *std.Build) void {
     const context_completion_test_step = b.step("test-context-completion", "Run context-aware completion tests");
     context_completion_test_step.dependOn(&run_context_completion_tests.step);
 
+    // Completion engine unit tests (completeFile/completeCommand, path prefixes)
+    const completion_unit_test_module = b.createModule(.{
+        .root_source_file = b.path("src/utils/completion.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    completion_unit_test_module.addImport("compat", compat_module);
+    completion_unit_test_module.link_libc = true;
+    const completion_unit_tests = b.addTest(.{
+        .root_module = completion_unit_test_module,
+    });
+    const run_completion_unit_tests = b.addRunArtifact(completion_unit_tests);
+    const completion_unit_test_step = b.step("test-completion-unit", "Run completion engine unit tests");
+    completion_unit_test_step.dependOn(&run_completion_unit_tests.step);
+
+    // Spawn/capture-output unit tests
+    const spawn_test_module = b.createModule(.{
+        .root_source_file = b.path("src/utils/spawn.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    spawn_test_module.addImport("compat", compat_module);
+    spawn_test_module.link_libc = true;
+    const spawn_tests = b.addTest(.{
+        .root_module = spawn_test_module,
+    });
+    const run_spawn_tests = b.addRunArtifact(spawn_tests);
+    const spawn_test_step = b.step("test-spawn", "Run spawn/capture-output unit tests");
+    spawn_test_step.dependOn(&run_spawn_tests.step);
+
     // Cross-platform process tests
     const process_test_module = b.createModule(.{
         .root_source_file = b.path("src/utils/process.zig"),

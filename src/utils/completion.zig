@@ -1039,6 +1039,62 @@ test "mid-word path expansion - relative path" {
     }
 }
 
+test "completeFile preserves a leading ./ prefix" {
+    const allocator = std.testing.allocator;
+    var comp = Completion.init(allocator);
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const f = try tmp.dir.createFile(std.Options.debug_io, "langfile", .{});
+    f.close(std.Options.debug_io);
+
+    var cwd_buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
+    const orig_len = try std.Io.Dir.cwd().realPathFile(std.Options.debug_io, ".", &cwd_buf);
+    const orig = try allocator.dupe(u8, cwd_buf[0..orig_len]);
+    defer allocator.free(orig);
+    var tp_buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
+    const tp_len = try tmp.dir.realPathFile(std.Options.debug_io, ".", &tp_buf);
+    {
+        var cb: [std.fs.max_path_bytes]u8 = undefined;
+        @memcpy(cb[0..tp_len], tp_buf[0..tp_len]);
+        cb[tp_len] = 0;
+        if (std.c.chdir(cb[0..tp_len :0]) != 0) return error.ChdirFailed;
+    }
+    defer {
+        var cb: [std.fs.max_path_bytes]u8 = undefined;
+        @memcpy(cb[0..orig.len], orig);
+        cb[orig.len] = 0;
+        _ = std.c.chdir(cb[0..orig.len :0]);
+    }
+
+    // "./lan" must complete to "./langfile" (keep the ./), and bare "lan" to
+    // "langfile" (no prefix).
+    {
+        const results = try comp.completeFile("./lan");
+        defer {
+            for (results) |r| allocator.free(r);
+            allocator.free(results);
+        }
+        var found = false;
+        for (results) |r| {
+            if (std.mem.eql(u8, r, "./langfile")) found = true;
+        }
+        try std.testing.expect(found);
+    }
+    {
+        const results = try comp.completeFile("lan");
+        defer {
+            for (results) |r| allocator.free(r);
+            allocator.free(results);
+        }
+        var found = false;
+        for (results) |r| {
+            if (std.mem.eql(u8, r, "langfile")) found = true;
+        }
+        try std.testing.expect(found);
+    }
+}
+
 test "username completion - current user" {
     const allocator = std.testing.allocator;
     var comp = Completion.init(allocator);

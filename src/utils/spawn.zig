@@ -426,6 +426,22 @@ fn spawnPipelineWindows(allocator: std.mem.Allocator, commands: []const SpawnOpt
 // Tests
 // =============================================================================
 
+test "captureOutput trims trailing newlines and frees cleanly" {
+    if (is_windows) return error.SkipZigTest;
+    const allocator = std.testing.allocator;
+
+    // Regression: captureOutput re-sliced the owned buffer to strip the trailing
+    // newline, leaving its length out of sync with the allocation so the free
+    // tripped the allocator's size check. std.testing.allocator verifies the
+    // free here, so a recurrence fails this test.
+    const result = try captureOutput(allocator, .{
+        .argv = &[_][]const u8{ "/bin/sh", "-c", "printf 'hi\\n\\n'" },
+    });
+    defer result.deinit(allocator);
+
+    try std.testing.expectEqualStrings("hi", result.stdout);
+}
+
 test "getDefaultShell returns valid path" {
     const shell = getDefaultShell();
     if (is_windows) {
