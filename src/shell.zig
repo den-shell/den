@@ -2086,6 +2086,72 @@ pub const Shell = struct {
                     }
                     if (!found_space_outside_quotes) {
                         const raw_value = trimmed_input[eq_pos + 1 ..];
+
+                        // Fast-path: `name=$((EXPR))` arithmetic assignment, the hot
+                        // loop-counter idiom. Only when EXPR is "simple" — no command
+                        // substitution `$(`, parameter expansion `${`, backtick, or
+                        // array subscript `[` — so direct evaluation is provably
+                        // equivalent to the full $((...)) expansion (which only differs
+                        // for those pre-expanded forms). Plain `=` only (not `+=`).
+                        if (!is_append and raw_value.len > 4 and
+                            std.mem.startsWith(u8, raw_value, "$((") and
+                            std.mem.endsWith(u8, raw_value, "))"))
+                        {
+                            const inner = raw_value[3 .. raw_value.len - 2];
+                            var simple = true;
+                            for (inner, 0..) |ch, ii| {
+                                if (ch == '`' or ch == '[' or ch == '{') {
+                                    simple = false;
+                                    break;
+                                }
+                                // A `$` must introduce a bare variable name ($name),
+                                // not $(, ${, or $<digit> (positional) — those need
+                                // the full expander's pre-passes.
+                                if (ch == '$') {
+                                    if (ii + 1 >= inner.len or
+                                        !(std.ascii.isAlphabetic(inner[ii + 1]) or inner[ii + 1] == '_'))
+                                    {
+                                        simple = false;
+                                        break;
+                                    }
+                                }
+                            }
+                            if (simple) {
+                                if (self.option_restricted and
+                                    (std.mem.eql(u8, potential_var, "PATH") or
+                                        std.mem.eql(u8, potential_var, "SHELL") or
+                                        std.mem.eql(u8, potential_var, "ENV") or
+                                        std.mem.eql(u8, potential_var, "BASH_ENV")))
+                                {
+                                    try IO.eprint("den: {s}: restricted: cannot modify in restricted mode\n", .{potential_var});
+                                    self.last_exit_code = 1;
+                                    return;
+                                }
+                                if (self.var_attributes.get(potential_var)) |attrs| {
+                                    if (attrs.readonly) {
+                                        try IO.eprint("den: {s}: readonly variable\n", .{potential_var});
+                                        self.last_exit_code = 1;
+                                        return;
+                                    }
+                                    if (attrs.immutable) {
+                                        try IO.eprint("den: {s}: immutable variable (declared with let)\n", .{potential_var});
+                                        self.last_exit_code = 1;
+                                        return;
+                                    }
+                                }
+                                const arith_mod = @import("utils/arithmetic.zig");
+                                var arith = arith_mod.Arithmetic.initWithVariables(self.allocator, &self.environment);
+                                if (self.function_manager.currentFrame()) |frame| arith.local_vars = &frame.local_vars;
+                                arith.arrays = &self.arrays;
+                                const result = arith.eval(inner) catch 0;
+                                var abuf: [32]u8 = undefined;
+                                const result_str = std.fmt.bufPrint(&abuf, "{d}", .{result}) catch "0";
+                                shell_mod.setArithVariable(self, potential_var, result_str);
+                                self.last_exit_code = 0;
+                                return;
+                            }
+                        }
+
                         // If value contains expansion characters ($, `), let the full
                         // pipeline handle it so command substitution works correctly.
                         // But not if the entire value is single-quoted — single quotes
