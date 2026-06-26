@@ -411,8 +411,14 @@ pub const Completion = struct {
         // This attempts to expand abbreviated path components
         const expanded_prefix = try self.expandMidWordPath(prefix);
         const use_prefix = if (expanded_prefix) |exp| blk: {
-            // Use expanded path if we got one
             defer self.allocator.free(exp);
+            // Reject an expansion that drops a leading "./" or "../" the user
+            // typed: expandMidWordPath treats "." as a segment, so "./sub" can
+            // come back as "subdir", which would complete to "subdir/" and lose
+            // the "./". Keep the original prefix in that case.
+            const drops_dot = (std.mem.startsWith(u8, prefix, "./") and !std.mem.startsWith(u8, exp, "./")) or
+                (std.mem.startsWith(u8, prefix, "../") and !std.mem.startsWith(u8, exp, "../"));
+            if (drops_dot) break :blk try self.allocator.dupe(u8, prefix);
             break :blk try self.allocator.dupe(u8, exp);
         } else blk: {
             // Use original prefix if expansion failed or wasn't needed
@@ -477,21 +483,19 @@ pub const Completion = struct {
                             break :blk entry.name;
                         }
                     } else {
-                        // Prefix didn't end with slash: return full path
+                        // Prefix didn't end with slash: rebuild the path by keeping
+                        // exactly the directory text the user typed before the
+                        // basename. Using dir_path (from dirname) would normalize
+                        // "./lan" to "langfile" — dropping the "./" the user typed —
+                        // and likewise collapse "../" etc. file_prefix is the
+                        // basename of use_prefix, so the slice before it is the
+                        // literal prefix ("", "./", "../", "/usr/", "sub/", …).
+                        const dir_prefix = use_prefix[0 .. use_prefix.len - file_prefix.len];
                         var path_buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
-                        const full_path = if (std.mem.eql(u8, dir_path, ".")) blk2: {
-                            break :blk2 try std.fmt.bufPrint(&path_buf, "{s}", .{entry.name});
-                        } else blk2: {
-                            break :blk2 try std.fmt.bufPrint(&path_buf, "{s}/{s}", .{ dir_path, entry.name });
-                        };
-
-                        // Add trailing slash for directories
                         if (entry.kind == .directory) {
-                            var slash_buf: [std.Io.Dir.max_path_bytes + 1]u8 = undefined;
-                            const with_slash = try std.fmt.bufPrint(&slash_buf, "{s}/", .{full_path});
-                            break :blk with_slash;
+                            break :blk try std.fmt.bufPrint(&path_buf, "{s}{s}/", .{ dir_prefix, entry.name });
                         } else {
-                            break :blk full_path;
+                            break :blk try std.fmt.bufPrint(&path_buf, "{s}{s}", .{ dir_prefix, entry.name });
                         }
                     }
                 };
