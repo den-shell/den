@@ -550,13 +550,32 @@ pub fn builtinSleep(shell: *Shell, cmd: *types.ParsedCommand) !void {
         return;
     }
 
-    const seconds = std.fmt.parseInt(u32, cmd.args[0], 10) catch {
-        try IO.eprint("den: sleep: invalid time interval '{s}'\n", .{cmd.args[0]});
-        shell.last_exit_code = 1;
-        return;
-    };
+    // Parse the interval as either an integer or a fractional number of seconds
+    // (e.g. `sleep 0.3`), matching coreutils/bash.
+    const arg = cmd.args[0];
+    var duration_ns: u64 = 0;
+    if (std.mem.indexOfScalar(u8, arg, '.') != null) {
+        const secs = std.fmt.parseFloat(f64, arg) catch {
+            try IO.eprint("den: sleep: invalid time interval '{s}'\n", .{arg});
+            shell.last_exit_code = 1;
+            return;
+        };
+        if (secs < 0) {
+            try IO.eprint("den: sleep: invalid time interval '{s}'\n", .{arg});
+            shell.last_exit_code = 1;
+            return;
+        }
+        duration_ns = @intFromFloat(secs * 1_000_000_000.0);
+    } else {
+        const secs = std.fmt.parseUnsigned(u64, arg, 10) catch {
+            try IO.eprint("den: sleep: invalid time interval '{s}'\n", .{arg});
+            shell.last_exit_code = 1;
+            return;
+        };
+        duration_ns = secs * 1_000_000_000;
+    }
 
-    std.Io.sleep(std.Options.debug_io, std.Io.Duration.fromNanoseconds(@as(u64, seconds) * 1_000_000_000), .awake) catch {};
+    std.Io.sleep(std.Options.debug_io, std.Io.Duration.fromNanoseconds(duration_ns), .awake) catch {};
     shell.last_exit_code = 0;
 }
 
