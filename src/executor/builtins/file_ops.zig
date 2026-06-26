@@ -777,6 +777,14 @@ pub fn ls(allocator: std.mem.Allocator, command: *types.ParsedCommand) !i32 {
         }
     }
 
+    // Match `ls --color=auto`: only colorize when stdout is a terminal, and
+    // fall back to one-entry-per-line output when piped/redirected (like bash).
+    const stdout_is_tty = (std.Io.File{
+        .handle = std.posix.STDOUT_FILENO,
+        .flags = .{ .nonblocking = false },
+    }).isTty(std.Options.debug_io) catch false;
+    if (!stdout_is_tty) one_per_line = true;
+
     if (directory_only) {
         try IO.print("{s}\n", .{target_path});
         return 0;
@@ -969,7 +977,7 @@ pub fn ls(allocator: std.mem.Allocator, command: *types.ParsedCommand) !i32 {
             defer allocator.free(time_str);
 
             const xattr_char = if (has_xattr) "@" else " ";
-            if (entry.kind == .directory) {
+            if (entry.kind == .directory and stdout_is_tty) {
                 try IO.print("{c}{s}{s} {d:>3} {s:<20} {s:<10} {d:>8} {s} \x1b[1;36m{s}\x1b[0m\n", .{
                     kind_char,
                     perms,
@@ -999,7 +1007,7 @@ pub fn ls(allocator: std.mem.Allocator, command: *types.ParsedCommand) !i32 {
         if (one_per_line) {
             i = 0;
             while (i < count) : (i += 1) {
-                if (entries[i].kind == .directory) {
+                if (entries[i].kind == .directory and stdout_is_tty) {
                     try IO.print("\x1b[1;36m{s}\x1b[0m\n", .{entries[i].name});
                 } else {
                     try IO.print("{s}\n", .{entries[i].name});
@@ -1031,7 +1039,7 @@ pub fn ls(allocator: std.mem.Allocator, command: *types.ParsedCommand) !i32 {
                     const entry = entries[idx];
                     const padding = col_width - entry.name.len;
 
-                    if (entry.kind == .directory) {
+                    if (entry.kind == .directory and stdout_is_tty) {
                         try IO.print("\x1b[1;36m{s}\x1b[0m", .{entry.name});
                     } else {
                         try IO.print("{s}", .{entry.name});
