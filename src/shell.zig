@@ -1818,6 +1818,11 @@ pub const Shell = struct {
                             in_double_quote = !in_double_quote;
                         } else if (c == '(' and prev_c == '$' and !in_single_quote) {
                             subst_depth_check += 1;
+                        } else if (c == '(' and subst_depth_check > 0) {
+                            // Nested paren inside an active $(...)/$((...)) span, e.g.
+                            // the inner '(' of $(( (1+2)*3 )) — keep it balanced so
+                            // spaces inside the substitution don't split the word.
+                            subst_depth_check += 1;
                         } else if (c == '{' and prev_c == '$' and !in_single_quote) {
                             brace_depth_check += 1;
                         } else if (c == ')' and subst_depth_check > 0) {
