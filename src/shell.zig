@@ -2469,7 +2469,9 @@ pub const Shell = struct {
         const defer_expansion = !is_background and chain.commands.len > 1;
         if (!defer_expansion) {
             self.expandCommandChain(&chain) catch |err| {
-                if (err == error.UnboundVariable) {
+                if (err == error.UnboundVariable or err == error.ParameterNullOrNotSet) {
+                    // ${var:?} / set -u failures: the command fails with a
+                    // non-zero status and does not run with the bad value.
                     self.last_exit_code = 1;
                     if (self.option_errexit) return error.Exit;
                     return;
