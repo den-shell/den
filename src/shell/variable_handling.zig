@@ -3,6 +3,7 @@
 
 const std = @import("std");
 const IO = @import("../utils/io.zig").IO;
+const types = @import("../types/mod.zig");
 const Shell = @import("../shell.zig").Shell;
 const HookContext = @import("../plugins/interface.zig").HookContext;
 
@@ -171,42 +172,14 @@ pub fn executeArrayElementAssignment(self: *Shell, input: []const u8) !void {
 
     const index = std.fmt.parseInt(usize, index_str, 10) catch return;
 
-    // Get or create the indexed array
-    if (self.arrays.get(name)) |old_array| {
-        // Extend if needed
-        if (index < old_array.len) {
-            // Replace existing element
-            self.allocator.free(old_array[index]);
-            old_array[index] = try self.allocator.dupe(u8, raw_value);
-        } else {
-            // Extend the array
-            var new_array = try self.allocator.alloc([]const u8, index + 1);
-            // Copy old elements
-            var i: usize = 0;
-            while (i < old_array.len) : (i += 1) {
-                new_array[i] = old_array[i];
-            }
-            // Fill gaps with empty strings
-            while (i < index) : (i += 1) {
-                new_array[i] = try self.allocator.dupe(u8, "");
-            }
-            new_array[index] = try self.allocator.dupe(u8, raw_value);
-            self.allocator.free(old_array);
-            // Re-insert into map
-            const key = self.arrays.getKey(name).?;
-            self.arrays.putAssumeCapacity(key, new_array);
-        }
-    } else {
-        // Create new array with this element
-        var new_array = try self.allocator.alloc([]const u8, index + 1);
-        var i: usize = 0;
-        while (i < index) : (i += 1) {
-            new_array[i] = try self.allocator.dupe(u8, "");
-        }
-        new_array[index] = try self.allocator.dupe(u8, raw_value);
-        const key = try self.allocator.dupe(u8, name);
-        try self.arrays.put(key, new_array);
+    // Get or create the indexed array, then set the single subscript sparsely
+    // (gaps stay unset, matching bash).
+    const gop = try self.arrays.getOrPut(name);
+    if (!gop.found_existing) {
+        gop.key_ptr.* = try self.allocator.dupe(u8, name);
+        gop.value_ptr.* = try types.IndexedArray.initEmpty(self.allocator);
     }
+    try gop.value_ptr.setIndex(self.allocator, index, raw_value);
     self.last_exit_code = 0;
 }
 
@@ -256,19 +229,18 @@ pub fn executeArrayAssignment(self: *Shell, input: []const u8) !void {
 
     const end_paren = std.mem.lastIndexOfScalar(u8, input, ')') orelse return error.InvalidSyntax;
     if (end_paren <= start_paren + 1) {
-        // Empty array: name=()
+        // Empty array: name=() — but `name+=()` is a no-op append, keep existing.
+        if (is_append and self.arrays.contains(name)) {
+            self.last_exit_code = 0;
+            return;
+        }
         const key = try self.allocator.dupe(u8, name);
-        const empty_array = try self.allocator.alloc([]const u8, 0);
+        const empty_array = try types.IndexedArray.initEmpty(self.allocator);
 
         // Free old array if exists
-        if (self.arrays.get(name)) |old_array| {
-            for (old_array) |item| {
-                self.allocator.free(item);
-            }
-            self.allocator.free(old_array);
-            const old_key = self.arrays.getKey(name).?;
-            self.allocator.free(old_key);
-            _ = self.arrays.remove(name);
+        if (self.arrays.fetchRemove(name)) |old| {
+            old.value.deinit(self.allocator);
+            self.allocator.free(old.key);
         }
 
         try self.arrays.put(key, empty_array);
@@ -329,39 +301,40 @@ pub fn executeArrayAssignment(self: *Shell, input: []const u8) !void {
     }
 
     if (is_append) {
-        // Append to existing array
-        if (self.arrays.get(name)) |old_array| {
-            const new_array = try self.allocator.alloc([]const u8, old_array.len + array.len);
-            @memcpy(new_array[0..old_array.len], old_array);
-            @memcpy(new_array[old_array.len..], array);
-            // Free old array slice (but keep element strings since they're now in new_array)
-            self.allocator.free(old_array);
-            // Free new elements slice (elements are now in new_array)
+        // Append to existing array: new elements take subscripts after the
+        // current highest one (matching bash's `arr+=(...)`).
+        if (self.arrays.getPtr(name)) |old_ptr| {
+            const old = old_ptr.*;
+            const base: usize = if (old.indices.len == 0) 0 else old.indices[old.indices.len - 1] + 1;
+            const new_vals = try self.allocator.alloc([]const u8, old.values.len + array.len);
+            errdefer self.allocator.free(new_vals);
+            const new_idx = try self.allocator.alloc(usize, old.indices.len + array.len);
+            errdefer self.allocator.free(new_idx);
+            @memcpy(new_vals[0..old.values.len], old.values);
+            @memcpy(new_idx[0..old.indices.len], old.indices);
+            @memcpy(new_vals[old.values.len..], array);
+            for (0..array.len) |k| new_idx[old.indices.len + k] = base + k;
+            // Free old/new backing slices (element strings are now in new_vals).
+            old.deinitShallow(self.allocator);
             self.allocator.free(array);
-            const gop = try self.arrays.getOrPut(name);
-            gop.value_ptr.* = new_array;
+            old_ptr.* = .{ .values = new_vals, .indices = new_idx };
         } else {
-            // No existing array - just create new one
+            // No existing array - just create new one (dense 0..N-1)
             const key = try self.allocator.dupe(u8, name);
-            try self.arrays.put(key, array);
+            try self.arrays.put(key, try types.IndexedArray.fromOwnedDense(self.allocator, array));
         }
     } else {
-        // Store array (replace)
+        // Store array (replace) — dense subscripts 0..N-1.
 
         // Free old array if exists
-        if (self.arrays.get(name)) |old_array| {
-            for (old_array) |item| {
-                self.allocator.free(item);
-            }
-            self.allocator.free(old_array);
-            const old_key = self.arrays.getKey(name).?;
-            self.allocator.free(old_key);
-            _ = self.arrays.remove(name);
+        if (self.arrays.fetchRemove(name)) |old| {
+            old.value.deinit(self.allocator);
+            self.allocator.free(old.key);
         }
 
         const key = try self.allocator.dupe(u8, name);
         errdefer self.allocator.free(key);
-        try self.arrays.put(key, array);
+        try self.arrays.put(key, try types.IndexedArray.fromOwnedDense(self.allocator, array));
     }
     self.last_exit_code = 0;
 }

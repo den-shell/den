@@ -1,5 +1,136 @@
 const std = @import("std");
 
+/// Sparse indexed array (bash semantics).
+///
+/// Values are stored contiguously in ascending-subscript order, with a parallel
+/// `indices` slice giving each value's logical subscript. A dense array (the
+/// common `arr=(a b c)` case) is just the special case where `indices[k] == k`.
+/// Storing only the elements that were actually set lets `arr[5]=x` behave like
+/// bash (length 1, key list "5") instead of materialising indices 0..5.
+///
+/// Both `values` and `indices` are always heap-allocated (possibly length 0) so
+/// that every stored array can be freed uniformly via `deinit`.
+pub const IndexedArray = struct {
+    values: [][]const u8,
+    indices: []usize,
+
+    /// Number of elements actually set.
+    pub fn len(self: IndexedArray) usize {
+        return self.values.len;
+    }
+
+    /// Storage slot holding logical subscript `idx`, or null if unset.
+    /// `indices` is kept sorted ascending, so this binary-searches.
+    pub fn slotOf(self: IndexedArray, idx: usize) ?usize {
+        var lo: usize = 0;
+        var hi: usize = self.indices.len;
+        while (lo < hi) {
+            const mid = lo + (hi - lo) / 2;
+            const v = self.indices[mid];
+            if (v == idx) return mid;
+            if (v < idx) lo = mid + 1 else hi = mid;
+        }
+        return null;
+    }
+
+    /// Value at logical subscript `idx`, or null if that subscript is unset.
+    pub fn getIndex(self: IndexedArray, idx: usize) ?[]const u8 {
+        return if (self.slotOf(idx)) |s| self.values[s] else null;
+    }
+
+    /// Free value strings plus the backing slices.
+    pub fn deinit(self: IndexedArray, allocator: std.mem.Allocator) void {
+        for (self.values) |v| allocator.free(v);
+        allocator.free(self.values);
+        allocator.free(self.indices);
+    }
+
+    /// Free only the backing slices, leaving the value strings alive (used when
+    /// ownership of the strings has moved into a newly built array).
+    pub fn deinitShallow(self: IndexedArray, allocator: std.mem.Allocator) void {
+        allocator.free(self.values);
+        allocator.free(self.indices);
+    }
+
+    /// Build an empty array with heap-allocated (length 0) backing slices.
+    pub fn initEmpty(allocator: std.mem.Allocator) !IndexedArray {
+        return .{
+            .values = try allocator.alloc([]const u8, 0),
+            .indices = try allocator.alloc(usize, 0),
+        };
+    }
+
+    /// Take ownership of `values` and assign dense subscripts 0..N-1.
+    pub fn fromOwnedDense(allocator: std.mem.Allocator, values: [][]const u8) !IndexedArray {
+        const indices = try allocator.alloc(usize, values.len);
+        errdefer allocator.free(indices);
+        for (indices, 0..) |*p, i| p.* = i;
+        return .{ .values = values, .indices = indices };
+    }
+
+    /// Set logical subscript `idx` to a copy of `value`, inserting sparsely so
+    /// that gaps stay unset (matching bash). Existing subscripts are replaced
+    /// in place.
+    pub fn setIndex(self: *IndexedArray, allocator: std.mem.Allocator, idx: usize, value: []const u8) !void {
+        if (self.slotOf(idx)) |s| {
+            const dup = try allocator.dupe(u8, value);
+            allocator.free(self.values[s]);
+            self.values[s] = dup;
+            return;
+        }
+        // Find the ascending insertion slot (first existing subscript > idx).
+        var ins: usize = self.indices.len;
+        for (self.indices, 0..) |existing, k| {
+            if (existing > idx) {
+                ins = k;
+                break;
+            }
+        }
+        const n = self.values.len;
+        const new_vals = try allocator.alloc([]const u8, n + 1);
+        errdefer allocator.free(new_vals);
+        const new_idx = try allocator.alloc(usize, n + 1);
+        errdefer allocator.free(new_idx);
+        const dup = try allocator.dupe(u8, value);
+        @memcpy(new_vals[0..ins], self.values[0..ins]);
+        @memcpy(new_idx[0..ins], self.indices[0..ins]);
+        new_vals[ins] = dup;
+        new_idx[ins] = idx;
+        @memcpy(new_vals[ins + 1 ..], self.values[ins..]);
+        @memcpy(new_idx[ins + 1 ..], self.indices[ins..]);
+        allocator.free(self.values);
+        allocator.free(self.indices);
+        self.values = new_vals;
+        self.indices = new_idx;
+    }
+
+    /// Append `value` after the current highest subscript (used by `arr+=(v)`).
+    pub fn appendValue(self: *IndexedArray, allocator: std.mem.Allocator, value: []const u8) !void {
+        const next: usize = if (self.indices.len == 0) 0 else self.indices[self.indices.len - 1] + 1;
+        try self.setIndex(allocator, next, value);
+    }
+
+    /// Remove the value at logical subscript `idx`, leaving a gap (bash's
+    /// `unset arr[i]` does not renumber). No-op if the subscript is unset.
+    pub fn removeIndex(self: *IndexedArray, allocator: std.mem.Allocator, idx: usize) !void {
+        const s = self.slotOf(idx) orelse return;
+        allocator.free(self.values[s]);
+        const n = self.values.len;
+        const new_vals = try allocator.alloc([]const u8, n - 1);
+        errdefer allocator.free(new_vals);
+        const new_idx = try allocator.alloc(usize, n - 1);
+        errdefer allocator.free(new_idx);
+        @memcpy(new_vals[0..s], self.values[0..s]);
+        @memcpy(new_idx[0..s], self.indices[0..s]);
+        @memcpy(new_vals[s..], self.values[s + 1 ..]);
+        @memcpy(new_idx[s..], self.indices[s + 1 ..]);
+        allocator.free(self.values);
+        allocator.free(self.indices);
+        self.values = new_vals;
+        self.indices = new_idx;
+    }
+};
+
 /// Variable attributes for declare/typeset
 pub const VarAttributes = packed struct {
     readonly: bool = false, // -r: readonly

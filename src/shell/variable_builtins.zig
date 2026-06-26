@@ -350,7 +350,7 @@ pub fn builtinDeclare(shell: *Shell, cmd: *types.ParsedCommand) !void {
             if (!gop.found_existing) {
                 const key = try shell.allocator.dupe(u8, var_name);
                 gop.key_ptr.* = key;
-                gop.value_ptr.* = &[_][]const u8{};
+                gop.value_ptr.* = try types.IndexedArray.initEmpty(shell.allocator);
             }
             try setVarAttributes(shell, var_name, attrs, remove_attrs);
         } else {
@@ -461,9 +461,9 @@ fn printDeclareWithValue(shell: *Shell, name: []const u8, attrs: types.VarAttrib
                 try IO.print("declare -- {s}=", .{name});
             }
             try IO.print("(", .{});
-            for (array, 0..) |elem, i| {
+            for (array.values, 0..) |elem, i| {
                 if (i > 0) try IO.print(" ", .{});
-                try IO.print("[{d}]=\"{s}\"", .{ i, elem });
+                try IO.print("[{d}]=\"{s}\"", .{ array.indices[i], elem });
             }
             try IO.print(")\n", .{});
             return;

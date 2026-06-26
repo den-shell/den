@@ -188,37 +188,32 @@ pub const BuiltinContext = struct {
 
     // ============ Array Operations ============
 
-    /// Get an array by name
+    /// Get an array's values by name (in ascending-subscript order)
     pub fn getArray(self: *const BuiltinContext, name: []const u8) ?[][]const u8 {
         const shell_ref = self.shell orelse return null;
-        return shell_ref.arrays.get(name);
+        if (shell_ref.arrays.get(name)) |array| return array.values;
+        return null;
     }
 
-    /// Set an array (takes ownership of the slice)
+    /// Set an array (takes ownership of the slice; dense subscripts 0..N-1)
     pub fn setArray(self: *BuiltinContext, name: []const u8, values: [][]const u8) !void {
         const shell_ref = self.shell orelse return error.NoShellContext;
 
         // Remove old array if exists
         if (shell_ref.arrays.fetchRemove(name)) |old| {
-            for (old.value) |elem| {
-                self.allocator.free(elem);
-            }
-            self.allocator.free(old.value);
+            old.value.deinit(self.allocator);
             self.allocator.free(old.key);
         }
 
         const key = try self.allocator.dupe(u8, name);
-        try shell_ref.arrays.put(key, values);
+        try shell_ref.arrays.put(key, try types.IndexedArray.fromOwnedDense(self.allocator, values));
     }
 
     /// Remove an array
     pub fn removeArray(self: *BuiltinContext, name: []const u8) bool {
         const shell_ref = self.shell orelse return false;
         if (shell_ref.arrays.fetchRemove(name)) |old| {
-            for (old.value) |elem| {
-                self.allocator.free(elem);
-            }
-            self.allocator.free(old.value);
+            old.value.deinit(self.allocator);
             self.allocator.free(old.key);
             return true;
         }

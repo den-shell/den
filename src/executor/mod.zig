@@ -525,10 +525,7 @@ pub const Executor = struct {
         if (self.shell) |shell| {
             // Free old PIPESTATUS array if it exists
             if (shell.arrays.fetchRemove("PIPESTATUS")) |kv| {
-                for (kv.value) |item| {
-                    shell.allocator.free(item);
-                }
-                shell.allocator.free(kv.value);
+                kv.value.deinit(shell.allocator);
                 shell.allocator.free(kv.key);
             }
             // Create new PIPESTATUS array. On any failure we must free all
@@ -547,12 +544,17 @@ pub const Executor = struct {
                 }
                 if (all_ok) {
                     if (shell.allocator.dupe(u8, "PIPESTATUS") catch null) |k| {
-                        shell.arrays.put(k, arr) catch {
-                            // put failed — free the key and array contents to
-                            // prevent a leak (previously arr+elements+k leaked).
+                        const ia = types.IndexedArray.fromOwnedDense(shell.allocator, arr) catch {
                             shell.allocator.free(k);
                             for (arr) |item| shell.allocator.free(item);
                             shell.allocator.free(arr);
+                            return last_status;
+                        };
+                        shell.arrays.put(k, ia) catch {
+                            // put failed — free the key and array contents to
+                            // prevent a leak (previously arr+elements+k leaked).
+                            shell.allocator.free(k);
+                            ia.deinit(shell.allocator);
                         };
                     } else {
                         // Key allocation failed — free the array contents.

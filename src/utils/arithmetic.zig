@@ -1,5 +1,6 @@
 const std = @import("std");
 const IO = @import("io.zig").IO;
+const types = @import("../types/mod.zig");
 
 /// LRU Cache for arithmetic expression results
 pub const ExpressionCache = struct {
@@ -110,7 +111,7 @@ pub const Arithmetic = struct {
     variables: ?*std.StringHashMap([]const u8) = null,
     local_vars: ?*std.StringHashMap([]const u8) = null,
     cache: ?*ExpressionCache = null,
-    arrays: ?*std.StringHashMap([][]const u8) = null,
+    arrays: ?*std.StringHashMap(types.IndexedArray) = null,
     positional_params: []const []const u8 = &.{},
 
     pub fn init(allocator: std.mem.Allocator) Arithmetic {
@@ -249,7 +250,7 @@ const Parser = struct {
     allocator: std.mem.Allocator,
     variables: ?*std.StringHashMap([]const u8),
     local_vars: ?*std.StringHashMap([]const u8) = null,
-    arrays: ?*std.StringHashMap([][]const u8) = null,
+    arrays: ?*std.StringHashMap(types.IndexedArray) = null,
     positional_params: []const []const u8 = &.{},
 
     // Entry point - lowest precedence (assignment and compound assignment)
@@ -908,8 +909,8 @@ const Parser = struct {
             const index = if (index_val >= 0) @as(usize, @intCast(index_val)) else 0;
             if (self.arrays) |arrays| {
                 if (arrays.get(var_name)) |array| {
-                    if (index < array.len) {
-                        const trimmed = std.mem.trim(u8, array[index], &std.ascii.whitespace);
+                    if (array.getIndex(index)) |elem| {
+                        const trimmed = std.mem.trim(u8, elem, &std.ascii.whitespace);
                         if (trimmed.len == 0) return 0;
                         return std.fmt.parseInt(i64, trimmed, 10) catch 0;
                     }

@@ -180,7 +180,7 @@ const types = @import("../types/mod.zig");
 pub const Expansion = struct {
     allocator: std.mem.Allocator,
     environment: *std.StringHashMap([]const u8),
-    arrays: ?*std.StringHashMap([][]const u8), // Indexed array variables
+    arrays: ?*std.StringHashMap(types.IndexedArray), // Indexed array variables
     assoc_arrays: ?*std.StringHashMap(std.StringHashMap([]const u8)), // Associative array variables
     local_vars: ?*std.StringHashMap([]const u8), // Function local variables (checked first)
     var_attributes: ?*std.StringHashMap(types.VarAttributes), // Variable attributes for namerefs
@@ -691,27 +691,27 @@ pub const Expansion = struct {
                 (std.mem.eql(u8, index_part, "@") or std.mem.eql(u8, index_part, "*")))
             {
                 const actual_name = var_name[1..];
-                // Try indexed arrays
+                // Try indexed arrays — emit the actual (sparse) subscripts.
                 if (self.arrays) |arrays| {
                     if (arrays.get(actual_name)) |array| {
-                        if (array.len == 0) {
+                        if (array.indices.len == 0) {
                             return ExpansionResult{ .value = "", .consumed = end + 1, .owned = false };
                         }
                         var total_len: usize = 0;
-                        for (0..array.len) |i| {
+                        for (array.indices) |idx| {
                             var nbuf: [20]u8 = undefined;
-                            const ns = std.fmt.bufPrint(&nbuf, "{d}", .{i}) catch continue;
+                            const ns = std.fmt.bufPrint(&nbuf, "{d}", .{idx}) catch continue;
                             total_len += ns.len;
                         }
-                        total_len += array.len - 1; // spaces
+                        total_len += array.indices.len - 1; // spaces
                         var result = try self.allocator.alloc(u8, total_len);
                         var pos: usize = 0;
-                        for (0..array.len) |i| {
+                        for (array.indices, 0..) |idx, i| {
                             var nbuf: [20]u8 = undefined;
-                            const ns = std.fmt.bufPrint(&nbuf, "{d}", .{i}) catch continue;
+                            const ns = std.fmt.bufPrint(&nbuf, "{d}", .{idx}) catch continue;
                             @memcpy(result[pos..][0..ns.len], ns);
                             pos += ns.len;
-                            if (i < array.len - 1) {
+                            if (i < array.indices.len - 1) {
                                 result[pos] = ' ';
                                 pos += 1;
                             }
@@ -784,7 +784,7 @@ pub const Expansion = struct {
                                 for (pieces.items) |p| self.allocator.free(p);
                                 pieces.deinit(self.allocator);
                             }
-                            for (array) |item| {
+                            for (array.values) |item| {
                                 var piece: []u8 = undefined;
                                 if (anchor_prefix) {
                                     if (pattern.len > 0 and std.mem.startsWith(u8, item, pattern)) {
@@ -831,12 +831,13 @@ pub const Expansion = struct {
                             }
                         }
 
-                        // Apply slicing (negative offset counts from end)
-                        const arr_len: i64 = @intCast(array.len);
+                        // Apply slicing (negative offset counts from end). Slicing
+                        // operates by position over the set elements.
+                        const arr_len: i64 = @intCast(array.values.len);
                         const effective_offset = if (slice_offset < 0) @max(arr_len + slice_offset, 0) else slice_offset;
                         const start: usize = @intCast(@min(effective_offset, arr_len));
-                        const end_idx = if (slice_len) |sl| @min(start + sl, array.len) else array.len;
-                        const sliced = array[start..end_idx];
+                        const end_idx = if (slice_len) |sl| @min(start + sl, array.values.len) else array.values.len;
+                        const sliced = array.values[start..end_idx];
 
                         if (sliced.len == 0) {
                             return ExpansionResult{ .value = "", .consumed = end + 1, .owned = false };
@@ -888,13 +889,18 @@ pub const Expansion = struct {
                             };
                             break :blk arith_result;
                         };
-                        // Handle negative indices: -1 = last element, -2 = second to last, etc.
-                        const arr_len: i64 = @intCast(array.len);
-                        const effective_index = if (signed_index < 0) signed_index + arr_len else signed_index;
-                        if (effective_index >= 0 and effective_index < arr_len) {
-                            const index: usize = @intCast(effective_index);
-                            const value = try self.allocator.dupe(u8, array[index]);
-                            return ExpansionResult{ .value = value, .consumed = end + 1, .owned = true };
+                        // Negative subscripts are relative to one past the highest
+                        // set subscript (bash): -1 = highest set subscript, etc.
+                        const lookup: i64 = if (signed_index < 0) blk: {
+                            if (array.indices.len == 0) break :blk -1;
+                            const max_idx: i64 = @intCast(array.indices[array.indices.len - 1]);
+                            break :blk max_idx + 1 + signed_index;
+                        } else signed_index;
+                        if (lookup >= 0) {
+                            if (array.getIndex(@intCast(lookup))) |elem| {
+                                const value = try self.allocator.dupe(u8, elem);
+                                return ExpansionResult{ .value = value, .consumed = end + 1, .owned = true };
+                            }
                         }
                         return ExpansionResult{ .value = "", .consumed = end + 1, .owned = false };
                     }
@@ -979,8 +985,8 @@ pub const Expansion = struct {
                         if (self.arrays) |arrays| {
                             if (arrays.get(var_name)) |array| {
                                 const idx = std.fmt.parseInt(usize, idx_str, 10) catch 0;
-                                if (idx < array.len) {
-                                    const len_str = try std.fmt.allocPrint(self.allocator, "{d}", .{array[idx].len});
+                                if (array.getIndex(idx)) |elem| {
+                                    const len_str = try std.fmt.allocPrint(self.allocator, "{d}", .{elem.len});
                                     return ExpansionResult{ .value = len_str, .consumed = end + 1, .owned = true };
                                 }
                                 const zero = try self.allocator.dupe(u8, "0");
@@ -990,10 +996,10 @@ pub const Expansion = struct {
                     }
                 }
             }
-            // First check indexed arrays (array length)
+            // First check indexed arrays (count of set elements)
             if (self.arrays) |arrays| {
                 if (arrays.get(var_name)) |array| {
-                    const value = try std.fmt.allocPrint(self.allocator, "{d}", .{array.len});
+                    const value = try std.fmt.allocPrint(self.allocator, "{d}", .{array.values.len});
                     return ExpansionResult{ .value = value, .consumed = end + 1, .owned = true };
                 }
             }
@@ -1025,31 +1031,30 @@ pub const Expansion = struct {
                 if (inner.len > 2 and inner[inner.len - 1] == '[') {
                     const var_name = inner[0 .. inner.len - 1];
 
-                    // Try indexed arrays first
+                    // Try indexed arrays first — emit the actual (sparse) subscripts.
                     if (self.arrays) |arrays| {
                         if (arrays.get(var_name)) |array| {
-                            // Return indices 0, 1, 2, ...
-                            if (array.len == 0) {
+                            if (array.indices.len == 0) {
                                 return ExpansionResult{ .value = "", .consumed = end + 1, .owned = false };
                             }
 
                             // Calculate space needed
                             var total_len: usize = 0;
-                            for (0..array.len) |i| {
+                            for (array.indices) |idx| {
                                 var buf: [20]u8 = undefined;
-                                const num_str = std.fmt.bufPrint(&buf, "{d}", .{i}) catch continue;
+                                const num_str = std.fmt.bufPrint(&buf, "{d}", .{idx}) catch continue;
                                 total_len += num_str.len;
                             }
-                            total_len += array.len - 1; // spaces
+                            total_len += array.indices.len - 1; // spaces
 
                             var result = try self.allocator.alloc(u8, total_len);
                             var pos: usize = 0;
-                            for (0..array.len) |i| {
+                            for (array.indices, 0..) |idx, i| {
                                 var buf: [20]u8 = undefined;
-                                const num_str = std.fmt.bufPrint(&buf, "{d}", .{i}) catch continue;
+                                const num_str = std.fmt.bufPrint(&buf, "{d}", .{idx}) catch continue;
                                 @memcpy(result[pos..][0..num_str.len], num_str);
                                 pos += num_str.len;
-                                if (i < array.len - 1) {
+                                if (i < array.indices.len - 1) {
                                     result[pos] = ' ';
                                     pos += 1;
                                 }

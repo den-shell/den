@@ -245,15 +245,12 @@ pub fn builtinRead(self: *Shell, cmd: *types.ParsedCommand) !void {
                 arr[i] = try self.allocator.dupe(u8, words_list.items[i]);
             }
             // Free old array if exists
-            if (self.arrays.get(arr_name)) |old_arr| {
-                for (old_arr) |item| self.allocator.free(item);
-                self.allocator.free(old_arr);
-                const old_key = self.arrays.getKey(arr_name).?;
-                self.allocator.free(old_key);
-                _ = self.arrays.remove(arr_name);
+            if (self.arrays.fetchRemove(arr_name)) |old| {
+                old.value.deinit(self.allocator);
+                self.allocator.free(old.key);
             }
             const key = try self.allocator.dupe(u8, arr_name);
-            try self.arrays.put(key, arr);
+            try self.arrays.put(key, try types.IndexedArray.fromOwnedDense(self.allocator, arr));
             return;
         }
 

@@ -456,23 +456,10 @@ pub fn unset(ctx: *BuiltinContext, command: *types.ParsedCommand) !i32 {
                     const index_str = var_name[bracket_pos + 1 .. close_pos];
                     if (ctx.hasShell()) {
                         const shell_ref = try ctx.getShell();
-                        // Handle indexed array element unset
-                        if (shell_ref.arrays.get(arr_name)) |array| {
+                        // Handle indexed array element unset (leaves a gap, like bash)
+                        if (shell_ref.arrays.getPtr(arr_name)) |array_ptr| {
                             if (std.fmt.parseInt(usize, index_str, 10)) |index| {
-                                if (index < array.len) {
-                                    // Remove element by creating new array without it
-                                    shell_ref.allocator.free(array[index]);
-                                    var new_array = shell_ref.allocator.alloc([]const u8, array.len - 1) catch continue;
-                                    var di: usize = 0;
-                                    for (0..array.len) |si| {
-                                        if (si == index) continue;
-                                        new_array[di] = array[si];
-                                        di += 1;
-                                    }
-                                    shell_ref.allocator.free(array);
-                                    const key = shell_ref.arrays.getKey(arr_name).?;
-                                    shell_ref.arrays.putAssumeCapacity(key, new_array);
-                                }
+                                array_ptr.removeIndex(shell_ref.allocator, index) catch {};
                             } else |_| {}
                         }
                         // Handle assoc array element unset
@@ -492,8 +479,7 @@ pub fn unset(ctx: *BuiltinContext, command: *types.ParsedCommand) !i32 {
                 const shell_ref = try ctx.getShell();
                 // Remove indexed array
                 if (shell_ref.arrays.fetchRemove(var_name)) |kv| {
-                    for (kv.value) |item| shell_ref.allocator.free(item);
-                    shell_ref.allocator.free(kv.value);
+                    kv.value.deinit(shell_ref.allocator);
                     shell_ref.allocator.free(kv.key);
                 }
                 // Remove associative array

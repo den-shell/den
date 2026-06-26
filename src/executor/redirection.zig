@@ -35,7 +35,7 @@ pub const ExpansionContext = struct {
     option_nounset: bool,
     option_noclobber: bool = false,
     var_attributes: *std.StringHashMap(types.VarAttributes),
-    arrays: *std.StringHashMap([][]const u8),
+    arrays: *std.StringHashMap(types.IndexedArray),
     assoc_arrays: *std.StringHashMap(std.StringHashMap([]const u8)),
 };
 

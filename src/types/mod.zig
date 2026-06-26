@@ -25,6 +25,7 @@ pub const CommandChain = command.CommandChain;
 
 pub const Variable = variable.Variable;
 pub const VarAttributes = variable.VarAttributes;
+pub const IndexedArray = variable.IndexedArray;
 
 pub const Value = value.Value;
 

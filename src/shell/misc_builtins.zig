@@ -443,15 +443,12 @@ pub fn builtinMapfile(self: *Shell, cmd: *types.ParsedCommand) !void {
     const gop = try self.arrays.getOrPut(array_name);
     if (gop.found_existing) {
         // Free old array
-        for (gop.value_ptr.*) |item| {
-            self.allocator.free(item);
-        }
-        self.allocator.free(gop.value_ptr.*);
+        gop.value_ptr.deinit(self.allocator);
     } else {
         const key = try self.allocator.dupe(u8, array_name);
         gop.key_ptr.* = key;
     }
-    gop.value_ptr.* = array_slice;
+    gop.value_ptr.* = try types.IndexedArray.fromOwnedDense(self.allocator, array_slice);
 
     self.last_exit_code = 0;
 }

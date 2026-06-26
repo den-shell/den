@@ -312,8 +312,8 @@ pub const Shell = struct {
     command_cache: std.StringHashMap([]const u8),
     // Named directories (zsh-style hash -d)
     named_dirs: std.StringHashMap([]const u8),
-    // Array variables (zsh-style arrays)
-    arrays: std.StringHashMap([][]const u8),
+    // Array variables (zsh-style arrays); sparse indexed arrays
+    arrays: std.StringHashMap(types.IndexedArray),
     // Custom completion specifications (like bash's complete)
     completion_registry: CompletionRegistry,
     // Plugin system
@@ -559,7 +559,7 @@ pub const Shell = struct {
             .signal_handlers = std.StringHashMap([]const u8).init(allocator),
             .command_cache = std.StringHashMap([]const u8).init(allocator),
             .named_dirs = std.StringHashMap([]const u8).init(allocator),
-            .arrays = std.StringHashMap([][]const u8).init(allocator),
+            .arrays = std.StringHashMap(types.IndexedArray).init(allocator),
             .completion_registry = CompletionRegistry.init(allocator),
             .plugin_registry = PluginRegistry.init(allocator),
             .plugin_manager = PluginManager.init(allocator),
@@ -741,10 +741,7 @@ pub const Shell = struct {
         var arrays_iter = self.arrays.iterator();
         while (arrays_iter.next()) |entry| {
             self.allocator.free(entry.key_ptr.*);
-            for (entry.value_ptr.*) |item| {
-                self.allocator.free(item);
-            }
-            self.allocator.free(entry.value_ptr.*);
+            entry.value_ptr.deinit(self.allocator);
         }
         self.arrays.deinit();
 
