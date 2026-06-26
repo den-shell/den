@@ -2781,9 +2781,12 @@ pub const LineEditor = struct {
             try self.clearCompletionDisplay();
         }
 
-        // Width changed, so the previously tracked wrap layout is invalid —
-        // repaint from the current row. redrawLine positions the cursor itself.
-        self.rendered_cursor_row = 0;
+        // Repaint at the new width. Keep rendered_cursor_row as-is: redrawLine
+        // moves up by it to reach the first row of the current block before
+        // clearing. Zeroing it here made redrawLine clear from the *current* row
+        // (the prompt's last line) downward, leaving the prompt's first line(s)
+        // behind — e.g. an initial SIGWINCH duplicated a two-line prompt's first
+        // row, showing "~\n~\n❯" on a fresh terminal.
         try self.redrawLine();
 
         if (self.completion_list != null) {
