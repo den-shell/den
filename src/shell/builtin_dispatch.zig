@@ -19,46 +19,45 @@ pub const DispatchResult = enum {
 pub fn isShellBuiltin(name: []const u8) bool {
     const shell_builtins = [_][]const u8{
         // Job control
-        "jobs",      "fg",       "bg",      "wait",     "disown",
+        "jobs",      "fg",       "bg",       "wait",     "disown",
         // History and completion
         "history",   "complete", "compgen",
         // Alias management
-        "alias",    "unalias",
+         "alias",    "unalias",
         // Command type inspection
         "type",      "which",
         // Source/eval/command
-           "source",  ".",        "eval",
+           "source",   ".",        "eval",
         "command",   "builtin",
         // I/O builtins
-         "read",    "printf",   "mapfile",
+         "read",     "printf",   "mapfile",
         "readarray",
         // Test/conditionals
-        "test",     "[",       "[[",
+        "test",     "[",        "[[",
         // Directory stack
               "pushd",
         "popd",      "dirs",
         // Trivial builtins
-            "true",    "false",    ":",
+            "true",     "false",    ":",
         // Utility builtins
         "sleep",     "help",     "clear",
         // Path utilities
-          "basename", "dirname",
+           "basename", "dirname",
         "realpath",
         // System info
          "uname",    "whoami",
         // Control flow
-         "return",   "break",
+          "return",   "break",
         "continue",  "shift",
         // Variable declaration
-           "local",   "declare",  "readonly",
+           "local",    "declare",  "readonly",
         "typeset",   "let",
         // Process control
-             "exec",    "kill",
+             "exec",     "kill",
         // Misc
             "times",
-        "time",      "umask",    "hash",    "shopt",    "caller",
-        "enable",    "setopt",   "unsetopt",
-        "ai",        "wasm",
+        "time",      "umask",    "hash",     "shopt",    "caller",
+        "enable",    "setopt",   "unsetopt", "ai",       "wasm",
     };
     for (shell_builtins) |b| {
         if (std.mem.eql(u8, name, b)) return true;

@@ -146,13 +146,13 @@ pub fn suggest(
     defer allocator.free(anthropic_key);
 
     const argv = [_][]const u8{
-        "curl",            "-sS",
-        "-m",              max_time,
-        "-X",              "POST",
-        cfg.endpoint,      "-H",
+        "curl",                           "-sS",
+        "-m",                             max_time,
+        "-X",                             "POST",
+        cfg.endpoint,                     "-H",
         "Content-Type: application/json", "-H",
-        auth,              "-H",
-        anthropic_key,     "-H",
+        auth,                             "-H",
+        anthropic_key,                    "-H",
         "anthropic-version: 2023-06-01",  "--data",
         data_arg,
     };

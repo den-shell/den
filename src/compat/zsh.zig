@@ -225,8 +225,8 @@ fn appendColor(allocator: std.mem.Allocator, out: *std.ArrayList(u8), name: []co
 
 fn namedColorCode(name: []const u8) ?u8 {
     const map = .{
-        .{ "black", 0 },   .{ "red", 1 },     .{ "green", 2 },  .{ "yellow", 3 },
-        .{ "blue", 4 },    .{ "magenta", 5 }, .{ "cyan", 6 },   .{ "white", 7 },
+        .{ "black", 0 },   .{ "red", 1 },     .{ "green", 2 }, .{ "yellow", 3 },
+        .{ "blue", 4 },    .{ "magenta", 5 }, .{ "cyan", 6 },  .{ "white", 7 },
         .{ "default", 9 },
     };
     inline for (map) |entry| {
