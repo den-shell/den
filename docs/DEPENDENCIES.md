@@ -66,7 +66,7 @@ These modules are:
 
 ### Cons
 
-1. **Larger binary size**: All code is compiled in (~1.8MB)
+1. **Larger binary size**: all code is compiled in (~1.3MB stripped)
 2. **Build from source**: Users without pre-built binaries need Zig
 3. **No hot-patching**: Updates require new binary
 
@@ -103,7 +103,7 @@ Den aims to stay under 3MB for release builds:
 | Config | ~100KB |
 | Line Editor | ~200KB |
 | Standard Library | ~400KB |
-| **Total**|**~1.8MB** |
+| **Total (stripped ReleaseSmall)**|**~1.3MB** |
 
 To check current size:
 

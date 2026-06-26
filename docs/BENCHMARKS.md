@@ -18,7 +18,7 @@ All numbers on this page are **measured and reproducible** — there are no aspi
 |---|---|
 | **Machine** | Apple M3 Pro, arm64 |
 | **OS** | macOS 27 (Darwin 27.0.0) |
-| **Den** | v0.1.0, `zig build -Doptimize=ReleaseFast` |
+| **Den** | v0.1.0, `zig build -Doptimize=ReleaseSmall` |
 | **Bash** | 3.2.57 (`/bin/bash`) |
 | **Zsh** | 5.9 (`/bin/zsh`) |
 
@@ -26,19 +26,24 @@ All numbers on this page are **measured and reproducible** — there are no aspi
 
 ## Shell comparison
 
+Den is the default `ReleaseSmall` build (stripped).
+
 | Metric | Den | Bash 3.2 | Zsh 5.9 |
 |---|---|---|---|
-| **Startup** (`-c true`) | 4.5 ms | 1.9 ms | 3.6 ms |
+| **Startup** (`-c true`) | 3.9 ms | 1.3 ms | 2.1 ms |
 | **Command exec** (per external cmd) | ~1.99 ms | ~1.76 ms | ~1.96 ms |
 | **Idle memory** (clean config) | 4.6 MB | 2.4 MB | 2.3 MB |
-| **Binary size** | 2.85 MB | 1.29 MB | 1.36 MB |
+| **Binary size** | 1.33 MB | 1.29 MB | 1.36 MB |
 | **Dynamic libraries** | **1** (libSystem) | 2 | 4 |
+
+(Absolute timings shift with machine load; the relative ordering is stable. The reference run above was taken under light load.)
 
 ### Honest interpretation
 
-- **Startup** is a few milliseconds for all three — instant to a human. Den is currently the slowest of the three at bare startup; bash is the fastest.
+- **Binary size** is now on par with bash/zsh (1.33 MB) — down from 2.85 MB before the switch to a stripped `ReleaseSmall` build.
+- **Startup** is a few milliseconds for all three — instant to a human. Den is still a touch slower than bash/zsh at bare startup; the gap is largely fixed process/link overhead, not work Den is wasting (config, history, and plugin init are not bottlenecks).
 - **Command execution** is dominated by the OS `fork`/`exec` syscalls, so the shells are within noise of each other; Den is marginally slower than bash.
-- **Memory and binary size** are currently *higher* for Den than for bash/zsh. Den trades footprint for a richer built-in feature set (completion, autosuggestions, syntax highlighting, git prompt) that in bash/zsh would require external plugins.
+- **Idle memory** is currently higher for Den than for bash/zsh — the cost of a richer built-in feature set (completion, autosuggestions, syntax highlighting, git prompt) that in bash/zsh would require external plugins.
 - **Dependencies** are where Den wins cleanly: it links only `libSystem` (libc), while bash also links `libncurses` and zsh links `libpcre`, `libiconv`, and `libncurses`.
 
 Reducing startup time and idle footprint is tracked on the [roadmap](../../ROADMAP.md). If you reproduce materially different numbers, please open an issue with your environment.
@@ -48,7 +53,7 @@ Reducing startup time and idle footprint is tracked on the [roadmap](../../ROADM
 ```sh
 # Prerequisites
 brew install hyperfine          # accurate timing (optional but recommended)
-zig build -Doptimize=ReleaseFast
+zig build -Doptimize=ReleaseSmall
 
 # Full shell comparison (startup, exec, memory, size, deps)
 scripts/bench.sh comparison

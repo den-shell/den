@@ -10,10 +10,10 @@ knobs; for the engineering behind the numbers see [Benchmarks](../BENCHMARKS.md)
 A debug build is large and slow; always run an optimized build as your shell:
 
 ```bash
-zig build -Doptimize=ReleaseFast
+zig build -Doptimize=ReleaseSmall
 ```
 
-This produces a ~1.8MB binary. (A default `zig build` is a multi-megabyte debug binary intended for development only.)
+This produces a stripped ~1.3MB binary. (`-Doptimize=ReleaseFast` is larger but tuned for max speed; a default `zig build` is a multi-megabyte debug binary for development only.)
 
 ## Keep startup lean
 

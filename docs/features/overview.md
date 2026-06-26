@@ -248,12 +248,14 @@ Den includes 58 built-in commands organized by category:
 
 ## Performance Characteristics
 
-| Feature | Performance |
+Measured on an Apple M3 Pro (see [Benchmarks](../BENCHMARKS.md) for methodology; reproduce with `scripts/bench.sh comparison`):
+
+| Metric | Den |
 |---------|-------------|
-| Startup | ~5ms |
-| Command execution | ~0.8ms |
-| Memory usage | ~2MB |
-| Binary size | ~1.8MB |
+| Startup (`-c true`) | ~3.9 ms |
+| Command exec (per external cmd) | ~2 ms |
+| Idle memory (clean config) | ~4.6 MB |
+| Binary size (ReleaseSmall, stripped) | ~1.33 MB |
 
 ## Feature Comparison
 

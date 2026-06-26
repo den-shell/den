@@ -62,7 +62,7 @@ Packaging definitions live in [`packaging/`](https://github.com/stacksjs/den/tre
 ```sh
 git clone https://github.com/stacksjs/den
 cd den
-zig build -Doptimize=ReleaseFast
+zig build -Doptimize=ReleaseSmall
 zig build install --prefix ~/.local   # installs to ~/.local/bin/den
 ```
 

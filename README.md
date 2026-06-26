@@ -5,7 +5,7 @@
 Den combines the familiarity of traditional shells with a modern, batteries-included interactive experience. It was originally prototyped in TypeScript/Bun and rewritten in Zig for native code and a self-contained binary.
 
 - ⚡ **Instant startup** — ~4–5 ms cold start; native code, no runtime or VM
-- 📦 **Self-contained** — one binary that links only libc (fewer dynamic deps than bash or zsh)
+- 📦 **Self-contained** — a ~1.3 MB binary (on par with bash/zsh) that links only libc — fewer dynamic deps than either
 - 🛡️ **Memory safe** — Zig's compile-time safety prevents whole classes of bugs
 - 🎯 **Feature rich** — 58 builtins, job control, history, completion, expansion, and a full line editor — no plugin manager required
 - 🧩 **Extensible** — WASM plugins, AI-assisted completions, distributed sessions, an LSP server
@@ -27,17 +27,17 @@ Den's draw is what's **built in** — completion, autosuggestions, syntax highli
 
 ### Performance
 
-Measured on an Apple M3 Pro (macOS, arm64) with [`hyperfine`](https://github.com/sharkdp/hyperfine), against the system `bash` 3.2 and `zsh` 5.9. These are real numbers from one machine — reproduce them with `scripts/bench.sh comparison`.
+Measured on an Apple M3 Pro (macOS, arm64) with [`hyperfine`](https://github.com/sharkdp/hyperfine), against the system `bash` 3.2 and `zsh` 5.9. Den is the default `ReleaseSmall` build. These are real numbers from one machine — reproduce them with `scripts/bench.sh comparison`.
 
 | Metric | Den | Bash 3.2 | Zsh 5.9 |
 |---|---|---|---|
-| Startup, `-c true` | 4.5 ms | 1.9 ms | 3.6 ms |
+| Startup, `-c true` | 3.9 ms | 1.3 ms | 2.1 ms |
 | Command exec (per external cmd) | ~2.0 ms | ~1.8 ms | ~2.0 ms |
 | Idle memory (clean config) | 4.6 MB | 2.4 MB | 2.3 MB |
-| Binary size | 2.85 MB | 1.29 MB | 1.36 MB |
+| Binary size | **1.33 MB** | 1.29 MB | 1.36 MB |
 | Dynamic libraries | **1** (libc) | 2 | 4 |
 
-Honest read: Den starts in a few milliseconds (instant in practice) and links the fewest libraries, but it is **not** smaller, lighter, or faster than bash/zsh on these micro-benchmarks today — it trades a little overhead for a much richer built-in experience and memory safety. Improving startup and footprint is on the [roadmap](ROADMAP.md).
+Honest read: Den's binary is now on par with bash/zsh (1.33 MB) and links the fewest libraries. It starts in a few milliseconds (instant in practice) though still a touch behind bash/zsh, and uses somewhat more idle memory — the cost of a much richer built-in experience and memory safety. Further startup/footprint work is on the [roadmap](ROADMAP.md).
 
 The engineering behind Den's hot paths is documented in depth:
 
@@ -53,7 +53,7 @@ The engineering behind Den's hot paths is documented in depth:
 
 ```bash
 # Build Den (see Installation for prebuilt binaries / package managers)
-zig build -Doptimize=ReleaseFast
+zig build -Doptimize=ReleaseSmall
 
 # Start an interactive shell
 ./zig-out/bin/den
@@ -92,7 +92,7 @@ brew install stacksjs/tap/den
 curl -fsSL https://raw.githubusercontent.com/stacksjs/den/main/scripts/install.sh | bash
 
 # From source
-zig build -Doptimize=ReleaseFast && zig build install --prefix ~/.local
+zig build -Doptimize=ReleaseSmall && zig build install --prefix ~/.local
 ```
 
 Distribution packages are provided for Debian/Ubuntu (`.deb`), Fedora/RHEL (`.rpm`), Arch (`PKGBUILD`), and Nix ([`packaging/`](packaging/)). To make Den your login shell, add it to `/etc/shells` and run `chsh`. Full details — prebuilt binaries, package managers, and login-shell setup — are in the [Installation guide](docs/install.md).
@@ -110,45 +110,45 @@ Everything you can configure — prompt format, history behaviour, completion, c
 
 ### Core Shell
 
-| Feature | Description | Docs |
-|---|---|---|
-| Pipelines | Multi-stage `cmd1 \| cmd2 \| cmd3` | [Features](docs/FEATURES.md) |
-| I/O redirection | `>`, `>>`, `<`, `2>`, `2>&1`, here-docs, here-strings | [Features](docs/FEATURES.md) |
-| Boolean operators | Short-circuit `&&` and `\|\|` | [Features](docs/FEATURES.md) |
-| Command chaining | Sequential `;` lists | [Features](docs/FEATURES.md) |
-| Background jobs | `&`, `jobs`, `fg`, `bg`, `wait`, `disown` | [Features](docs/FEATURES.md) |
-| Subshells & grouping | `( … )` and `{ …; }` | [Scripting](docs/SCRIPTING.md) |
+| Feature | Description |
+|---|---|
+| [Pipelines](docs/features/pipelines.md) | Multi-stage `cmd1 \| cmd2 \| cmd3` |
+| [I/O redirection](docs/features/redirections.md) | `>`, `>>`, `<`, `2>`, `2>&1`, here-docs, here-strings |
+| [Boolean operators](docs/FEATURES.md) | Short-circuit `&&` and `\|\|` |
+| [Command chaining](docs/FEATURES.md) | Sequential `;` lists |
+| [Background jobs](docs/features/job-control.md) | `&`, `jobs`, `fg`, `bg`, `wait`, `disown` |
+| [Subshells & grouping](docs/SCRIPTING.md) | `( … )` and `{ …; }` |
 
 ### Expansion
 
-| Feature | Description | Docs |
-|---|---|---|
-| Variable expansion | `$VAR`, `${VAR}`, `${VAR:-default}`, `${#VAR}`, `${VAR#prefix}`, special vars (`$?`, `$$`, `$!`, `$_`, `$0`–`$9`, `$@`, `$*`, `$#`) | [Features](docs/FEATURES.md) |
-| Command substitution | `$(command)` (and backticks) | [Features](docs/FEATURES.md) |
-| Arithmetic | `$(( expr ))` with `+ - * / % **` | [Features](docs/FEATURES.md) |
-| Brace expansion | `{1..10}`, `{a..z}`, `{foo,bar,baz}` | [Features](docs/FEATURES.md) |
-| Tilde expansion | `~`, `~/path`, `~user` | [Features](docs/FEATURES.md) |
-| Glob expansion | `*.zig`, `**/*.txt`, plus zsh glob qualifiers | [Features](docs/FEATURES.md) |
+| Feature | Description |
+|---|---|
+| [Variable expansion](docs/features/expansions.md) | `$VAR`, `${VAR}`, `${VAR:-default}`, `${#VAR}`, `${VAR#prefix}`, special vars (`$?`, `$$`, `$!`, `$_`, `$0`–`$9`, `$@`, `$*`, `$#`) |
+| [Command substitution](docs/features/expansions.md) | `$(command)` (and backticks) |
+| [Arithmetic](docs/features/expansions.md) | `$(( expr ))` with `+ - * / % **` |
+| [Brace expansion](docs/features/expansions.md) | `{1..10}`, `{a..z}`, `{foo,bar,baz}` |
+| [Tilde expansion](docs/features/expansions.md) | `~`, `~/path`, `~user` |
+| [Glob expansion](docs/features/expansions.md) | `*.zig`, `**/*.txt`, plus zsh glob qualifiers |
 
 ### Interactive Experience
 
-| Feature | Description | Docs |
-|---|---|---|
-| Line editor | Emacs & Vi keymaps, word motions, kill-ring, multi-line editing | [Line Editing](docs/LINE_EDITING.md) |
-| Inline autosuggestions | fish-style suggestions from history as you type | [Autocompletion](docs/AUTOCOMPLETION.md) |
-| Syntax highlighting | Live command highlighting in the prompt | [Line Editing](docs/LINE_EDITING.md) |
-| Persistent history | Shared, de-duplicated, configurable history file | [Features](docs/FEATURES.md) |
-| History substring search | Up/Down filters history by what you've typed | [History Substring Search](docs/HISTORY_SUBSTRING_SEARCH.md) |
-| Prompt & themes | Two-line prompt, git status, runtime modules, colours/symbols | [Themes](docs/THEMES.md) |
+| Feature | Description |
+|---|---|
+| [Line editor](docs/LINE_EDITING.md) | Emacs & Vi keymaps, word motions, kill-ring, multi-line editing |
+| [Inline autosuggestions](docs/AUTOCOMPLETION.md) | fish-style suggestions from history as you type |
+| [Syntax highlighting](docs/LINE_EDITING.md) | Live command highlighting in the prompt |
+| [Persistent history](docs/FEATURES.md) | Shared, de-duplicated, configurable history file |
+| [History substring search](docs/HISTORY_SUBSTRING_SEARCH.md) | Up/Down filters history by what you've typed |
+| [Prompt & themes](docs/THEMES.md) | Two-line prompt, git status, runtime modules, colours/symbols |
 
 ### Completion
 
-| Feature | Description | Docs |
-|---|---|---|
-| Tab completion | Commands, files, options, and a navigable grid menu (arrow keys move by row/column) | [Tab Completion](docs/TAB_COMPLETION.md) |
-| Mid-word completion | Expand abbreviated paths like `/u/l/b` → `/usr/local/bin` | [Mid-word Completion](docs/MID_WORD_COMPLETION.md) |
-| Git completion | Branches, remotes, files, and subcommands for `git` | [Git Completion](docs/GIT_COMPLETION.md) |
-| Context-aware completion | Per-command argument/flag completion (npm, bun, docker, …) | [Autocompletion](docs/AUTOCOMPLETION.md) |
+| Feature | Description |
+|---|---|
+| [Tab completion](docs/TAB_COMPLETION.md) | Commands, files, options, and a navigable grid menu (arrow keys move by row/column) |
+| [Mid-word completion](docs/MID_WORD_COMPLETION.md) | Expand abbreviated paths like `/u/l/b` → `/usr/local/bin` |
+| [Git completion](docs/GIT_COMPLETION.md) | Branches, remotes, files, and subcommands for `git` |
+| [Context-aware completion](docs/AUTOCOMPLETION.md) | Per-command argument/flag completion (npm, bun, docker, …) |
 
 ### Built-in Commands
 
@@ -192,13 +192,13 @@ greet world
 
 ### Extended Capabilities
 
-| Feature | Description | Docs |
-|---|---|---|
-| zsh compatibility | `setopt`/`unsetopt`, `%`-prompt escapes, glob qualifiers, arrays, associative arrays, named directories, auto-cd | [zsh Compatibility](docs/ZSH_MIGRATION.md) |
-| WASM plugins | `wasm <module.wasm> <export> [args]` via a built-in interpreter; write your own | [Plugin Development](docs/PLUGIN_DEVELOPMENT.md) |
-| AI-assisted completions | `ai <describe a command>` (OpenAI/Anthropic-compatible) | [Extended Features](docs/EXTENDED_FEATURES.md) |
-| Distributed sessions | `den --serve` / `den --connect` (loopback-only by default) | [Extended Features](docs/EXTENDED_FEATURES.md) |
-| Language Server | `den --lsp` for editor integration | [Extended Features](docs/EXTENDED_FEATURES.md) |
+| Feature | Description |
+|---|---|
+| [zsh compatibility](docs/ZSH_MIGRATION.md) | `setopt`/`unsetopt`, `%`-prompt escapes, glob qualifiers, arrays, associative arrays, named directories, auto-cd |
+| [WASM plugins](docs/PLUGIN_DEVELOPMENT.md) | `wasm <module.wasm> <export> [args]` via a built-in interpreter; write your own |
+| [AI-assisted completions](docs/EXTENDED_FEATURES.md) | `ai <describe a command>` (OpenAI/Anthropic-compatible) |
+| [Distributed sessions](docs/EXTENDED_FEATURES.md) | `den --serve` / `den --connect` (loopback-only by default) |
+| [Language Server](docs/EXTENDED_FEATURES.md) | `den --lsp` for editor integration |
 
 ## Compatibility & Migration
 
@@ -234,10 +234,13 @@ Everything is under [`./docs`](docs/). Highlights by audience:
 
 ```bash
 zig build                            # debug build
-zig build -Doptimize=ReleaseFast     # optimized release
+zig build -Doptimize=ReleaseSmall    # release build (~1.3MB, stripped — the default)
+zig build -Doptimize=ReleaseFast     # release tuned for max speed (larger)
 zig build install --prefix ~/.local  # install
 zig build test                       # run the test suite
 ```
+
+Release builds are stripped automatically; pass `-Dstrip=false` to keep symbols.
 
 See [Architecture](docs/ARCHITECTURE.md) for the source layout and [Testing](docs/TESTING.md) for the test framework. The full feature roadmap is in [ROADMAP.md](ROADMAP.md).
 
