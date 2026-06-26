@@ -45,7 +45,7 @@ jobs:
             ${{ runner.os }}-zig-perf-${{ env.ZIG_VERSION }}-
 
       - name: Build release binary
-        run: zig build -Doptimize=ReleaseFast
+        run: zig build -Doptimize=ReleaseSmall
 
       - name: Measure startup time
         id: startup

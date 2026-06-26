@@ -50,7 +50,7 @@ jobs:
       - name: Build release binary
         run: |
           echo "Building Den Shell v${{ steps.version.outputs.VERSION }} for ${{ matrix.target }}"
-          zig build -Doptimize=ReleaseFast -Dtarget=${{ matrix.target }}
+          zig build -Doptimize=ReleaseSmall -Dtarget=${{ matrix.target }}
 
       - name: Create archive (Unix)
         if: runner.os != 'Windows'
