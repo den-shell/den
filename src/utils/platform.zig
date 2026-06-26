@@ -237,13 +237,13 @@ pub const signals = struct {
 // ========================================
 //
 // Process-group manipulation lives in src/utils/process.zig
-// (setProcessGroup/getProcessGroup), which is what den's job control imports.
-// Duplicate wrappers used to live here but were dead code: nothing imported
-// this module's versions, and the POSIX paths referenced std.posix.setpgid /
-// std.posix.getpgid, which do not exist in the pinned Zig toolchain. If
-// terminal foreground-group control is ever added to job_control.zig, call
-// std.posix.tcsetpgrp / std.posix.tcgetpgrp directly (both exist) using the
-// split-function comptime pattern below.
+// (setProcessGroup/getProcessGroup), the process module den's job control
+// already imports. Duplicate wrappers used to live here but were dead code:
+// nothing imported this module's versions, and the POSIX paths referenced
+// std.posix.setpgid / std.posix.getpgid, which do not exist in the pinned Zig
+// toolchain. If terminal foreground-group control is ever added to
+// job_control.zig, call std.posix.tcsetpgrp / std.posix.tcgetpgrp directly
+// (both exist) using the split-function comptime pattern below.
 
 // ========================================
 // Pipes

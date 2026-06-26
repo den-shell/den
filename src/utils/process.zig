@@ -419,7 +419,9 @@ fn setProcessGroupWindows(pid: ProcessId, pgid: ProcessId) !void {
 }
 
 fn setProcessGroupPosix(pid: std.posix.pid_t, pgid: std.posix.pid_t) !void {
-    try std.posix.setpgid(pid, pgid);
+    // std.posix.setpgid does not exist in the pinned Zig toolchain; call libc
+    // directly (consistent with the dup2/waitpid sites in this module).
+    if (std.c.setpgid(pid, pgid) < 0) return error.Unexpected;
 }
 
 /// Get process group (POSIX only)
@@ -433,8 +435,14 @@ fn getProcessGroupWindows(pid: ProcessId) !ProcessId {
     return pid; // Return the process itself
 }
 
+// Neither std.posix nor std.c expose getpgid in the pinned Zig toolchain, so
+// bind the libc symbol directly.
+extern "c" fn getpgid(pid: std.posix.pid_t) std.posix.pid_t;
+
 fn getProcessGroupPosix(pid: std.posix.pid_t) !std.posix.pid_t {
-    return std.posix.getpgid(pid);
+    const pgid = getpgid(pid);
+    if (pgid < 0) return error.Unexpected;
+    return pgid;
 }
 
 // =============================================================================
