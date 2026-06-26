@@ -1911,24 +1911,54 @@ pub const LineEditor = struct {
     }
 
     fn handleEscapeSequence(self: *LineEditor, seq: EscapeSequence) !void {
-        // If we have an active completion list, handle arrow keys for completion navigation
+        // If we have an active completion list, arrow keys navigate the grid.
+        // The list is laid out column-major (idx = col * rows + row), so down/up
+        // step within a column and left/right step between columns — matching what
+        // the user sees, instead of both axes moving linearly.
         if (self.completion_list != null) {
+            const len = self.completion_list.?.len;
+            const grid = self.completionGrid();
+            const nr = @max(1, grid.rows);
+            const col = self.completion_index / nr;
+            const row = self.completion_index % nr;
             switch (seq) {
-                .down_arrow, .right_arrow => {
-                    // Move to next completion
-                    const list_len = self.completion_list.?.len;
-                    self.completion_index = (self.completion_index + 1) % list_len;
+                .down_arrow => {
+                    // Next row in this column; wrap to the column's top.
+                    const ni = col * nr + (row + 1);
+                    self.completion_index = if (row + 1 < nr and ni < len) ni else col * nr;
                     try self.applyCurrentCompletion();
                     try self.updateCompletionListHighlight();
                     return;
                 },
-                .up_arrow, .left_arrow => {
-                    // Move to previous completion
-                    const list_len = self.completion_list.?.len;
-                    if (self.completion_index == 0) {
-                        self.completion_index = list_len - 1;
-                    } else {
+                .up_arrow => {
+                    if (row > 0) {
                         self.completion_index -= 1;
+                    } else {
+                        // Wrap to the bottom-most populated row of this column.
+                        var r = nr - 1;
+                        while (col * nr + r >= len) r -= 1;
+                        self.completion_index = col * nr + r;
+                    }
+                    try self.applyCurrentCompletion();
+                    try self.updateCompletionListHighlight();
+                    return;
+                },
+                .right_arrow => {
+                    // Next column, same row; wrap to the first column.
+                    const ni = (col + 1) * nr + row;
+                    self.completion_index = if (col + 1 < grid.cols and ni < len) ni else row;
+                    try self.applyCurrentCompletion();
+                    try self.updateCompletionListHighlight();
+                    return;
+                },
+                .left_arrow => {
+                    if (col > 0) {
+                        self.completion_index = (col - 1) * nr + row;
+                    } else {
+                        // Wrap to the last column that has an item in this row.
+                        var c = grid.cols - 1;
+                        while (c * nr + row >= len) c -= 1;
+                        self.completion_index = c * nr + row;
                     }
                     try self.applyCurrentCompletion();
                     try self.updateCompletionListHighlight();
@@ -2407,6 +2437,25 @@ pub const LineEditor = struct {
     }
 
     /// Display completion list
+    /// The column-major grid dimensions the completion list is rendered with.
+    /// Display, highlight, and arrow-key navigation all derive layout from this so
+    /// they stay in sync (idx = col * rows + row).
+    fn completionGrid(self: *LineEditor) struct { rows: usize, cols: usize } {
+        const completions = self.completion_list orelse return .{ .rows = 0, .cols = 0 };
+        if (completions.len == 0) return .{ .rows = 0, .cols = 0 };
+        var max_len: usize = 0;
+        for (completions) |c| {
+            const marked = c.len > 0 and (c[0] == '\x02' or c[0] == '\x03');
+            const t = if (marked) c[1..] else c;
+            if (t.len > max_len) max_len = t.len;
+        }
+        const term_width = if (signals.getWindowSize()) |ws| ws.cols else |_| 80;
+        const col_width = max_len + 2;
+        const num_cols = @max(1, term_width / col_width);
+        const num_rows = (completions.len + num_cols - 1) / num_cols;
+        return .{ .rows = num_rows, .cols = num_cols };
+    }
+
     fn displayCompletionList(self: *LineEditor) !void {
         const completions = self.completion_list orelse return;
 
