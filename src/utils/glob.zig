@@ -204,8 +204,12 @@ pub const Glob = struct {
         var matches_buffer: [256][]const u8 = undefined;
         var match_count: usize = 0;
 
-        // Open directory
-        const dir_path = std.fs.path.dirname(pattern) orelse cwd;
+        // Open directory. Distinguish the directory we *open* (needs a real path,
+        // falling back to cwd) from the prefix we *prepend* to each match: bash
+        // keeps results relative to the pattern, so a bare `*.txt` yields plain
+        // names while `sub/*.txt` and `./*.txt` keep their directory part.
+        const pattern_dir = std.fs.path.dirname(pattern);
+        const dir_path = pattern_dir orelse cwd;
         const base_pattern = std.fs.path.basename(pattern);
 
         // Parse extended glob features
@@ -249,12 +253,13 @@ pub const Glob = struct {
                 break; // Too many matches
             }
 
-            // Build full path using platform-specific separator
+            // Prepend only the pattern's own directory part (if any), so matches
+            // stay relative like bash; a directory-less pattern yields bare names.
             var path_buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
-            const full_path = if (std.mem.eql(u8, dir_path, ".")) blk: {
-                break :blk try std.fmt.bufPrint(&path_buf, "{s}", .{entry.name});
+            const full_path = if (pattern_dir) |pd| blk: {
+                break :blk try std.fmt.bufPrint(&path_buf, "{s}" ++ path_sep_str ++ "{s}", .{ pd, entry.name });
             } else blk: {
-                break :blk try std.fmt.bufPrint(&path_buf, "{s}" ++ path_sep_str ++ "{s}", .{ dir_path, entry.name });
+                break :blk try std.fmt.bufPrint(&path_buf, "{s}", .{entry.name});
             };
 
             matches_buffer[match_count] = try self.allocator.dupe(u8, full_path);
