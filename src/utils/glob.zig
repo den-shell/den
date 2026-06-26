@@ -132,6 +132,9 @@ pub const Glob = struct {
     cache: ?*GlobCache,
     /// Honor zsh glob qualifiers like `*(.)`, `*(/)`, `*(x)` (set from config).
     qualifiers_enabled: bool = false,
+    /// When false (default, like bash without `dotglob`), wildcards do not match
+    /// files whose name begins with `.` unless the pattern itself starts with `.`.
+    match_hidden: bool = false,
 
     pub fn init(allocator: std.mem.Allocator) Glob {
         return .{ .allocator = allocator, .cache = null };
@@ -226,9 +229,18 @@ pub const Glob = struct {
         };
         defer dir.close(std.Options.debug_io);
 
+        // A leading dot in a filename is only matched when the pattern starts
+        // with a literal dot (POSIX "hidden file" rule), unless match_hidden.
+        const pattern_starts_with_dot = parsed.base.len > 0 and parsed.base[0] == '.';
+
         // Iterate directory and match pattern
         var iter = dir.iterate();
         while (try iter.next(std.Options.debug_io)) |entry| {
+            // Skip hidden files unless the pattern explicitly targets them.
+            if (!self.match_hidden and entry.name.len > 0 and entry.name[0] == '.' and !pattern_starts_with_dot) {
+                continue;
+            }
+
             // Match base pattern
             if (!self.matchPattern(parsed.base, entry.name)) {
                 continue;
