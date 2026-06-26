@@ -14,6 +14,7 @@ pub const EscapeSequence = enum {
     delete,
     page_up,
     page_down,
+    back_tab, // Shift+Tab (ESC[Z) — reverse completion cycling
     paste_start, // ESC[200~ (bracketed paste begin)
     paste_end, // ESC[201~ (bracketed paste end)
     unknown,
@@ -35,6 +36,7 @@ pub const EscapeSequence = enum {
                 'D' => return .left_arrow,
                 'H' => return .home,
                 'F' => return .end_key,
+                'Z' => return .back_tab,
                 else => {},
             }
 
@@ -90,3 +92,13 @@ pub const EscapeSequence = enum {
         return .unknown;
     }
 };
+
+test "EscapeSequence.parse recognizes arrows and back-tab" {
+    const std = @import("std");
+    try std.testing.expectEqual(EscapeSequence.up_arrow, EscapeSequence.parse("\x1b[A").?);
+    try std.testing.expectEqual(EscapeSequence.down_arrow, EscapeSequence.parse("\x1b[B").?);
+    try std.testing.expectEqual(EscapeSequence.back_tab, EscapeSequence.parse("\x1b[Z").?);
+    try std.testing.expectEqual(EscapeSequence.ctrl_right, EscapeSequence.parse("\x1b[1;5C").?);
+    // Incomplete sequences return null until fully read.
+    try std.testing.expectEqual(@as(?EscapeSequence, null), EscapeSequence.parse("\x1b["));
+}

@@ -853,9 +853,9 @@ pub const LineEditor = struct {
                     }
                 },
                 0x09 => {
-                    // Tab - handle completion
+                    // Tab - handle completion (forward)
                     if (!self.reverse_search_mode) {
-                        try self.handleTabCompletion();
+                        try self.handleTabCompletion(false);
                     }
                 },
                 0x7F, 0x08 => {
@@ -1911,6 +1911,12 @@ pub const LineEditor = struct {
     }
 
     fn handleEscapeSequence(self: *LineEditor, seq: EscapeSequence) !void {
+        // Shift+Tab cycles completions in reverse (mirror of Tab).
+        if (seq == .back_tab) {
+            if (!self.reverse_search_mode) try self.handleTabCompletion(true);
+            return;
+        }
+
         // If we have an active completion list, arrow keys navigate the grid.
         // The list is laid out column-major (idx = col * rows + row), so down/up
         // step within a column and left/right step between columns — matching what
@@ -2218,7 +2224,7 @@ pub const LineEditor = struct {
     }
 
     /// Handle tab completion
-    fn handleTabCompletion(self: *LineEditor) !void {
+    fn handleTabCompletion(self: *LineEditor, reverse: bool) !void {
         const completion_fn = self.completion_fn orelse return;
 
         // Get current line up to cursor
@@ -2248,8 +2254,12 @@ pub const LineEditor = struct {
         };
 
         if (is_cycling) {
-            // Cycle to next completion
-            self.completion_index = (self.completion_index + 1) % self.completion_list.?.len;
+            // Cycle to the next (Tab) or previous (Shift+Tab) completion.
+            const n = self.completion_list.?.len;
+            self.completion_index = if (reverse)
+                (self.completion_index + n - 1) % n
+            else
+                (self.completion_index + 1) % n;
             try self.applyCurrentCompletion();
             // Update the list to show new highlight
             try self.updateCompletionListHighlight();
