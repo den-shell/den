@@ -106,15 +106,15 @@ pub fn build(b: *std.Build) void {
             .root_module = release_module,
         });
 
-        // Static linking requires not linking libc (or using musl on Linux)
-        if (static_build) {
+        // Linux release binaries are fully static (musl): zero dynamic
+        // dependencies and no dynamic linker at launch, which also shaves
+        // startup time. macOS can't statically link libSystem and Windows links
+        // its CRT, so those stay dynamic. -Dstatic forces static everywhere it can.
+        release_module.link_libc = true;
+        if (static_build or release_target.result.os.tag == .linux) {
             release_exe.linkage = .static;
-            if (release_target.result.os.tag == .linux) {
-                release_module.link_libc = true; // musl on Linux supports static
-            }
         } else {
             release_exe.linkage = .dynamic;
-            release_module.link_libc = true;
         }
 
         const install_exe = b.addInstallArtifact(release_exe, .{
