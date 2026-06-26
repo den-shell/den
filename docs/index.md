@@ -16,15 +16,15 @@ hero:
       link: https://github.com/stacksjs/den
 
 features:
-  - title: "⚡ Lightning Fast"
+  - title: "⚡ Instant Startup"
     icon: "⚡"
-    details: "5ms startup, 5-9x faster than bash/zsh/fish. Zero runtime overhead."
+    details: "~4-5ms cold start. Native code, no runtime or VM."
   - title: "🛡️ Memory Safe"
     icon: "🛡️"
     details: "Written in Zig. Compile-time safety prevents memory leaks and crashes."
-  - title: "📦 Zero Dependencies"
+  - title: "📦 Self-Contained"
     icon: "📦"
-    details: "1.8MB binary with no external dependencies. Deploy anywhere."
+    details: "A single binary that links only libc — fewer dynamic deps than bash or zsh."
   - title: "🎯 Feature Rich"
     icon: "🎯"
     details: "58 builtins, job control, history, completion, and full POSIX support."
@@ -33,5 +33,5 @@ features:
     details: "Plugin system, custom themes, and comprehensive configuration."
   - title: "📊 Benchmarked"
     icon: "📊"
-    details: "Continuous performance monitoring. 2-4x less memory than alternatives."
+    details: "Real, reproducible benchmarks via scripts/bench.sh — no made-up numbers."
 ---

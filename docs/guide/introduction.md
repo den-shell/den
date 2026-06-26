@@ -4,33 +4,15 @@ Den is a modern shell that combines the familiarity of traditional shells with n
 
 ## Why Den
 
-- **Native Performance** - No runtime overhead, instant startup (~5ms)
-- **Tiny Binary** - ~1.8MB executable with zero dependencies
+- **Instant startup** - ~4-5ms cold start; native code, no runtime or VM
+- **Self-contained** - one binary that links only libc (fewer dynamic deps than bash or zsh)
 - **Memory Safe** - Zig's compile-time safety prevents common bugs
-- **Feature Rich** - 58 builtins, job control, history, completion, tilde expansion
-- **Production Ready** - Thoroughly tested, proper memory management, POSIX-compliant
+- **Feature Rich** - 58 builtins, job control, history, completion, tilde expansion — no plugin manager required
+- **Production Ready** - thoroughly tested, proper memory management, POSIX-compliant
 
-## Performance Comparison
+## Performance
 
-### vs Original TypeScript/Bun Implementation
-
-| Metric | TypeScript/Bun | Zig Den | Improvement |
-|--------|----------------|---------|-------------|
-| **Binary Size**| ~80MB | ~1.8MB |**44x smaller** |
-| **Startup Time**| ~50ms | ~5ms |**10x faster** |
-| **Memory Usage**| ~30MB | ~2MB |**15x less** |
-| **Lines of Code**| ~28,712 | ~4,102 |**7x smaller** |
-| **Build Time**| ~5s | <2s |**2.5x faster** |
-| **Dependencies**| Bun runtime | None |**Zero deps** |
-
-### vs Popular Shells
-
-| Metric | Den | Bash | Zsh | Fish | Den Advantage |
-|--------|-----|------|-----|------|---------------|
-| **Startup Time**| 5ms | 25ms | 35ms | 45ms |**5-9x faster** |
-| **Memory (Idle)**| 2MB | 4MB | 6MB | 8MB |**2-4x less** |
-| **Command Exec**| 0.8ms | 2.1ms | 2.5ms | 3.2ms |**2.5-4x faster** |
-| **Dependencies**| 0 | libc | libc | Multiple |**Zero deps** |
+See [Benchmarks](../BENCHMARKS.md) for real, reproducible numbers (run `scripts/bench.sh comparison` yourself). In short: Den starts in a few milliseconds and links the fewest libraries, but it is competitive with — not dramatically faster than — bash and zsh on micro-benchmarks today. Its advantage is the built-in feature set and memory-safe implementation, not raw micro-benchmark wins.
 
 ## Design Philosophy
 

@@ -2,16 +2,18 @@
 
 **Den** is a modern, POSIX-compliant shell written in [Zig](https://ziglang.org). It pairs the familiarity of bash/zsh with native performance, memory safety, and a single dependency-free binary.
 
-Den was originally prototyped in TypeScript/Bun and rewritten in Zig for zero runtime dependencies, ~5ms startup, and minimal memory use.
+Den was originally prototyped in TypeScript/Bun and rewritten in Zig for native code and a single self-contained binary.
 
 ## Why Den
 
-- **⚡ Fast** — ~5ms startup, 5–9x faster than bash/zsh/fish, no runtime overhead.
-- **📦 Tiny** — a ~1.8MB static binary with zero dependencies; deploy anywhere.
+- **⚡ Instant** — ~4–5 ms cold start; native code, no runtime or VM.
+- **📦 Self-contained** — one binary that links only libc (fewer dynamic deps than bash or zsh).
 - **🛡️ Safe** — written in Zig; compile-time safety prevents whole classes of bugs.
-- **🎯 Complete** — 58 builtins, pipelines, job control, history, completion, and full expansion.
+- **🎯 Complete** — 58 builtins, pipelines, job control, history, completion, and full expansion — no plugin manager required.
 - **🧩 Extensible** — WASM plugins, AI-assisted completions, distributed sessions, and an LSP server.
 - **✅ Compatible** — POSIX-compliant with a zsh compatibility layer and a bash migration path.
+
+See [Benchmarks](./BENCHMARKS.md) for measured, reproducible performance numbers (Den is competitive with, not faster than, bash/zsh on micro-benchmarks today).
 
 ## What you get
 

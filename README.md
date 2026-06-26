@@ -1,13 +1,13 @@
 # Den Shell
 
-> A modern, POSIX-compliant shell written in Zig — native performance, a tiny dependency-free binary, and a feature set that rivals zsh and fish.
+> A modern, POSIX-compliant shell written in Zig — a rich built-in feature set, a single self-contained binary, and memory safety.
 
-Den combines the familiarity of traditional shells with native speed and memory safety. It was originally prototyped in TypeScript/Bun and completely rewritten in Zig for zero runtime dependencies and minimal memory use.
+Den combines the familiarity of traditional shells with a modern, batteries-included interactive experience. It was originally prototyped in TypeScript/Bun and rewritten in Zig for native code and a self-contained binary.
 
-- ⚡ **Native performance** — ~5ms startup, no runtime overhead
-- 📦 **Tiny binary** — ~1.8MB executable with zero dependencies
+- ⚡ **Instant startup** — ~4–5 ms cold start; native code, no runtime or VM
+- 📦 **Self-contained** — one binary that links only libc (fewer dynamic deps than bash or zsh)
 - 🛡️ **Memory safe** — Zig's compile-time safety prevents whole classes of bugs
-- 🎯 **Feature rich** — 58 builtins, job control, history, completion, expansion, a full line editor
+- 🎯 **Feature rich** — 58 builtins, job control, history, completion, expansion, and a full line editor — no plugin manager required
 - 🧩 **Extensible** — WASM plugins, AI-assisted completions, distributed sessions, an LSP server
 - ✅ **Compatible** — POSIX-compliant with a zsh compatibility layer and a bash migration path
 
@@ -23,20 +23,25 @@ Den combines the familiarity of traditional shells with native speed and memory 
 
 ## Why Den
 
-| | Den | Bash | Zsh | Fish |
-|---|---|---|---|---|
-| **Startup time** | 5ms | 25ms | 35ms | 45ms |
-| **Memory (idle)** | 2MB | 4MB | 6MB | 8MB |
-| **Command exec** | 0.8ms | 2.1ms | 2.5ms | 3.2ms |
-| **Dependencies** | 0 | libc | libc | multiple |
-
-Den is **5–9x faster to start** and uses **2–4x less memory** than popular shells, while shipping a single static binary. See [Benchmarks](docs/BENCHMARKS.md) for methodology and full results.
+Den's draw is what's **built in** — completion, autosuggestions, syntax highlighting, a git prompt, and a zsh-style feature set with no plugin manager — plus a single self-contained binary and a memory-safe implementation. On raw micro-benchmarks it's competitive with, not dramatically faster than, established shells.
 
 ### Performance
 
-Den's speed comes from deliberate engineering, documented in depth:
+Measured on an Apple M3 Pro (macOS, arm64) with [`hyperfine`](https://github.com/sharkdp/hyperfine), against the system `bash` 3.2 and `zsh` 5.9. These are real numbers from one machine — reproduce them with `scripts/bench.sh comparison`.
 
-- [Benchmarks](docs/BENCHMARKS.md) — methodology and head-to-head numbers
+| Metric | Den | Bash 3.2 | Zsh 5.9 |
+|---|---|---|---|
+| Startup, `-c true` | 4.5 ms | 1.9 ms | 3.6 ms |
+| Command exec (per external cmd) | ~2.0 ms | ~1.8 ms | ~2.0 ms |
+| Idle memory (clean config) | 4.6 MB | 2.4 MB | 2.3 MB |
+| Binary size | 2.85 MB | 1.29 MB | 1.36 MB |
+| Dynamic libraries | **1** (libc) | 2 | 4 |
+
+Honest read: Den starts in a few milliseconds (instant in practice) and links the fewest libraries, but it is **not** smaller, lighter, or faster than bash/zsh on these micro-benchmarks today — it trades a little overhead for a much richer built-in experience and memory safety. Improving startup and footprint is on the [roadmap](ROADMAP.md).
+
+The engineering behind Den's hot paths is documented in depth:
+
+- [Benchmarks](docs/BENCHMARKS.md) — methodology and full results
 - [Algorithms](docs/ALGORITHMS.md) — the algorithmic choices behind hot paths
 - [Data Structures](docs/DATA_STRUCTURES.md) — the structures backing history, completion, and expansion
 - [CPU Optimization](docs/CPU_OPTIMIZATION.md) — branch-friendly, cache-aware execution
