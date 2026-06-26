@@ -52,9 +52,16 @@ pub fn tabCompletionFn(input: []const u8, allocator: std.mem.Allocator) ![][]con
     const prefix = input[word_start..];
     const command = input[0..first_word_end];
 
-    // If first word, try command completion
+    // If first word, complete a command name — unless it's written as a path
+    // (`./foo`, `../foo`, `/abs/foo`, `~/foo`, or any word containing '/'), in
+    // which case complete it as a file like bash/zsh do for `./lan<TAB>`.
     if (word_start == 0) {
-        return completion.completeCommand(prefix);
+        const looks_like_path = std.mem.indexOfScalar(u8, prefix, '/') != null or
+            std.mem.startsWith(u8, prefix, "~");
+        if (!looks_like_path) {
+            return completion.completeCommand(prefix);
+        }
+        return completion.completeFile(prefix);
     }
 
     // Check for environment variable completion ($...)
