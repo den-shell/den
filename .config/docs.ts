@@ -6,60 +6,88 @@ const config: BunPressConfig = {
   url: 'https://den.sh',
 
   nav: [
-    { text: 'Guide', link: '/guide/introduction' },
-    { text: 'Features', link: '/features/overview' },
-    { text: 'Builtins', link: '/builtins/reference' },
+    { text: 'Guide', link: '/intro' },
+    { text: 'Features', link: '/FEATURES' },
+    { text: 'Builtins', link: '/BUILTINS' },
+    { text: 'Migration', link: '/BASH_MIGRATION' },
     { text: 'GitHub', link: 'https://github.com/stacksjs/den' },
   ],
 
+  // A single comprehensive sidebar (applies to every page) so every feature is
+  // reachable from the docs navigation. Every link below maps to a real file
+  // under ./docs.
   sidebar: {
-    '/guide/': [
+    '/': [
       {
         text: 'Getting Started',
         items: [
-          { text: 'Introduction', link: '/guide/introduction' },
-          { text: 'Installation', link: '/guide/installation' },
+          { text: 'Introduction', link: '/intro' },
+          { text: 'Installation', link: '/install' },
           { text: 'Quick Start', link: '/guide/quick-start' },
-          { text: 'Configuration', link: '/guide/configuration' },
+          { text: 'Usage', link: '/usage' },
+          { text: 'Configuration', link: '/config' },
+          { text: 'Quick Reference', link: '/QUICK_REFERENCE' },
         ],
       },
-      {
-        text: 'Usage',
-        items: [
-          { text: 'Custom Commands', link: '/guide/custom-commands' },
-          { text: 'Scripting', link: '/guide/scripting' },
-          { text: 'Migration from Bash', link: '/guide/bash-migration' },
-        ],
-      },
-    ],
-    '/features/': [
       {
         text: 'Core Features',
         items: [
-          { text: 'Overview', link: '/features/overview' },
-          { text: 'Pipelines', link: '/features/pipelines' },
-          { text: 'Redirections', link: '/features/redirections' },
-          { text: 'Job Control', link: '/features/job-control' },
-          { text: 'Expansions', link: '/features/expansions' },
+          { text: 'Features Overview', link: '/FEATURES' },
+          { text: 'Scripting', link: '/SCRIPTING' },
+          { text: 'Builtins Reference', link: '/BUILTINS' },
+          { text: 'Themes & Prompt', link: '/THEMES' },
+          { text: 'Advanced Usage', link: '/ADVANCED' },
         ],
       },
-    ],
-    '/advanced/': [
       {
-        text: 'Advanced',
+        text: 'Interactive & Completion',
         items: [
-          { text: 'Configuration', link: '/advanced/configuration' },
-          { text: 'Custom Builtins', link: '/advanced/custom-builtins' },
-          { text: 'Performance', link: '/advanced/performance' },
-          { text: 'Shell Integration', link: '/advanced/shell-integration' },
+          { text: 'Line Editing', link: '/LINE_EDITING' },
+          { text: 'Tab Completion', link: '/TAB_COMPLETION' },
+          { text: 'Autocompletion', link: '/AUTOCOMPLETION' },
+          { text: 'Git Completion', link: '/GIT_COMPLETION' },
+          { text: 'Mid-word Completion', link: '/MID_WORD_COMPLETION' },
+          { text: 'History Substring Search', link: '/HISTORY_SUBSTRING_SEARCH' },
         ],
       },
-    ],
-    '/builtins/': [
       {
-        text: 'Reference',
+        text: 'Extending Den',
         items: [
-          { text: 'All Builtins', link: '/builtins/reference' },
+          { text: 'Extended Features', link: '/EXTENDED_FEATURES' },
+          { text: 'Plugin Development', link: '/PLUGIN_DEVELOPMENT' },
+          { text: 'Custom Commands', link: '/guide/custom-commands' },
+        ],
+      },
+      {
+        text: 'Migration',
+        items: [
+          { text: 'Bash Migration', link: '/BASH_MIGRATION' },
+          { text: 'zsh Compatibility', link: '/ZSH_MIGRATION' },
+          { text: 'Migration Guide', link: '/MIGRATION' },
+          { text: 'Troubleshooting', link: '/TROUBLESHOOTING' },
+        ],
+      },
+      {
+        text: 'Performance',
+        items: [
+          { text: 'Benchmarks', link: '/BENCHMARKS' },
+          { text: 'Algorithms', link: '/ALGORITHMS' },
+          { text: 'Data Structures', link: '/DATA_STRUCTURES' },
+          { text: 'CPU Optimization', link: '/CPU_OPTIMIZATION' },
+          { text: 'Memory Optimization', link: '/MEMORY_OPTIMIZATION' },
+          { text: 'Concurrency', link: '/CONCURRENCY' },
+          { text: 'Profiling', link: '/profiling' },
+        ],
+      },
+      {
+        text: 'Develop & Contribute',
+        items: [
+          { text: 'Architecture', link: '/ARCHITECTURE' },
+          { text: 'API Reference', link: '/API' },
+          { text: 'Testing', link: '/TESTING' },
+          { text: 'CI/CD', link: '/CI_CD' },
+          { text: 'Dependencies', link: '/DEPENDENCIES' },
+          { text: 'Contributing', link: '/CONTRIBUTING' },
         ],
       },
     ],
