@@ -723,6 +723,7 @@ pub const LineEditor = struct {
                         try self.displayPrompt();
                         self.length = 0;
                         self.cursor = 0;
+                        self.resetRenderedRowToPrompt();
                         continue;
                     }
 
@@ -738,6 +739,7 @@ pub const LineEditor = struct {
                     if (self.length == 0) {
                         try self.writeBytes("\r\n");
                         try self.displayPrompt();
+                        self.resetRenderedRowToPrompt();
                         continue;
                     }
 
@@ -934,7 +936,15 @@ pub const LineEditor = struct {
     }
 
     fn displayPrompt(self: *LineEditor) !void {
-        try self.writeBytes(self.prompt);
+        // In raw mode ONLCR is off, so a bare '\n' in a multi-line prompt would
+        // line-feed without returning to column 0 and the prompt would
+        // stair-step to the right (e.g. after Ctrl+C). Translate newlines to
+        // CRLF when raw; the initial prompt runs in cooked mode and doesn't need it.
+        if (self.terminal.is_raw) {
+            try self.writePromptCrlf();
+        } else {
+            try self.writeBytes(self.prompt);
+        }
         // Flush stdout to ensure prompt is displayed before entering raw mode
         if (comptime builtin.os.tag != .windows) {
             // Force flush by calling fsync on stdout
@@ -2746,6 +2756,16 @@ pub const LineEditor = struct {
     /// off, so a bare newline moves down without returning to column 0; a
     /// multi-line prompt repainted that way stair-steps. Used by repaint paths
     /// (the initial displayPrompt runs in cooked mode and doesn't need this).
+    /// Reset the tracked cursor row to the freshly-drawn prompt's row span, so the
+    /// next repaint moves up the right amount after an in-place prompt redraw.
+    fn resetRenderedRowToPrompt(self: *LineEditor) void {
+        const cols: usize = if (signals.getWindowSize()) |ws|
+            (if (ws.cols == 0) 80 else ws.cols)
+        else |_|
+            80;
+        self.rendered_cursor_row = self.promptLayout(cols).rows;
+    }
+
     fn writePromptCrlf(self: *LineEditor) !void {
         var start: usize = 0;
         var i: usize = 0;
