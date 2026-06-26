@@ -756,6 +756,69 @@ pub const Expansion = struct {
                     if (std.mem.eql(u8, index_part, "@") or std.mem.eql(u8, index_part, "*")) {
                         // Check for array slicing: ${arr[@]:offset:length}
                         const after_bracket = content[bracket_pos + close_bracket + 1 ..];
+
+                        // ${arr[@]/pat/repl} — pattern substitution on each element,
+                        // mirroring scalar ${var/pat/repl} (//, /#, /% variants).
+                        if (after_bracket.len > 0 and after_bracket[0] == '/') {
+                            const rest = after_bracket;
+                            const replace_all = rest.len > 1 and rest[1] == '/';
+                            const anchor_prefix = rest.len > 1 and rest[1] == '#';
+                            const anchor_suffix = rest.len > 1 and rest[1] == '%';
+                            const pattern_start: usize = if (replace_all or anchor_prefix or anchor_suffix) 2 else 1;
+                            var pattern: []const u8 = "";
+                            var replacement: []const u8 = "";
+                            if (std.mem.indexOf(u8, rest[pattern_start..], "/")) |second_slash| {
+                                pattern = rest[pattern_start .. pattern_start + second_slash];
+                                replacement = rest[pattern_start + second_slash + 1 ..];
+                            } else {
+                                pattern = rest[pattern_start..];
+                            }
+
+                            const subst_sep: u8 = if (std.mem.eql(u8, index_part, "*")) blk: {
+                                const ifs_val = self.environment.get("IFS") orelse " \t\n";
+                                break :blk if (ifs_val.len > 0) ifs_val[0] else ' ';
+                            } else ' ';
+
+                            var pieces = std.ArrayList([]u8).empty;
+                            defer {
+                                for (pieces.items) |p| self.allocator.free(p);
+                                pieces.deinit(self.allocator);
+                            }
+                            for (array) |item| {
+                                var piece: []u8 = undefined;
+                                if (anchor_prefix) {
+                                    if (pattern.len > 0 and std.mem.startsWith(u8, item, pattern)) {
+                                        piece = try self.allocator.alloc(u8, replacement.len + item.len - pattern.len);
+                                        @memcpy(piece[0..replacement.len], replacement);
+                                        @memcpy(piece[replacement.len..], item[pattern.len..]);
+                                    } else piece = try self.allocator.dupe(u8, item);
+                                } else if (anchor_suffix) {
+                                    if (pattern.len > 0 and std.mem.endsWith(u8, item, pattern)) {
+                                        piece = try self.allocator.alloc(u8, item.len - pattern.len + replacement.len);
+                                        @memcpy(piece[0 .. item.len - pattern.len], item[0 .. item.len - pattern.len]);
+                                        @memcpy(piece[item.len - pattern.len ..], replacement);
+                                    } else piece = try self.allocator.dupe(u8, item);
+                                } else {
+                                    piece = try self.replaceInString(item, pattern, replacement, replace_all);
+                                }
+                                try pieces.append(self.allocator, piece);
+                            }
+
+                            var sub_total: usize = 0;
+                            for (pieces.items) |p| sub_total += p.len;
+                            if (pieces.items.len > 1) sub_total += pieces.items.len - 1;
+                            var sub_result = try self.allocator.alloc(u8, sub_total);
+                            var sub_pos: usize = 0;
+                            for (pieces.items, 0..) |p, i| {
+                                @memcpy(sub_result[sub_pos .. sub_pos + p.len], p);
+                                sub_pos += p.len;
+                                if (i < pieces.items.len - 1) {
+                                    sub_result[sub_pos] = subst_sep;
+                                    sub_pos += 1;
+                                }
+                            }
+                            return ExpansionResult{ .value = sub_result, .consumed = end + 1, .owned = true };
+                        }
                         var slice_offset: i64 = 0;
                         var slice_len: ?usize = null;
                         if (after_bracket.len > 0 and after_bracket[0] == ':') {
