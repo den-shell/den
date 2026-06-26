@@ -15,7 +15,7 @@ cd "$PROJECT_DIR"
 
 # Ensure we have a release build
 echo "Building release version..."
-zig build -Doptimize=ReleaseFast 2>/dev/null
+zig build -Doptimize=ReleaseSmall 2>/dev/null
 
 DEN="./zig-out/bin/den"
 

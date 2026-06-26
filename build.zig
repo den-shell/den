@@ -18,7 +18,9 @@ pub fn build(b: *std.Build) void {
 
     // Build options
     const static_build = b.option(bool, "static", "Build statically linked binary") orelse false;
-    const strip = b.option(bool, "strip", "Strip debug symbols") orelse false;
+    // Strip release builds by default (smaller binary, no runtime cost); keep
+    // symbols for Debug. Override explicitly with -Dstrip=false.
+    const strip = b.option(bool, "strip", "Strip debug symbols") orelse (optimize != .Debug);
     const link_libc = b.option(bool, "link-libc", "Link against libc") orelse true;
 
     // Create a module for our source with target
@@ -96,8 +98,8 @@ pub fn build(b: *std.Build) void {
         const release_module = b.createModule(.{
             .root_source_file = b.path("src/main.zig"),
             .target = release_target,
-            .optimize = .ReleaseSafe,
-            .strip = strip,
+            .optimize = .ReleaseSmall,
+            .strip = true, // distributed binaries: smallest + stripped (~1.3MB)
         });
         const release_exe = b.addExecutable(.{
             .name = "den",
