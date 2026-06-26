@@ -225,7 +225,7 @@ unalias ll
 
 ## Built-in Commands
 
-Den includes 54 built-in commands organized by category:
+Den includes 58 built-in commands organized by category:
 
 | Category | Commands |
 |----------|----------|

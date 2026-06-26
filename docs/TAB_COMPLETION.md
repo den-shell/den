@@ -12,16 +12,16 @@ Press `TAB` to complete the current word based on context:
 
 ```bash
 # Complete commands
-den> git st<TAB>
-den> git status
+❯ git st<TAB>
+❯ git status
 
 # Complete file paths
-den> cat README<TAB>
-den> cat README.md
+❯ cat README<TAB>
+❯ cat README.md
 
 # Complete directory paths
-den> cd Doc<TAB>
-den> cd Documents/
+❯ cd Doc<TAB>
+❯ cd Documents/
 ```
 
 ### 2. Multiple Suggestions
@@ -29,7 +29,7 @@ den> cd Documents/
 When multiple completions are available, Den displays them in a neat, color-coded list:
 
 ```bash
-den> cd /usr/l<TAB>
+❯ cd /usr/l<TAB>
 
 /usr/lib/     /usr/libexec/     /usr/local/
 ```
@@ -43,19 +43,19 @@ den> cd /usr/l<TAB>
 **Example:**
 ```bash
 # Type and press TAB
-den> cd /usr/l<TAB>
+❯ cd /usr/l<TAB>
 
 # First suggestion appears, list shows
 # > lib/        libexec/        local/
-den> cd /usr/lib/
+❯ cd /usr/lib/
 
 # Press TAB again to cycle
 # > lib/        libexec/        local/
-den> cd /usr/libexec/
+❯ cd /usr/libexec/
 
 # Press TAB again
 # > lib/        libexec/        local/
-den> cd /usr/local/
+❯ cd /usr/local/
 ```
 
 ### 3. Mid-Word Path Completion (zsh-style)
@@ -64,10 +64,10 @@ Type abbreviated paths and expand them instantly - one of zsh's most loved featu
 
 ```bash
 # Type abbreviations
-den> cd /u/l/b<TAB>
+❯ cd /u/l/b<TAB>
 
 # Expands to full path
-den> cd /usr/local/bin/
+❯ cd /usr/local/bin/
 ```
 
 **How it works:**
@@ -104,12 +104,12 @@ Den adds trailing slashes to directories and distinguishes between files and fol
 
 ```bash
 # Directories get a trailing slash
-den> cd Documents<TAB>
-den> cd Documents/
+❯ cd Documents<TAB>
+❯ cd Documents/
 
 # Files don't
-den> cat config<TAB>
-den> cat config.json
+❯ cat config<TAB>
+❯ cat config.json
 ```
 
 ### 5. Context-Aware Completion
@@ -118,15 +118,15 @@ Different commands get different completion behaviors:
 
 ```bash
 # cd completes only directories
-den> cd <TAB>
+❯ cd <TAB>
 Documents/    Downloads/    Desktop/
 
 # ls completes both files and directories
-den> ls <TAB>
+❯ ls <TAB>
 Documents/    file.txt    README.md
 
 # Commands complete from PATH
-den> git<TAB>
+❯ git<TAB>
 git    gitk    git-flow
 ```
 
@@ -135,7 +135,7 @@ git    gitk    git-flow
 Executable files and scripts are highlighted differently in completion lists:
 
 ```bash
-den> ./<TAB>
+❯ ./<TAB>
 script.sh_    data.json    build.sh_    README.md
 ```
 
@@ -158,11 +158,11 @@ _(Scripts and executables are marked with special colors)_
 When cycling through completions in subdirectories, Den preserves your path context:
 
 ```bash
-den> cd Documents/Projects/<TAB>
+❯ cd Documents/Projects/<TAB>
 den/    myapp/    website/
 
 # Prefix "Documents/Projects/" is preserved while cycling
-den> cd Documents/Projects/den/
+❯ cd Documents/Projects/den/
 ```
 
 ### Empty Line Behavior
@@ -170,8 +170,8 @@ den> cd Documents/Projects/den/
 Pressing `TAB` on an empty line or with only whitespace inserts 4 spaces (standard tab):
 
 ```bash
-den> <TAB>
-den>
+❯ <TAB>
+❯
 ```
 
 ### No Suggestions Behavior
@@ -179,7 +179,7 @@ den>
 If no completions are available, Den emits a subtle bell sound (system beep) and makes no changes:
 
 ```bash
-den> cd /nonexistent<TAB>
+❯ cd /nonexistent<TAB>
 # _beep_ - no changes
 ```
 
@@ -194,7 +194,7 @@ Den provides different completion strategies based on context:
 - Filters hidden files (starting with `.`) unless you type `.` first
 
 ```bash
-den> cat .<TAB>
+❯ cat .<TAB>
 .bashrc    .gitignore    .config/
 ```
 
@@ -288,23 +288,23 @@ Planned configuration options:
 
 ```bash
 # Navigate deep directory structures quickly
-den> cd /u/l/s/f/t<TAB>
-den> cd /usr/local/share/fonts/truetype/
+❯ cd /u/l/s/f/t<TAB>
+❯ cd /usr/local/share/fonts/truetype/
 
 # Works with home directory too
-den> cd ~/D/P/d<TAB>
-den> cd ~/Documents/Projects/den/
+❯ cd ~/D/P/d<TAB>
+❯ cd ~/Documents/Projects/den/
 ```
 
 ### Example 2: Finding Files
 
 ```bash
 # Complete file names
-den> cat sr<TAB>
+❯ cat sr<TAB>
 src/    scripts/
 
 # Cycle through matches
-den> cat src/<TAB>
+❯ cat src/<TAB>
 main.zig    cli.zig    shell.zig
 # Press TAB to cycle through each file
 ```
@@ -313,7 +313,7 @@ main.zig    cli.zig    shell.zig
 
 ```bash
 # Explore available git commands
-den> git <TAB>
+❯ git <TAB>
 git-add      git-commit    git-push
 git-branch   git-diff      git-pull
 # Tab through to find what you need
@@ -323,7 +323,7 @@ git-branch   git-diff      git-pull
 
 ```bash
 # Show hidden files by starting with dot
-den> cat .<TAB>
+❯ cat .<TAB>
 .gitignore    .bashrc    .config/
 ```
 
@@ -346,10 +346,10 @@ den> cat .<TAB>
 **Solution:** Type more characters to narrow down:
 ```bash
 # Instead of
-den> cd D<TAB>  # Shows: Desktop/ Documents/ Downloads/
+❯ cd D<TAB>  # Shows: Desktop/ Documents/ Downloads/
 
 # Type more
-den> cd Doc<TAB>  # Shows: Documents/
+❯ cd Doc<TAB>  # Shows: Documents/
 ```
 
 ### Completion Cycling Not Working
@@ -381,27 +381,27 @@ den complete "/u/l/b"
 
    ```bash
 # Faster
-   den> cd Doc<TAB>
+   ❯ cd Doc<TAB>
 
 # Slower (scans more files)
-   den> cd D<TAB>
+   ❯ cd D<TAB>
    ```
 
 2. **Use mid-word expansion for deep paths:**
 
    ```bash
 # Efficient
-   den> cd /u/l/s/a/j<TAB>
+   ❯ cd /u/l/s/a/j<TAB>
 
 # Less efficient
-   den> cd /u<TAB>sr<TAB>loc<TAB>sha<TAB>app<TAB>jav<TAB>
+   ❯ cd /u<TAB>sr<TAB>loc<TAB>sha<TAB>app<TAB>jav<TAB>
    ```
 
 3. **Avoid completions on huge directories:**
 
    ```bash
 # May be slow
-   den> ls /usr/bin/<TAB>  # Thousands of files
+   ❯ ls /usr/bin/<TAB>  # Thousands of files
    ```
 
 ## See Also

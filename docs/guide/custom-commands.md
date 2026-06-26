@@ -252,7 +252,7 @@ fi
 
 Den searches for commands in this order:
 
-1. **Built-in commands** (54 built-ins)
+1. **Built-in commands** (58 built-ins)
 2. **Aliases**
 3. **PATH directories** (in order)
 

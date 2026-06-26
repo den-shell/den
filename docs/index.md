@@ -27,7 +27,7 @@ features:
     details: "1.8MB binary with no external dependencies. Deploy anywhere."
   - title: "🎯 Feature Rich"
     icon: "🎯"
-    details: "54 builtins, job control, history, completion, and full POSIX support."
+    details: "58 builtins, job control, history, completion, and full POSIX support."
   - title: "🔧 Extensible"
     icon: "🔧"
     details: "Plugin system, custom themes, and comprehensive configuration."

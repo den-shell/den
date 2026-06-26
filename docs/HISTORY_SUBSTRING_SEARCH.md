@@ -12,19 +12,19 @@ When you type a few characters and press **Up**or**Down**arrow, Den will only sh
 
 ```bash
 # Type part of a command you want to find
-den> git
+❯ git
 
 # Press Up arrow - shows previous commands containing "git"
-den> git commit -m "fix bug"
+❯ git commit -m "fix bug"
 
 # Press Up again - shows next older command containing "git"
-den> git push origin main
+❯ git push origin main
 
 # Press Down - navigates forward through matching commands
-den> git pull --rebase
+❯ git pull --rebase
 
 # Press Down past the end - returns to your original search query
-den> git
+❯ git
 ```
 
 ### Examples
@@ -32,34 +32,34 @@ den> git
 **Search for commands with "docker":**
 ```bash
 # Type the search term
-den> docker
+❯ docker
 
 # Press Up to cycle through matches
-den> docker ps -a
-den> docker build -t myapp .
-den> docker run -p 8080:8080 myapp
-den> sudo docker system prune -f
+❯ docker ps -a
+❯ docker build -t myapp .
+❯ docker run -p 8080:8080 myapp
+❯ sudo docker system prune -f
 ```
 
 **Search for file operations:**
 ```bash
 # Search for any command that modified config files
-den> config
+❯ config
 
 # Cycle through
-den> vi ~/.config/den/config.json
-den> cat src/config_loader.zig
-den> cp config.template config.prod
+❯ vi ~/.config/den/config.json
+❯ cat src/config_loader.zig
+❯ cp config.template config.prod
 ```
 
 **Search for specific flags:**
 ```bash
 # Find all commands using the -rf flag
-den> -rf
+❯ -rf
 
 # Shows
-den> rm -rf node_modules
-den> cp -rf dist/ backup/
+❯ rm -rf node_modules
+❯ cp -rf dist/ backup/
 ```
 
 ## Features
@@ -167,31 +167,31 @@ Den's implementation provides the core functionality of zsh's history substring 
 Search for distinctive parts of commands:
 ```bash
 # Instead of searching "git", search for
-den> rebase      # finds git rebase commands
-den> origin      # finds git remote operations
+❯ rebase      # finds git rebase commands
+❯ origin      # finds git remote operations
 ```
 
 ### 2. **Search by flags**
 
 Find commands by their arguments:
 ```bash
-den> --verbose
-den> -la
-den> --help
+❯ --verbose
+❯ -la
+❯ --help
 ```
 
 ### 3. **Search by file extensions**
 
 ```bash
-den> .zig        # finds all commands operating on Zig files
-den> .json       # finds JSON file operations
+❯ .zig        # finds all commands operating on Zig files
+❯ .json       # finds JSON file operations
 ```
 
 ### 4. **Partial paths**
 
 ```bash
-den> src/        # finds commands in src directory
-den> test/       # finds test-related commands
+❯ src/        # finds commands in src directory
+❯ test/       # finds test-related commands
 ```
 
 ## Configuration
@@ -251,30 +251,30 @@ Potential improvements for history substring search:
 
 ```bash
 # You remember you ran a complex docker command
-den> docker run
+❯ docker run
 
 # Cycle through to find the exact one
-den> docker run -d -p 8080:8080 --name myapp --restart=always myimage:latest
+❯ docker run -d -p 8080:8080 --name myapp --restart=always myimage:latest
 ```
 
 ### Reusing flags
 
 ```bash
 # Find that curl command with all the right flags
-den> curl
+❯ curl
 
 # Found it
-den> curl -X POST -H "Content-Type: application/json" -d '{"key":"value"}' https://api.example.com
+❯ curl -X POST -H "Content-Type: application/json" -d '{"key":"value"}' https://api.example.com
 ```
 
 ### Directory navigation
 
 ```bash
 # Find when you cd'd to a project
-den> Documents
+❯ Documents
 
 # Shows
-den> cd ~/Documents/Projects/den
+❯ cd ~/Documents/Projects/den
 ```
 
 ## See Also

@@ -77,13 +77,13 @@ Down Arrow   # Next command
 # Type part of a command, then press Up/Down
 # to filter history by substring
 
-den> git<Up>
+❯ git<Up>
 # Shows only commands containing "git"
-den> git commit -m "fix bug"
+❯ git commit -m "fix bug"
 
-den> docker<Up>
+❯ docker<Up>
 # Shows only commands containing "docker"
-den> docker ps -a
+❯ docker ps -a
 ```
 
 **Features:**
@@ -97,7 +97,7 @@ den> docker ps -a
 
 ```bash
 # Press Ctrl+R to enter reverse search mode
-den>
+❯
 (reverse-i-search)`': _
 
 # Type to search backwards through history
@@ -107,7 +107,7 @@ den>
 (reverse-i-search)`dock': docker build -t myapp .
 
 # Press Enter to use the command
-den> docker build -t myapp .
+❯ docker build -t myapp .
 
 # Or press Ctrl+C to cancel
 ```
@@ -172,15 +172,15 @@ Navigate by words instead of characters for faster editing:
 
 ```bash
 # Type a long command
-den> git commit -m "Add new feature to the authentication system"
+❯ git commit -m "Add new feature to the authentication system"
                       ^cursor here
 
 # Jump back one word (Ctrl+Left or Alt+B)
-den> git commit -m "Add new feature to the authentication system"
+❯ git commit -m "Add new feature to the authentication system"
                   ^jumped to "new"
 
 # Jump forward one word (Ctrl+Right or Alt+F)
-den> git commit -m "Add new feature to the authentication system"
+❯ git commit -m "Add new feature to the authentication system"
                           ^jumped to "feature"
 ```
 
@@ -191,15 +191,15 @@ den> git commit -m "Add new feature to the authentication system"
 Delete from cursor to end of next word:
 
 ```bash
-den> git commit -m "fix typo error in function"
+❯ git commit -m "fix typo error in function"
               ^cursor here
 
 # Press Alt+D
-den> git commit -m "fix  error in function"
+❯ git commit -m "fix  error in function"
               ^deleted "typo "
 
 # Press Alt+D again
-den> git commit -m "fix  in function"
+❯ git commit -m "fix  in function"
               ^deleted "error "
 ```
 
@@ -211,21 +211,21 @@ Fix common typos instantly by swapping characters:
 
 ```bash
 # Oops, typed "teh" instead of "the"
-den> echo teh
+❯ echo teh
           ^cursor here
 
 # Press Ctrl+T
-den> echo the
+❯ echo the
          ^fixed! cursor moved forward
 ```
 
 ```bash
 # Also works at end of line
-den> echo hello wordl
+❯ echo hello wordl
                      ^cursor at end
 
 # Press Ctrl+T (swaps last two chars)
-den> echo hello world
+❯ echo hello world
                      ^fixed!
 ```
 
@@ -237,17 +237,17 @@ Clear the terminal and get a fresh prompt without losing your current command:
 
 ```bash
 # After lots of output
-den> ls -la
+❯ ls -la
 total 48
 drwxr-xr-x  12 user  staff   384 Nov  9 10:30 .
 drwxr-xr-x   8 user  staff   256 Nov  8 15:22 ..
 [... many more lines ...]
 
-den> git status
+❯ git status
 # More output
 
 # Press Ctrl+L - screen clears and you get fresh prompt
-den> _
+❯ _
 ```
 
 **Use case:** Keep your terminal clean while working without losing your command history.
@@ -267,7 +267,7 @@ cd /u/l/s<TAB>
 
 ```bash
 # Instead of pressing Up repeatedly, type part of the command
-den> docker<Up>
+❯ docker<Up>
 # Instantly shows matching docker commands
 ```
 
@@ -291,7 +291,7 @@ ls .<TAB>
 
 ```bash
 # Find commands by their flags
-den> --verbose<Up>
+❯ --verbose<Up>
 # Shows all commands you ran with --verbose
 ```
 
@@ -347,11 +347,11 @@ vim sr<TAB>  → vim src/
 
 ```bash
 # Find that complex docker command
-den> docker run<Up>
+❯ docker run<Up>
 # Cycle through previous docker run commands
 
 # Find by specific flag
-den> --name myapp<Up>
+❯ --name myapp<Up>
 # Shows commands with --name myapp
 ```
 
@@ -400,7 +400,7 @@ cd /u/l/s/f/t/d/c<TAB>
 
 ```bash
 # You remember running a curl command with specific headers
-den> Content-Type<Up>
+❯ Content-Type<Up>
 # Shows: curl -H "Content-Type: application/json"
 ```
 

@@ -326,7 +326,7 @@ Use arrow keys to search history by substring:
 
 ## Built-in Commands
 
-Den includes 54 built-in commands. See [BUILTINS.md](./BUILTINS.md) for complete reference.
+Den includes 58 built-in commands. See [BUILTINS.md](./BUILTINS.md) for complete reference.
 
 ### Core Builtins
 
@@ -467,7 +467,7 @@ Den uses JSONC configuration at `~/.den/config.jsonc`:
 ```jsonc
 {
   "prompt": {
-    "format": "den> ",
+    "format": "❯ ",
     "showGit": true,
     "showTime": false
   },

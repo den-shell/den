@@ -41,7 +41,7 @@ Jump between words instead of moving character-by-character. Dramatically speeds
 Den treats whitespace as word boundaries. Navigation jumps to the start of the previous/next word.
 
 ```bash
-den> git commit -m "Add new feature"
+❯ git commit -m "Add new feature"
      ^   ^      ^  ^   ^   ^
      word boundaries
 ```
@@ -51,34 +51,34 @@ den> git commit -m "Add new feature"
 #### Example 1: Navigate Backward
 
 ```bash
-den> git commit -m "fix authentication bug"
+❯ git commit -m "fix authentication bug"
                                           ^cursor at end
 
 # Press Ctrl+Left once
-den> git commit -m "fix authentication bug"
+❯ git commit -m "fix authentication bug"
                                ^jumped to "bug"
 
 # Press Ctrl+Left again
-den> git commit -m "fix authentication bug"
+❯ git commit -m "fix authentication bug"
                        ^jumped to "authentication"
 
 # Press Ctrl+Left again
-den> git commit -m "fix authentication bug"
+❯ git commit -m "fix authentication bug"
                    ^jumped to "fix"
 ```
 
 #### Example 2: Navigate Forward
 
 ```bash
-den> git commit -m "update dependencies"
+❯ git commit -m "update dependencies"
      ^cursor at start
 
 # Press Ctrl+Right once
-den> git commit -m "update dependencies"
+❯ git commit -m "update dependencies"
          ^jumped to "commit"
 
 # Press Ctrl+Right again
-den> git commit -m "update dependencies"
+❯ git commit -m "update dependencies"
                 ^jumped to "-m"
 ```
 
@@ -86,20 +86,20 @@ den> git commit -m "update dependencies"
 
 ```bash
 # Oops, wrong command in the middle
-den> git commit -m "fix bug in authentication"
+❯ git commit -m "fix bug in authentication"
                                              ^cursor here
 
 # Jump back to "commit"
 # Ctrl+Left, Ctrl+Left, Ctrl+Left, Ctrl+Left
-den> git commit -m "fix bug in authentication"
+❯ git commit -m "fix bug in authentication"
          ^
 
 # Delete "commit" (Ctrl+W)
-den> git -m "fix bug in authentication"
+❯ git -m "fix bug in authentication"
          ^
 
 # Type "push"
-den> git push -m "fix bug in authentication"
+❯ git push -m "fix bug in authentication"
               ^
 ```
 
@@ -118,15 +118,15 @@ den> git push -m "fix bug in authentication"
 Deletes from cursor position back to the start of the current/previous word.
 
 ```bash
-den> git commit --amend
+❯ git commit --amend
                        ^cursor here
 
 # Press Ctrl+W
-den> git commit
+❯ git commit
                 ^deleted "--amend"
 
 # Press Ctrl+W again
-den> git
+❯ git
          ^deleted "commit"
 ```
 
@@ -137,15 +137,15 @@ den> git
 Deletes from cursor position forward to the end of the next word.
 
 ```bash
-den> git commit -m "fix typo error in function"
+❯ git commit -m "fix typo error in function"
                        ^cursor here
 
 # Press Alt+D
-den> git commit -m "fix  error in function"
+❯ git commit -m "fix  error in function"
                        ^deleted "typo "
 
 # Press Alt+D again
-den> git commit -m "fix  in function"
+❯ git commit -m "fix  in function"
                        ^deleted "error "
 ```
 
@@ -155,15 +155,15 @@ den> git commit -m "fix  in function"
 
 ```bash
 # Original command
-den> echo one two three four five six
+❯ echo one two three four five six
               ^cursor on "two"
 
 # Delete "two" (Alt+D)
-den> echo one  three four five six
+❯ echo one  three four five six
               ^
 
 # Delete "one " (Ctrl+W)
-den> echo  three four five six
+❯ echo  three four five six
           ^
 
 # Result: Removed "one two" efficiently
@@ -200,22 +200,22 @@ Ctrl+T swaps the character before the cursor with the character at the cursor. P
 #### Example 1: Fix "teh" → "the"
 
 ```bash
-den> echo teh world
+❯ echo teh world
           ^h cursor after 'h'
 
 # Press Ctrl+T
-den> echo the world
+❯ echo the world
          ^e cursor moved forward
 ```
 
 #### Example 2: Fix at End of Line
 
 ```bash
-den> echo hello wordl
+❯ echo hello wordl
                      ^cursor at end
 
 # Press Ctrl+T (swaps 'd' and 'l')
-den> echo hello world
+❯ echo hello world
                      ^fixed!
 ```
 
@@ -223,20 +223,20 @@ den> echo hello world
 
 ```bash
 # Multiple typos
-den> echo hte owrld
+❯ echo hte owrld
           ^cursor after 't'
 
 # Press Ctrl+T
-den> echo the owrld
+❯ echo the owrld
          ^fixed "hte" → "the"
 
 # Move to 'r' position
 # Ctrl+Right, Ctrl+Right, Right, Right
-den> echo the owrld
+❯ echo the owrld
               ^cursor after 'r'
 
 # Press Ctrl+T
-den> echo the world
+❯ echo the world
              ^fixed "owrld" → "world"
 ```
 
@@ -280,25 +280,25 @@ Clears the terminal screen and redraws the prompt with your current command inta
 
 ```bash
 # After running many commands
-den> ls -la
+❯ ls -la
 total 128
 drwxr-xr-x  15 user  staff   480 Nov  9 10:30 .
 drwxr-xr-x  20 user  staff   640 Nov  8 15:22 ..
 -rw-r--r--   1 user  staff  1234 Nov  9 09:15 file1.txt
 [... 50 more lines of output ...]
 
-den> git status
+❯ git status
 On branch main
 Your branch is up to date with 'origin/main'.
 [... more output ...]
 
-den> git commit -m "work in progress"
+❯ git commit -m "work in progress"
                                ^typing this
 
 # Press Ctrl+L - screen clears instantly
 
 # New clean screen
-den> git commit -m "work in progress"
+❯ git commit -m "work in progress"
                                ^cursor position preserved
 ```
 
@@ -368,7 +368,7 @@ Search backwards through command history as you type. Just like bash/zsh.
 (reverse-i-search)`dock': docker run -d --name web nginx
 
 # Press Enter to use this command
-den> docker run -d --name web nginx
+❯ docker run -d --name web nginx
 ```
 
 ### Search Features
@@ -473,21 +473,21 @@ den> docker run -d --name web nginx
 
 ```bash
 # You typed this (wrong command in middle)
-den> git status && git pull && git commit -m "test"
+❯ git status && git pull && git commit -m "test"
                                    ^oops, meant "push"
 
 # Jump back to "commit"
 # Ctrl+Left (3 times)
-den> git status && git pull && git commit -m "test"
+❯ git status && git pull && git commit -m "test"
                                    ^
 
 # Delete "commit"
 # Ctrl+W
-den> git status && git pull && git  -m "test"
+❯ git status && git pull && git  -m "test"
                                    ^
 
 # Type "push"
-den> git status && git pull && git push -m "test"
+❯ git status && git pull && git push -m "test"
                                         ^
 # Fixed in seconds
 ```
@@ -496,17 +496,17 @@ den> git status && git pull && git push -m "test"
 
 ```bash
 # Started with this
-den> docker run -d --name web --port 8080 nginx extra stuff here
+❯ docker run -d --name web --port 8080 nginx extra stuff here
                                                  ^delete this
 
 # Jump to "extra"
 # Ctrl+Left (3 times)
-den> docker run -d --name web --port 8080 nginx extra stuff here
+❯ docker run -d --name web --port 8080 nginx extra stuff here
                                                 ^
 
 # Delete to end of line
 # Ctrl+K
-den> docker run -d --name web --port 8080 nginx
+❯ docker run -d --name web --port 8080 nginx
                                                 ^
 ```
 
@@ -514,15 +514,15 @@ den> docker run -d --name web --port 8080 nginx
 
 ```bash
 # Fix typo then search for similar command
-den> git comit -m "fix bug"
+❯ git comit -m "fix bug"
          ^typo here
 
 # Navigate to typo: Ctrl+Left, Ctrl+Left, Right, Right, Right, Right
-den> git comit -m "fix bug"
+❯ git comit -m "fix bug"
             ^
 
 # Fix it: Ctrl+T
-den> git commit -m "fix bug"
+❯ git commit -m "fix bug"
              ^
 
 # Clear line and search for similar: Ctrl+U, Ctrl+R
@@ -535,16 +535,16 @@ den> git commit -m "fix bug"
 
 ```bash
 # Start typing
-den> docker run
+❯ docker run
 
 # Realize you need to check something - clear screen
 # Ctrl+L
 
 # Clean screen, command preserved
-den> docker run
+❯ docker run
 
 # Continue building command with word navigation
-den> docker run -d --name myapp -p 8080:80
+❯ docker run -d --name myapp -p 8080:80
                    ^use Ctrl+Left/Right to navigate
                    ^use Alt+D to delete mistakes
                    ^use Ctrl+T to fix typos

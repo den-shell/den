@@ -136,3 +136,17 @@ WebAssembly-targeting language (e.g. `zig build-exe -target wasm32-freestanding`
 you want to call.
 
 See [PLUGIN_DEVELOPMENT.md](./PLUGIN_DEVELOPMENT.md) for the native plugin API.
+
+## Language Server
+
+Den ships a Language Server Protocol (LSP) implementation for editor integration —
+diagnostics, hover, and completion for shell scripts:
+
+```sh
+den --lsp        # serve LSP over stdio
+```
+
+Point your editor's LSP client at `den --lsp` for the `shellscript` language to get
+in-editor completion and diagnostics backed by Den's own parser and completion
+engine. This is the same engine documented in [Tab Completion](./TAB_COMPLETION.md)
+and [Autocompletion](./AUTOCOMPLETION.md), exposed over LSP.

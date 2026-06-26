@@ -10,13 +10,11 @@ After building Den, start it interactively:
 ./zig-out/bin/den
 ```
 
-You'll see the welcome message:
+You'll get a prompt (the default is a two-line prompt ending in `❯`):
 
 ```
-Den shell initialized!
-Type 'exit' to quit or Ctrl+D to exit.
-
-den>
+~/projects
+❯
 ```
 
 ## Basic Commands
@@ -24,11 +22,11 @@ den>
 ### Running External Commands
 
 ```bash
-den> ls -la
+❯ ls -la
 drwxr-xr-x  15 user  staff   480 Oct 25 12:00 .
 -rw-r--r--   1 user  staff  1234 Oct 25 12:00 README.md
 
-den> git status
+❯ git status
 On branch main
 nothing to commit, working tree clean
 ```
@@ -38,11 +36,11 @@ nothing to commit, working tree clean
 Combine commands with pipes:
 
 ```bash
-den> ls -la | grep zig
+❯ ls -la | grep zig
 drwxr-xr-x  15 user  staff   480 Oct 25 12:00 zig-out
 -rw-r--r--   1 user  staff  1234 Oct 25 12:00 build.zig
 
-den> cat README.md | head -5
+❯ cat README.md | head -5
 # Den Shell
 A modern shell written in Zig.
 ```
@@ -50,23 +48,23 @@ A modern shell written in Zig.
 ### Environment Variables
 
 ```bash
-den> export MY_VAR="Hello, World!"
-den> echo $MY_VAR
+❯ export MY_VAR="Hello, World!"
+❯ echo $MY_VAR
 Hello, World!
 
-den> export PATH="$HOME/bin:$PATH"
-den> echo $PATH
+❯ export PATH="$HOME/bin:$PATH"
+❯ echo $PATH
 /Users/user/bin:/usr/local/bin:/usr/bin:/bin
 ```
 
 ### Command Substitution
 
 ```bash
-den> echo "Today is $(date)"
+❯ echo "Today is $(date)"
 Today is Mon Oct 25 12:00:00 PDT 2024
 
-den> mkdir "backup-$(date +%Y%m%d)"
-den> ls
+❯ mkdir "backup-$(date +%Y%m%d)"
+❯ ls
 backup-20241025
 ```
 
@@ -75,34 +73,34 @@ backup-20241025
 ### Changing Directories
 
 ```bash
-den> cd /tmp
-den> pwd
+❯ cd /tmp
+❯ pwd
 /tmp
 
-den> cd -
+❯ cd -
 /home/user
 
-den> cd ~/projects
-den> pwd
+❯ cd ~/projects
+❯ pwd
 /home/user/projects
 ```
 
 ### Directory Stack
 
 ```bash
-den> pushd /var/log
+❯ pushd /var/log
 /var/log ~
 
-den> pushd /etc
+❯ pushd /etc
 /etc /var/log ~
 
-den> dirs
+❯ dirs
 /etc /var/log ~
 
-den> popd
+❯ popd
 /var/log ~
 
-den> popd
+❯ popd
 ~
 ```
 
@@ -111,19 +109,19 @@ den> popd
 ### Background Jobs
 
 ```bash
-den> sleep 30 &
+❯ sleep 30 &
 [1] 12345
 
-den> jobs
+❯ jobs
 [1]+ Running    sleep 30 &
 
-den> fg %1
+❯ fg %1
 # (brings sleep to foreground)
 # Press Ctrl+Z to suspend
 
 [1]+ Stopped    sleep 30
 
-den> bg %1
+❯ bg %1
 [1]+ Running    sleep 30 &
 ```
 
@@ -132,10 +130,10 @@ den> bg %1
 ### Running a Script
 
 ```bash
-den> ./script.sh
+❯ ./script.sh
 # Runs the script
 
-den> den script.sh
+❯ den script.sh
 # Also runs the script
 ```
 
@@ -154,8 +152,8 @@ echo "Today: $(date)"
 Run it:
 
 ```bash
-den> chmod +x hello.sh
-den> ./hello.sh
+❯ chmod +x hello.sh
+❯ ./hello.sh
 Hello from Den!
 Current directory: /home/user
 Today: Mon Oct 25 12:00:00 PDT 2024
@@ -192,11 +190,11 @@ alias gl='git log --oneline'
 Den supports intelligent tab completion:
 
 ```bash
-den> cd ~/pro<TAB>
-den> cd ~/projects/
+❯ cd ~/pro<TAB>
+❯ cd ~/projects/
 
-den> git sta<TAB>
-den> git status
+❯ git sta<TAB>
+❯ git status
 ```
 
 ## History
@@ -208,7 +206,7 @@ Navigate previous commands:
 - `history` - View all history
 
 ```bash
-den> history
+❯ history
     1  ls -la
     2  cd /tmp
     3  echo "Hello"
@@ -234,14 +232,14 @@ den> history
 List all built-in commands:
 
 ```bash
-den> help
+❯ help
 ```
 
 Get help for a specific command:
 
 ```bash
-den> help cd
-den> help export
+❯ help cd
+❯ help export
 ```
 
 ## Next Steps
@@ -249,4 +247,4 @@ den> help export
 - [Configuration](/guide/configuration) - Customize Den
 - [Custom Commands](/guide/custom-commands) - Create aliases and scripts
 - [Features](/features/overview) - Explore all capabilities
-- [Builtins Reference](/builtins/reference) - All 54 built-in commands
+- [Builtins Reference](/builtins/reference) - All 58 built-in commands

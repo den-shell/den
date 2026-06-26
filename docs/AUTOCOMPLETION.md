@@ -205,7 +205,7 @@ If you cannot write to system directories, use user-specific installation paths 
 
 Potential improvements for the completion system:
 
-1. **Built-in command completion**: Include Den's 54 built-in commands in completions
+1. **Built-in command completion**: Include Den's 58 built-in commands in completions
 2. **Alias expansion**: Complete custom aliases
 3. **History-based suggestions**: Use command history for intelligent suggestions
 4. **Plugin-aware completion**: Complete plugin-specific commands

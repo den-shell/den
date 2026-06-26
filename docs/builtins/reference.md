@@ -1,6 +1,6 @@
 # Built-in Commands Reference
 
-Den includes 54 built-in commands. This is the complete reference.
+Den includes 58 built-in commands. This is the complete reference.
 
 ## Core Commands
 

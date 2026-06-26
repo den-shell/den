@@ -211,7 +211,7 @@ cd /tmp/test_completion
 
 # Test in den shell
 ./zig-out/bin/den
-den> cd u/s<TAB>  # Should expand to unique_dir/subdir/
+❯ cd u/s<TAB>  # Should expand to unique_dir/subdir/
 ```
 
 ## See Also

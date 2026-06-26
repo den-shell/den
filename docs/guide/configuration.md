@@ -16,7 +16,7 @@ Den reads configuration from the following locations (in order):
 # ~/.denrc
 
 # Set custom prompt
-export PS1='den> '
+export PS1='❯ '
 
 # Configure history
 export HISTSIZE=10000
@@ -44,7 +44,7 @@ Den supports the following environment variables:
 
 | Variable | Description | Default |
 |----------|-------------|---------|
-| `PS1` | Primary prompt string | `den> ` |
+| `PS1` | Primary prompt string | `❯ ` |
 | `PS2` | Continuation prompt | `> ` |
 | `HOME` | Home directory | From system |
 | `PATH` | Command search path | From system |
