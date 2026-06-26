@@ -101,30 +101,64 @@ benchmark_scripting() {
     run_bench "Function call" 50 "echo 'f() { echo hi; }; f' | $DEN"
 }
 
-# Benchmark: Comparison with other shells
+# Benchmark: Comparison with other shells.
+# Every number printed here is measured on THIS machine — nothing is hardcoded.
 benchmark_comparison() {
-    echo "--- Shell Comparison ---"
-
-    local shells=("$DEN" "bash" "zsh" "sh")
-    local test_cmd="echo hello"
-
-    echo "Command: $test_cmd"
+    echo "--- Shell Comparison (measured on $(uname -srm)) ---"
     echo ""
 
-    for shell in "${shells[@]}"; do
-        if command -v "$(echo $shell | awk '{print $1}')" >/dev/null 2>&1; then
-            local name=$(basename "$shell")
+    # Build the list of shells actually present.
+    local shells=("$DEN")
+    for s in bash zsh fish; do command -v "$s" >/dev/null 2>&1 && shells+=("$(command -v "$s")"); done
 
-            local start=$(date +%s.%N)
-            for ((i=0; i<100; i++)); do
-                echo "$test_cmd" | $shell > /dev/null 2>&1
-            done
-            local end=$(date +%s.%N)
-            local avg=$(echo "scale=3; ($end - $start) / 100 * 1000" | bc)
-
-            printf "  %-10s: %s ms/iteration\n" "$name" "$avg"
+    # Portable helpers.
+    fsize() { stat -f%z "$1" 2>/dev/null || stat -c%s "$1" 2>/dev/null; }
+    deps_count() {
+        if command -v otool >/dev/null 2>&1; then otool -L "$1" 2>/dev/null | tail -n +2 | grep -c .
+        elif command -v ldd >/dev/null 2>&1; then ldd "$1" 2>/dev/null | grep -c '=>'
+        else echo "?"; fi
+    }
+    # Idle RSS (clean config) of a shell kept alive via a held-open FIFO.
+    idle_rss_mb() {
+        local sh="$1" fifo; fifo="$(mktemp -u)"; mkfifo "$fifo"
+        exec 9<>"$fifo"
+        case "$(basename "$sh")" in
+            den)  "$sh" --norc <"$fifo" >/dev/null 2>&1 & ;;
+            bash) "$sh" --norc --noprofile -i <"$fifo" >/dev/null 2>&1 & ;;
+            zsh)  "$sh" -f -i <"$fifo" >/dev/null 2>&1 & ;;
+            *)    "$sh" <"$fifo" >/dev/null 2>&1 & ;;
+        esac
+        local pid=$! kb=""; sleep 1
+        kb=$(ps -o rss= -p "$pid" 2>/dev/null | tr -d ' ')
+        echo "exit" >&9; kill "$pid" 2>/dev/null; exec 9>&-; rm -f "$fifo"
+        [ -n "$kb" ] && awk "BEGIN{printf \"%.1f\", $kb/1024}" || echo "n/a"
+    }
+    # Mean startup ms for `<shell> -c true` (hyperfine if available, else a loop).
+    startup_ms() {
+        local sh="$1"
+        if command -v hyperfine >/dev/null 2>&1; then
+            hyperfine -N --warmup 20 -r 200 --time-unit millisecond "$sh -c true" 2>/dev/null \
+                | awk '/Time \(mean/ {print $5; exit}'
+        else
+            local n=200 start end
+            start=$(date +%s.%N); for ((i=0;i<n;i++)); do "$sh" -c true >/dev/null 2>&1; done; end=$(date +%s.%N)
+            awk "BEGIN{printf \"%.2f\", ($end-$start)/$n*1000}"
         fi
+    }
+
+    printf "  %-8s %-12s %-12s %-12s %-6s\n" "shell" "startup(ms)" "idle(MB)" "size(MB)" "deps"
+    printf "  %-8s %-12s %-12s %-12s %-6s\n" "-----" "-----------" "--------" "--------" "----"
+    for sh in "${shells[@]}"; do
+        local name; name=$(basename "$sh")
+        local su; su=$(startup_ms "$sh")
+        local mem; mem=$(idle_rss_mb "$sh")
+        local sz; sz=$(awk "BEGIN{printf \"%.2f\", $(fsize "$sh")/1000000}")
+        local dep; dep=$(deps_count "$sh")
+        printf "  %-8s %-12s %-12s %-12s %-6s\n" "$name" "$su" "$mem" "$sz" "$dep"
     done
+    echo ""
+    echo "  Note: numbers are machine/OS/version specific; startup is the bare"
+    echo "  interpreter cost (no rc files). See docs/BENCHMARKS.md for methodology."
     echo ""
 }
 
