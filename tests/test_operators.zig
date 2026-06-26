@@ -65,6 +65,140 @@ test "Operator: && chain stops at failure" {
 }
 
 // ============================================================================
+// Bare variable assignment as a segment of an AND-OR list
+// Regression: a bare assignment (no command word) as the first segment of an
+// && / || list was misparsed as an empty command ("error: empty command"),
+// and even when it parsed the value was expanded before the assignment ran.
+// ============================================================================
+
+test "Operator: bare assignment as first segment of &&" {
+    const allocator = std.testing.allocator;
+
+    var fixture = try test_utils.ShellFixture.init(allocator);
+    defer fixture.deinit();
+
+    const result = try fixture.exec("V=x && echo $V");
+    defer allocator.free(result.stdout);
+    defer allocator.free(result.stderr);
+
+    try test_utils.TestAssert.expectEqual(@as(u8, 0), result.exit_code);
+    try test_utils.TestAssert.expectContains(result.stdout, "x");
+    // The bug surfaced as a parse error printed to stderr.
+    try test_utils.TestAssert.expectTrue(std.mem.indexOf(u8, result.stderr, "empty command") == null);
+}
+
+test "Operator: assignment visible across && segments" {
+    const allocator = std.testing.allocator;
+
+    var fixture = try test_utils.ShellFixture.init(allocator);
+    defer fixture.deinit();
+
+    // The whole chain must NOT be expanded up front: $V has to reflect the
+    // assignment from the earlier segment.
+    const result = try fixture.exec("true && V=a && echo got=$V");
+    defer allocator.free(result.stdout);
+    defer allocator.free(result.stderr);
+
+    try test_utils.TestAssert.expectEqual(@as(u8, 0), result.exit_code);
+    try test_utils.TestAssert.expectContains(result.stdout, "got=a");
+}
+
+test "Operator: bare assignment as first segment of ||" {
+    const allocator = std.testing.allocator;
+
+    var fixture = try test_utils.ShellFixture.init(allocator);
+    defer fixture.deinit();
+
+    // `V=y` succeeds, so the || short-circuits and `echo wrong` is skipped,
+    // but V must still be set for the trailing command.
+    const result = try fixture.exec("V=y || echo wrong; echo got=$V");
+    defer allocator.free(result.stdout);
+    defer allocator.free(result.stderr);
+
+    try test_utils.TestAssert.expectEqual(@as(u8, 0), result.exit_code);
+    try test_utils.TestAssert.expectContains(result.stdout, "got=y");
+    try test_utils.TestAssert.expectTrue(std.mem.indexOf(u8, result.stdout, "wrong") == null);
+}
+
+test "Operator: multiple leading assignments before &&" {
+    const allocator = std.testing.allocator;
+
+    var fixture = try test_utils.ShellFixture.init(allocator);
+    defer fixture.deinit();
+
+    const result = try fixture.exec("A=1 B=2 && echo $A $B");
+    defer allocator.free(result.stdout);
+    defer allocator.free(result.stderr);
+
+    try test_utils.TestAssert.expectEqual(@as(u8, 0), result.exit_code);
+    try test_utils.TestAssert.expectContains(result.stdout, "1 2");
+}
+
+test "Operator: && / || not split inside backticks" {
+    const allocator = std.testing.allocator;
+
+    var fixture = try test_utils.ShellFixture.init(allocator);
+    defer fixture.deinit();
+
+    // The || lives inside backtick command substitution, so it must not be a
+    // split point — the whole thing is one command whose output is `recovered`.
+    const result = try fixture.exec("echo `false || echo recovered`");
+    defer allocator.free(result.stdout);
+    defer allocator.free(result.stderr);
+
+    try test_utils.TestAssert.expectEqual(@as(u8, 0), result.exit_code);
+    try test_utils.TestAssert.expectContains(result.stdout, "recovered");
+    // The bug split on `||`, leaving a stray backtick in the output.
+    try test_utils.TestAssert.expectTrue(std.mem.indexOf(u8, result.stdout, "`") == null);
+}
+
+test "Operator: && not split inside quotes" {
+    const allocator = std.testing.allocator;
+
+    var fixture = try test_utils.ShellFixture.init(allocator);
+    defer fixture.deinit();
+
+    const result = try fixture.exec("echo 'a && b'");
+    defer allocator.free(result.stdout);
+    defer allocator.free(result.stderr);
+
+    try test_utils.TestAssert.expectEqual(@as(u8, 0), result.exit_code);
+    try test_utils.TestAssert.expectContains(result.stdout, "a && b");
+}
+
+test "Operator: mixed semicolon and && list" {
+    const allocator = std.testing.allocator;
+
+    var fixture = try test_utils.ShellFixture.init(allocator);
+    defer fixture.deinit();
+
+    // `;` separates two AND-OR lists; assignments stay visible across both.
+    const result = try fixture.exec("A=1 && echo a$A; B=2 && echo b$B");
+    defer allocator.free(result.stdout);
+    defer allocator.free(result.stderr);
+
+    try test_utils.TestAssert.expectEqual(@as(u8, 0), result.exit_code);
+    try test_utils.TestAssert.expectContains(result.stdout, "a1");
+    try test_utils.TestAssert.expectContains(result.stdout, "b2");
+}
+
+test "Operator: && left-associative with ||" {
+    const allocator = std.testing.allocator;
+
+    var fixture = try test_utils.ShellFixture.init(allocator);
+    defer fixture.deinit();
+
+    // false && X || Y  ->  X skipped, Y runs (matches bash).
+    const result = try fixture.exec("false && echo X || echo Y");
+    defer allocator.free(result.stdout);
+    defer allocator.free(result.stderr);
+
+    try test_utils.TestAssert.expectEqual(@as(u8, 0), result.exit_code);
+    try test_utils.TestAssert.expectContains(result.stdout, "Y");
+    try test_utils.TestAssert.expectTrue(std.mem.indexOf(u8, result.stdout, "X") == null);
+}
+
+// ============================================================================
 // Logical OR Operator (||)
 // ============================================================================
 
