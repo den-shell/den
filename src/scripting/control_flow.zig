@@ -1285,13 +1285,24 @@ pub const ControlFlowParser = struct {
 
         // Parse: for VAR in ITEM1 ITEM2 ITEM3
         const parts_start = 4; // After "for "
-        const in_pos = std.mem.indexOf(u8, first_line[parts_start..], " in ") orelse return error.InvalidFor;
+        var variable: []const u8 = undefined;
+        var items_str: []const u8 = undefined;
+        if (std.mem.indexOf(u8, first_line[parts_start..], " in ")) |in_pos| {
+            variable = try self.allocator.dupe(u8, std.mem.trim(u8, first_line[parts_start..][0..in_pos], &std.ascii.whitespace));
 
-        const variable = try self.allocator.dupe(u8, std.mem.trim(u8, first_line[parts_start..][0..in_pos], &std.ascii.whitespace));
-
-        const items_start = parts_start + in_pos + 4; // After " in "
-        const items_end = std.mem.indexOf(u8, first_line[items_start..], ";") orelse first_line[items_start..].len;
-        const items_str = std.mem.trim(u8, first_line[items_start..][0..items_end], &std.ascii.whitespace);
+            const items_start = parts_start + in_pos + 4; // After " in "
+            const items_end = std.mem.indexOf(u8, first_line[items_start..], ";") orelse first_line[items_start..].len;
+            items_str = std.mem.trim(u8, first_line[items_start..][0..items_end], &std.ascii.whitespace);
+        } else {
+            // POSIX `for VAR; do ...` / `for VAR` — iterate the positional
+            // parameters (equivalent to `for VAR in "$@"`).
+            const np = first_line[parts_start..];
+            var ve: usize = 0;
+            while (ve < np.len and np[ve] != ' ' and np[ve] != '\t' and np[ve] != ';') ve += 1;
+            if (ve == 0) return error.InvalidFor;
+            variable = try self.allocator.dupe(u8, np[0..ve]);
+            items_str = "$@";
+        }
 
         var items_buffer: [100][]const u8 = undefined;
         var items_count: usize = 0;
