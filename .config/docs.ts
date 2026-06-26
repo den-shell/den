@@ -7,15 +7,14 @@ const config: BunPressConfig = {
 
   nav: [
     { text: 'Guide', link: '/intro' },
-    { text: 'Features', link: '/FEATURES' },
+    { text: 'Features', link: '/features/overview' },
     { text: 'Builtins', link: '/BUILTINS' },
     { text: 'Migration', link: '/BASH_MIGRATION' },
     { text: 'GitHub', link: 'https://github.com/stacksjs/den' },
   ],
 
-  // A single comprehensive sidebar (applies to every page) so every feature is
-  // reachable from the docs navigation. Every link below maps to a real file
-  // under ./docs.
+  // One comprehensive sidebar (applies to every page) so every feature is
+  // reachable from the docs navigation. Every link maps to a real file under ./docs.
   sidebar: {
     '/': [
       {
@@ -32,11 +31,14 @@ const config: BunPressConfig = {
       {
         text: 'Core Features',
         items: [
-          { text: 'Features Overview', link: '/FEATURES' },
+          { text: 'Overview', link: '/features/overview' },
+          { text: 'Pipelines', link: '/features/pipelines' },
+          { text: 'Redirections', link: '/features/redirections' },
+          { text: 'Job Control', link: '/features/job-control' },
+          { text: 'Expansions', link: '/features/expansions' },
           { text: 'Scripting', link: '/SCRIPTING' },
           { text: 'Builtins Reference', link: '/BUILTINS' },
           { text: 'Themes & Prompt', link: '/THEMES' },
-          { text: 'Advanced Usage', link: '/ADVANCED' },
         ],
       },
       {
@@ -54,8 +56,18 @@ const config: BunPressConfig = {
         text: 'Extending Den',
         items: [
           { text: 'Extended Features', link: '/EXTENDED_FEATURES' },
-          { text: 'Plugin Development', link: '/PLUGIN_DEVELOPMENT' },
           { text: 'Custom Commands', link: '/guide/custom-commands' },
+          { text: 'Custom Builtins & Plugins', link: '/advanced/custom-builtins' },
+          { text: 'Plugin Development', link: '/PLUGIN_DEVELOPMENT' },
+        ],
+      },
+      {
+        text: 'Advanced',
+        items: [
+          { text: 'Advanced Usage', link: '/ADVANCED' },
+          { text: 'Advanced Configuration', link: '/advanced/configuration' },
+          { text: 'Shell Integration', link: '/advanced/shell-integration' },
+          { text: 'Performance Tuning', link: '/advanced/performance' },
         ],
       },
       {
@@ -68,7 +80,7 @@ const config: BunPressConfig = {
         ],
       },
       {
-        text: 'Performance',
+        text: 'Performance & Internals',
         items: [
           { text: 'Benchmarks', link: '/BENCHMARKS' },
           { text: 'Algorithms', link: '/ALGORITHMS' },

@@ -2,6 +2,8 @@
 
 Den provides a comprehensive set of shell features for interactive use and scripting.
 
+**Focused guides:** [Pipelines](./pipelines.md) · [Redirections](./redirections.md) · [Job Control](./job-control.md) · [Expansions](./expansions.md) · [Scripting](../SCRIPTING.md) · [Builtins](../BUILTINS.md)
+
 ## Core Shell Capabilities
 
 ### Pipelines
