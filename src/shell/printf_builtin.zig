@@ -72,6 +72,8 @@ pub fn builtinPrintf(shell: *Shell, cmd: *types.ParsedCommand) !void {
                 var j = i + 1;
                 var left_justify = false;
                 var zero_pad = false;
+                var force_sign = false;
+                var space_sign = false;
                 var width: usize = 0;
                 var precision: usize = 6; // Default precision for floats
                 var has_precision = false;
@@ -84,12 +86,20 @@ pub fn builtinPrintf(shell: *Shell, cmd: *types.ParsedCommand) !void {
                     } else if (format[j] == '0') {
                         zero_pad = true;
                         j += 1;
-                    } else if (format[j] == '+' or format[j] == ' ' or format[j] == '#') {
-                        j += 1; // Skip unsupported flags
+                    } else if (format[j] == '+') {
+                        force_sign = true;
+                        j += 1;
+                    } else if (format[j] == ' ') {
+                        space_sign = true;
+                        j += 1;
+                    } else if (format[j] == '#') {
+                        j += 1; // '#' alt-form not supported
                     } else {
                         break;
                     }
                 }
+                // '+' takes precedence over ' ' (C printf semantics).
+                const sign_prefix: u8 = if (force_sign) '+' else if (space_sign) ' ' else 0;
 
                 // Parse width - support * (take from next argument)
                 if (j < format.len and format[j] == '*') {
@@ -165,7 +175,7 @@ pub fn builtinPrintf(shell: *Shell, cmd: *types.ParsedCommand) !void {
                     if (arg_idx < cmd.args.len) {
                         const arg = cmd.args[arg_idx];
                         const num = parseIntArg(i64, arg);
-                        try printfInt(num, width, zero_pad, left_justify);
+                        try printfInt(num, width, zero_pad, left_justify, sign_prefix);
                         arg_idx += 1;
                         did_consume_arg = true;
                     }
@@ -225,7 +235,7 @@ pub fn builtinPrintf(shell: *Shell, cmd: *types.ParsedCommand) !void {
                     // Float format
                     if (arg_idx < cmd.args.len) {
                         const num = std.fmt.parseFloat(f64, cmd.args[arg_idx]) catch 0.0;
-                        try printfFloat(num, width, precision, left_justify);
+                        try printfFloat(num, width, precision, left_justify, sign_prefix);
                         arg_idx += 1;
                         did_consume_arg = true;
                     }
@@ -248,7 +258,7 @@ pub fn builtinPrintf(shell: *Shell, cmd: *types.ParsedCommand) !void {
                         if (abs_num != 0 and (abs_num < 0.0001 or abs_num >= std.math.pow(f64, 10.0, @floatFromInt(precision)))) {
                             try printfScientific(num, width, if (precision > 0) precision - 1 else 0, left_justify, spec == 'G');
                         } else {
-                            try printfFloat(num, width, precision, left_justify);
+                            try printfFloat(num, width, precision, left_justify, sign_prefix);
                         }
                         arg_idx += 1;
                         did_consume_arg = true;
@@ -456,35 +466,43 @@ pub fn builtinPrintf(shell: *Shell, cmd: *types.ParsedCommand) !void {
 }
 
 /// Helper for printf - format signed integer with width/padding
-pub fn printfInt(num: i64, width: usize, zero_pad: bool, left_justify: bool) !void {
+pub fn printfInt(num: i64, width: usize, zero_pad: bool, left_justify: bool, sign_prefix: u8) !void {
     var buf: [32]u8 = undefined;
-    const str = std.fmt.bufPrint(&buf, "{d}", .{num}) catch return;
-    if (width > 0 and str.len < width) {
-        const pad = width - str.len;
+    const raw = std.fmt.bufPrint(&buf, "{d}", .{num}) catch return;
+    // Split off the sign so width/zero-pad logic operates on the digits.
+    // For non-negative values, `sign_prefix` ('+' or ' ') applies the +/space flag.
+    var sign: u8 = 0;
+    var digits: []const u8 = raw;
+    if (num < 0) {
+        sign = '-';
+        digits = raw[1..];
+    } else if (sign_prefix != 0) {
+        sign = sign_prefix;
+    }
+    const total_len = digits.len + @as(usize, if (sign != 0) 1 else 0);
+    if (width > 0 and total_len < width) {
+        const pad = width - total_len;
         if (left_justify) {
-            try IO.print("{s}", .{str});
+            if (sign != 0) try IO.print("{c}", .{sign});
+            try IO.print("{s}", .{digits});
             var p: usize = 0;
             while (p < pad) : (p += 1) try IO.print(" ", .{});
         } else if (zero_pad) {
             // Zero-pad: place zeros after the sign but before the digits
-            // e.g., printf "%05d" -1 -> "-0001" (not "000-1")
-            if (num < 0) {
-                try IO.print("-", .{});
-                var p: usize = 0;
-                while (p < pad) : (p += 1) try IO.print("0", .{});
-                try IO.print("{s}", .{str[1..]}); // digits without the minus
-            } else {
-                var p: usize = 0;
-                while (p < pad) : (p += 1) try IO.print("0", .{});
-                try IO.print("{s}", .{str});
-            }
+            // e.g., printf "%05d" -1 -> "-0001", printf "%+05d" 1 -> "+0001"
+            if (sign != 0) try IO.print("{c}", .{sign});
+            var p: usize = 0;
+            while (p < pad) : (p += 1) try IO.print("0", .{});
+            try IO.print("{s}", .{digits});
         } else {
             var p: usize = 0;
             while (p < pad) : (p += 1) try IO.print(" ", .{});
-            try IO.print("{s}", .{str});
+            if (sign != 0) try IO.print("{c}", .{sign});
+            try IO.print("{s}", .{digits});
         }
     } else {
-        try IO.print("{s}", .{str});
+        if (sign != 0) try IO.print("{c}", .{sign});
+        try IO.print("{s}", .{digits});
     }
 }
 
@@ -519,10 +537,10 @@ pub fn printfUint(num: u64, width: usize, zero_pad: bool, left_justify: bool, ba
 }
 
 /// Helper for printf - format float with precision and width
-pub fn printfFloat(num: f64, width: usize, precision: usize, left_justify: bool) !void {
+pub fn printfFloat(num: f64, width: usize, precision: usize, left_justify: bool, sign_prefix: u8) !void {
     var buf: [64]u8 = undefined;
     // Zig doesn't support runtime precision, so use fixed cases
-    const str = switch (precision) {
+    const raw = switch (precision) {
         0 => std.fmt.bufPrint(&buf, "{d:.0}", .{num}) catch return,
         1 => std.fmt.bufPrint(&buf, "{d:.1}", .{num}) catch return,
         2 => std.fmt.bufPrint(&buf, "{d:.2}", .{num}) catch return,
@@ -532,19 +550,33 @@ pub fn printfFloat(num: f64, width: usize, precision: usize, left_justify: bool)
         else => std.fmt.bufPrint(&buf, "{d:.6}", .{num}) catch return,
     };
 
-    if (width > 0 and str.len < width) {
-        const pad = width - str.len;
+    // Apply the +/space flag to non-negative values, keeping the sign attached
+    // to the digits so width padding stays correct.
+    var sign: u8 = 0;
+    var digits: []const u8 = raw;
+    if (raw.len > 0 and raw[0] == '-') {
+        sign = '-';
+        digits = raw[1..];
+    } else if (sign_prefix != 0) {
+        sign = sign_prefix;
+    }
+    const total_len = digits.len + @as(usize, if (sign != 0) 1 else 0);
+    if (width > 0 and total_len < width) {
+        const pad = width - total_len;
         if (left_justify) {
-            try IO.print("{s}", .{str});
+            if (sign != 0) try IO.print("{c}", .{sign});
+            try IO.print("{s}", .{digits});
             var p: usize = 0;
             while (p < pad) : (p += 1) try IO.print(" ", .{});
         } else {
             var p: usize = 0;
             while (p < pad) : (p += 1) try IO.print(" ", .{});
-            try IO.print("{s}", .{str});
+            if (sign != 0) try IO.print("{c}", .{sign});
+            try IO.print("{s}", .{digits});
         }
     } else {
-        try IO.print("{s}", .{str});
+        if (sign != 0) try IO.print("{c}", .{sign});
+        try IO.print("{s}", .{digits});
     }
 }
 

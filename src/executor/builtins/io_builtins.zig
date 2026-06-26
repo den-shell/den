@@ -251,6 +251,8 @@ pub fn printf(command: *types.ParsedCommand) !i32 {
                 var j = i + 1;
                 var left_justify = false;
                 var zero_pad = false;
+                var force_sign = false;
+                var space_sign = false;
                 var width: usize = 0;
                 var precision: usize = 6;
                 var has_precision = false;
@@ -263,12 +265,20 @@ pub fn printf(command: *types.ParsedCommand) !i32 {
                     } else if (format[j] == '0') {
                         zero_pad = true;
                         j += 1;
-                    } else if (format[j] == '+' or format[j] == ' ' or format[j] == '#') {
+                    } else if (format[j] == '+') {
+                        force_sign = true;
+                        j += 1;
+                    } else if (format[j] == ' ') {
+                        space_sign = true;
+                        j += 1;
+                    } else if (format[j] == '#') {
                         j += 1;
                     } else {
                         break;
                     }
                 }
+                // '+' takes precedence over ' ' (C printf semantics).
+                const sign_prefix: u8 = if (force_sign) '+' else if (space_sign) ' ' else 0;
 
                 // Parse width
                 while (j < format.len and format[j] >= '0' and format[j] <= '9') {
@@ -324,7 +334,7 @@ pub fn printf(command: *types.ParsedCommand) !i32 {
                             @as(i64, arg[1])
                         else
                             std.fmt.parseInt(i64, arg, 10) catch 0;
-                        try printfInt(num, width, zero_pad, left_justify);
+                        try printfInt(num, width, zero_pad, left_justify, sign_prefix);
                         arg_idx += 1;
                     }
                     i = j + 1;
@@ -384,7 +394,7 @@ pub fn printf(command: *types.ParsedCommand) !i32 {
                 } else if (spec == 'f' or spec == 'F') {
                     if (arg_idx < command.args.len) {
                         const num = std.fmt.parseFloat(f64, command.args[arg_idx]) catch 0.0;
-                        try printfFloat(num, width, precision, left_justify);
+                        try printfFloat(num, width, precision, left_justify, sign_prefix);
                         arg_idx += 1;
                     }
                     i = j + 1;
@@ -486,23 +496,41 @@ pub fn printf(command: *types.ParsedCommand) !i32 {
     return 0;
 }
 
-fn printfInt(num: i64, width: usize, zero_pad: bool, left_justify: bool) !void {
+fn printfInt(num: i64, width: usize, zero_pad: bool, left_justify: bool, sign_prefix: u8) !void {
     var buf: [32]u8 = undefined;
-    const str = std.fmt.bufPrint(&buf, "{d}", .{num}) catch return;
-    if (width > 0 and str.len < width) {
-        const pad = width - str.len;
-        const pad_char: u8 = if (zero_pad and !left_justify) '0' else ' ';
+    const raw = std.fmt.bufPrint(&buf, "{d}", .{num}) catch return;
+    // Split off the sign so width/zero-pad operate on the digits. For
+    // non-negative values, `sign_prefix` ('+' or ' ') applies the +/space flag.
+    var sign: u8 = 0;
+    var digits: []const u8 = raw;
+    if (num < 0) {
+        sign = '-';
+        digits = raw[1..];
+    } else if (sign_prefix != 0) {
+        sign = sign_prefix;
+    }
+    const total_len = digits.len + @as(usize, if (sign != 0) 1 else 0);
+    if (width > 0 and total_len < width) {
+        const pad = width - total_len;
         if (left_justify) {
-            try IO.print("{s}", .{str});
+            if (sign != 0) try IO.print("{c}", .{sign});
+            try IO.print("{s}", .{digits});
             var p: usize = 0;
             while (p < pad) : (p += 1) try IO.print(" ", .{});
+        } else if (zero_pad) {
+            if (sign != 0) try IO.print("{c}", .{sign});
+            var p: usize = 0;
+            while (p < pad) : (p += 1) try IO.print("0", .{});
+            try IO.print("{s}", .{digits});
         } else {
             var p: usize = 0;
-            while (p < pad) : (p += 1) try IO.print("{c}", .{pad_char});
-            try IO.print("{s}", .{str});
+            while (p < pad) : (p += 1) try IO.print(" ", .{});
+            if (sign != 0) try IO.print("{c}", .{sign});
+            try IO.print("{s}", .{digits});
         }
     } else {
-        try IO.print("{s}", .{str});
+        if (sign != 0) try IO.print("{c}", .{sign});
+        try IO.print("{s}", .{digits});
     }
 }
 
@@ -542,10 +570,12 @@ fn printfUint(num: u64, width: usize, zero_pad: bool, left_justify: bool, base: 
 test "printfInt formatting" {
     // Just verify the function compiles and doesn't crash with edge cases
     // These write to stdout which we can't capture easily, but we verify no panic
-    try printfInt(0, 0, false, false);
-    try printfInt(-42, 0, false, false);
-    try printfInt(999999, 10, true, false);
-    try printfInt(5, 5, false, true);
+    try printfInt(0, 0, false, false, 0);
+    try printfInt(-42, 0, false, false, 0);
+    try printfInt(999999, 10, true, false, 0);
+    try printfInt(5, 5, false, true, 0);
+    try printfInt(5, 0, false, false, '+');
+    try printfInt(7, 6, true, false, '+');
 }
 
 test "printfUint formatting" {
@@ -557,9 +587,9 @@ test "printfUint formatting" {
     try printfUint(42, 10, true, false, 10, false);
 }
 
-fn printfFloat(num: f64, width: usize, precision: usize, left_justify: bool) !void {
+fn printfFloat(num: f64, width: usize, precision: usize, left_justify: bool, sign_prefix: u8) !void {
     var buf: [64]u8 = undefined;
-    const str = switch (precision) {
+    const raw = switch (precision) {
         0 => std.fmt.bufPrint(&buf, "{d:.0}", .{num}) catch return,
         1 => std.fmt.bufPrint(&buf, "{d:.1}", .{num}) catch return,
         2 => std.fmt.bufPrint(&buf, "{d:.2}", .{num}) catch return,
@@ -569,18 +599,30 @@ fn printfFloat(num: f64, width: usize, precision: usize, left_justify: bool) !vo
         else => std.fmt.bufPrint(&buf, "{d:.6}", .{num}) catch return,
     };
 
-    if (width > 0 and str.len < width) {
-        const pad = width - str.len;
+    var sign: u8 = 0;
+    var digits: []const u8 = raw;
+    if (raw.len > 0 and raw[0] == '-') {
+        sign = '-';
+        digits = raw[1..];
+    } else if (sign_prefix != 0) {
+        sign = sign_prefix;
+    }
+    const total_len = digits.len + @as(usize, if (sign != 0) 1 else 0);
+    if (width > 0 and total_len < width) {
+        const pad = width - total_len;
         if (left_justify) {
-            try IO.print("{s}", .{str});
+            if (sign != 0) try IO.print("{c}", .{sign});
+            try IO.print("{s}", .{digits});
             var p: usize = 0;
             while (p < pad) : (p += 1) try IO.print(" ", .{});
         } else {
             var p: usize = 0;
             while (p < pad) : (p += 1) try IO.print(" ", .{});
-            try IO.print("{s}", .{str});
+            if (sign != 0) try IO.print("{c}", .{sign});
+            try IO.print("{s}", .{digits});
         }
     } else {
-        try IO.print("{s}", .{str});
+        if (sign != 0) try IO.print("{c}", .{sign});
+        try IO.print("{s}", .{digits});
     }
 }
