@@ -3758,7 +3758,11 @@ pub const Shell = struct {
                 } else if (c == ')' and paren_depth > 0) {
                     paren_depth -= 1;
                     at_word_start = false;
-                } else if (c == '{' and at_word_start and (i + 1 >= input.len or input[i + 1] == ' ' or input[i + 1] == '\t' or input[i + 1] == '\n')) {
+                } else if (c == '{' and (at_word_start or (i > 0 and input[i - 1] == ')')) and (i + 1 >= input.len or input[i + 1] == ' ' or input[i + 1] == '\t' or input[i + 1] == '\n')) {
+                    // Brace-group opener at a word boundary (`{ …; }`) or a function
+                    // body brace right after `)` (`name(){ …; }`). The `)` case keeps
+                    // the body's semicolons out of the top-level split, so the whole
+                    // `f(){ echo hi; }` reaches the function-definition parser intact.
                     brace_depth += 1;
                     at_word_start = false;
                 } else if (c == '}' and brace_depth > 0 and at_word_start) {

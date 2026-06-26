@@ -995,3 +995,42 @@ test "scripting: source with multi-line quoted value works inside a chain" {
     try test_utils.TestAssert.expectContains(result.stdout, "DONE=line1 line2");
     try test_utils.TestAssert.expectTrue(std.mem.indexOf(u8, result.stderr, "command not found") == null);
 }
+
+// ----------------------------------------------------------------------------
+// Single-line function definitions
+//
+// Regression: `f(){ echo hi; }; f` was split at the body semicolon because the
+// top-level separator scanner didn't treat `{` right after `)` as a brace-group
+// opener, so the body's `;` counted as a top-level split and `}` ran as a
+// command ("den: }: command not found").
+// ----------------------------------------------------------------------------
+
+test "scripting: single-line function definition with body semicolon" {
+    const allocator = std.testing.allocator;
+
+    var fixture = try test_utils.DenShellFixture.init(allocator);
+    defer fixture.deinit();
+
+    const result = try fixture.execDirect("f(){ echo hi; }; f");
+    defer allocator.free(result.stdout);
+    defer allocator.free(result.stderr);
+
+    try test_utils.TestAssert.expectEqual(@as(u8, 0), result.exit_code);
+    try test_utils.TestAssert.expectContains(result.stdout, "hi");
+    try test_utils.TestAssert.expectTrue(std.mem.indexOf(u8, result.stderr, "command not found") == null);
+}
+
+test "scripting: single-line function with local and multiple statements" {
+    const allocator = std.testing.allocator;
+
+    var fixture = try test_utils.DenShellFixture.init(allocator);
+    defer fixture.deinit();
+
+    const result = try fixture.execDirect("g(){ local x=5; echo a; echo $x; }; g");
+    defer allocator.free(result.stdout);
+    defer allocator.free(result.stderr);
+
+    try test_utils.TestAssert.expectEqual(@as(u8, 0), result.exit_code);
+    try test_utils.TestAssert.expectContains(result.stdout, "a");
+    try test_utils.TestAssert.expectContains(result.stdout, "5");
+}
