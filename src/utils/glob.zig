@@ -203,6 +203,20 @@ pub const Glob = struct {
             }
         }
 
+        // If a directory component (any segment before the final one) contains
+        // glob characters, the pattern can't be globbed by opening a single
+        // literal directory. Walk the path segment by segment instead.
+        if (self.needsMultiSegment(pattern)) {
+            const result = try self.expandMultiSegment(pattern, cwd);
+            // Store in cache only when we computed a valid key.
+            if (self.cache) |cache| {
+                if (cache_key_opt) |cache_key| {
+                    cache.put(cache_key, result) catch {};
+                }
+            }
+            return result;
+        }
+
         // Simple implementation: expand basic wildcards in current directory
         var matches_buffer: [256][]const u8 = undefined;
         var match_count: usize = 0;
@@ -300,6 +314,134 @@ pub const Glob = struct {
         }
 
         return result;
+    }
+
+    /// True when a path segment *before* the final one contains glob
+    /// characters, e.g. `*/*.txt` or `a/*/b`. Such patterns cannot be expanded
+    /// by opening one literal directory; they require recursive descent.
+    fn needsMultiSegment(self: *Glob, pattern: []const u8) bool {
+        const last_slash = std.mem.lastIndexOfScalar(u8, pattern, path_sep) orelse return false;
+        return self.hasGlobChars(pattern[0..last_slash]);
+    }
+
+    /// Join `a` and `b` with a single path separator into `buf`. An empty `a`
+    /// yields `b` verbatim (so relative matches stay relative), and a trailing
+    /// separator on `a` (e.g. the root `/`) is not doubled.
+    fn joinInto(buf: []u8, a: []const u8, b: []const u8) ![]const u8 {
+        if (a.len == 0) return std.fmt.bufPrint(buf, "{s}", .{b});
+        if (a[a.len - 1] == path_sep) return std.fmt.bufPrint(buf, "{s}{s}", .{ a, b });
+        return std.fmt.bufPrint(buf, "{s}" ++ path_sep_str ++ "{s}", .{ a, b });
+    }
+
+    /// Expand a pattern whose directory components may themselves contain glob
+    /// characters. Splits on the path separator and walks segment by segment,
+    /// expanding glob segments against the accumulated matched directories.
+    fn expandMultiSegment(self: *Glob, pattern: []const u8, cwd: []const u8) ![][]const u8 {
+        var results = std.ArrayList([]const u8).empty;
+        defer results.deinit(self.allocator);
+        errdefer for (results.items) |r| self.allocator.free(r);
+
+        // Split into non-empty segments. Empty segments come from a leading,
+        // trailing, or doubled separator and carry no matching information.
+        var seg_buf: [128][]const u8 = undefined;
+        var seg_count: usize = 0;
+        var it = std.mem.splitScalar(u8, pattern, path_sep);
+        while (it.next()) |s| {
+            if (s.len == 0) continue;
+            if (seg_count >= seg_buf.len) break;
+            seg_buf[seg_count] = s;
+            seg_count += 1;
+        }
+
+        // Absolute patterns walk from the filesystem root and keep their leading
+        // separator in the emitted prefix; relative patterns stay relative.
+        const is_abs = pattern.len > 0 and pattern[0] == path_sep;
+        const init_real = if (is_abs) path_sep_str else cwd;
+        const init_prefix = if (is_abs) path_sep_str else "";
+
+        try self.globRecurse(init_real, init_prefix, seg_buf[0..seg_count], &results);
+
+        // No matches: leave the pattern untouched (bash behavior).
+        if (results.items.len == 0) {
+            const result = try self.allocator.alloc([]const u8, 1);
+            result[0] = try self.allocator.dupe(u8, pattern);
+            return result;
+        }
+
+        const result = try results.toOwnedSlice(self.allocator);
+        self.sortMatches(result);
+        return result;
+    }
+
+    /// Recursive worker for multi-segment globbing.
+    ///
+    /// `real_dir` is the actual directory to open/iterate; `prefix` is the
+    /// (possibly relative) string prepended to emitted matches. Literal
+    /// segments extend both without touching the filesystem until the final
+    /// component is checked for existence; glob segments iterate `real_dir` and
+    /// recurse into each matching entry for the remaining segments.
+    fn globRecurse(
+        self: *Glob,
+        real_dir: []const u8,
+        prefix: []const u8,
+        segments: []const []const u8,
+        results: *std.ArrayList([]const u8),
+    ) !void {
+        if (segments.len == 0) return;
+        const seg = segments[0];
+        const rest = segments[1..];
+        const is_last = rest.len == 0;
+
+        // Literal segment: extend the path without scanning a directory.
+        if (!self.hasGlobChars(seg)) {
+            var real_buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
+            var prefix_buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
+            const new_real = try joinInto(&real_buf, real_dir, seg);
+            const new_prefix = try joinInto(&prefix_buf, prefix, seg);
+            if (is_last) {
+                // A literal final component only matches if it actually exists.
+                _ = std.Io.Dir.cwd().statFile(std.Options.debug_io, new_real, .{}) catch return;
+                try results.append(self.allocator, try self.allocator.dupe(u8, new_prefix));
+            } else {
+                try self.globRecurse(new_real, new_prefix, rest, results);
+            }
+            return;
+        }
+
+        // Glob segment: iterate the directory and match each entry.
+        const parsed = self.parseExtendedGlob(seg);
+        var dir = std.Io.Dir.cwd().openDir(std.Options.debug_io, real_dir, .{ .iterate = true }) catch return;
+        defer dir.close(std.Options.debug_io);
+
+        const pattern_starts_with_dot = parsed.base.len > 0 and parsed.base[0] == '.';
+
+        var iter = dir.iterate();
+        while (try iter.next(std.Options.debug_io)) |entry| {
+            // Skip hidden entries unless this segment explicitly targets them.
+            if (!self.match_hidden and entry.name.len > 0 and entry.name[0] == '.' and !pattern_starts_with_dot) {
+                continue;
+            }
+            if (!self.matchPattern(parsed.base, entry.name)) continue;
+            if (parsed.exclusion) |exclusion| {
+                if (self.matchPattern(exclusion, entry.name)) continue;
+            }
+            if (parsed.qualifier) |qualifier| {
+                if (!self.matchesQualifier(dir, entry.name, qualifier)) continue;
+            }
+
+            var prefix_buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
+            const new_prefix = try joinInto(&prefix_buf, prefix, entry.name);
+
+            if (is_last) {
+                try results.append(self.allocator, try self.allocator.dupe(u8, new_prefix));
+            } else {
+                // Descend for the remaining segments. Non-directory entries fail
+                // to open and are silently skipped by the recursive call.
+                var real_buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
+                const new_real = try joinInto(&real_buf, real_dir, entry.name);
+                try self.globRecurse(new_real, new_prefix, rest, results);
+            }
+        }
     }
 
     /// Check if string contains glob characters
