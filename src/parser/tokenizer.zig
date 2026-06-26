@@ -818,8 +818,8 @@ pub const Tokenizer = struct {
             } else if ((in_single_quote or in_double_quote) and subst_depth == 0 and brace_depth == 0 and !in_backtick and (char == '*' or char == '?' or char == '[')) {
                 // Escape glob metacharacters inside quotes so glob expansion treats them as literals
                 // But not inside $(), ${}, or backticks where they may be part of special syntax
-                // Also don't escape ? after $ (it's the $? special variable)
-                if (char == '?' and word_len > 0 and word_buffer[word_len - 1] == '$') {
+                // Also don't escape ? or * right after $ (the $? and $* special variables)
+                if ((char == '?' or char == '*') and word_len > 0 and word_buffer[word_len - 1] == '$') {
                     if (word_len >= word_buffer.len) return error.WordTooLong;
                     word_buffer[word_len] = char;
                     word_len += 1;
