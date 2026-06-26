@@ -827,6 +827,39 @@ pub const Executor = struct {
                             }
                         }
                     }
+                    // A simple command made up entirely of assignment words sets
+                    // ALL of them (bash: `A=1 B=2` sets both). The command name
+                    // handled the first; apply any further leading assignment args
+                    // here, stopping at the first arg that is not an assignment.
+                    if (self.shell) |shell| {
+                        for (command.args) |arg| {
+                            const aeq = std.mem.indexOfScalar(u8, arg, '=') orelse break;
+                            if (aeq == 0) break;
+                            const aname = arg[0..aeq];
+                            var avalid = std.ascii.isAlphabetic(aname[0]) or aname[0] == '_';
+                            if (avalid) {
+                                for (aname[1..]) |ch| {
+                                    if (!std.ascii.isAlphanumeric(ch) and ch != '_') {
+                                        avalid = false;
+                                        break;
+                                    }
+                                }
+                            }
+                            if (!avalid) break;
+                            const aval = arg[aeq + 1 ..];
+                            shell.setVariableValue(aname, aval) catch break;
+                            // Export to the C environment so child processes see it too.
+                            if (builtin.os.tag != .windows and aname.len < 512 and aval.len < 4096) {
+                                var nb: [512]u8 = undefined;
+                                var vb: [4096]u8 = undefined;
+                                @memcpy(nb[0..aname.len], aname);
+                                nb[aname.len] = 0;
+                                @memcpy(vb[0..aval.len], aval);
+                                vb[aval.len] = 0;
+                                _ = libc_env.setenv(nb[0..aname.len :0], vb[0..aval.len :0], 1);
+                            }
+                        }
+                    }
                     // Preserve exit code from command substitution (bash behavior)
                     // e.g. x=$(exit 42); echo $? → 42
                     return command.cmd_sub_exit_code orelse 0;

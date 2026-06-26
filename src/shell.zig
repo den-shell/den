@@ -1907,6 +1907,13 @@ pub const Shell = struct {
                             var prefix_assignments: [32]struct { name: []const u8, value: []const u8 } = undefined;
                             var prefix_count: usize = 0;
                             var cmd_start_offset: usize = 0;
+                            // Set when the token after the leading assignment(s) is a
+                            // control operator (&&, ||, |, &). That means the assignment
+                            // is a standalone command in a chain/pipeline (e.g.
+                            // `V=x && cmd`), not a prefix to a temporary-assignment
+                            // command — so we defer the whole input to the normal
+                            // parser/executor instead of treating the operator as a command.
+                            var chain_after_assignment = false;
 
                             // Walk through quote-aware tokens to find assignments vs command
                             var scan_pos: usize = 0;
@@ -1961,12 +1968,19 @@ pub const Shell = struct {
                                     }
                                 }
                                 if (!is_assignment) {
+                                    // A control operator as the "command" means this is
+                                    // `assignment <op> ...` — let the real parser handle
+                                    // the chain (it runs the bare assignment as its own
+                                    // command segment, then applies the operator).
+                                    if (tok.len > 0 and (tok[0] == '&' or tok[0] == '|')) {
+                                        chain_after_assignment = true;
+                                    }
                                     cmd_start_offset = tok_start;
                                     break;
                                 }
                             }
 
-                            if (prefix_count > 0 and cmd_start_offset > 0) {
+                            if (!chain_after_assignment and prefix_count > 0 and cmd_start_offset > 0) {
                                 const cmd_rest = trimmed_input[cmd_start_offset..];
 
                                 // Save old values (must dupe since setArithVariable frees them)

@@ -538,3 +538,87 @@ test "Operator: all operators combined" {
     try test_utils.TestAssert.expectContains(result.stdout, "end");
     try test_utils.TestAssert.expectTrue(std.mem.indexOf(u8, result.stdout, "fail") == null);
 }
+
+// ============================================================================
+// Bare variable assignment as a chain segment
+//
+// A bare assignment (`V=x`) followed directly by a control operator is a
+// standalone command in the chain — not a temporary-assignment prefix to the
+// operator. These used to fail to parse with "empty command". They run the
+// real den binary (DenShellFixture) because they exercise den's own
+// command-chain handling, not system /bin/sh.
+// ============================================================================
+
+test "Operator: bare assignment then && runs next segment" {
+    const allocator = std.testing.allocator;
+
+    var fixture = try test_utils.DenShellFixture.init(allocator);
+    defer fixture.deinit();
+
+    const result = try fixture.execDirect("V=x && echo GOT=$V");
+    defer allocator.free(result.stdout);
+    defer allocator.free(result.stderr);
+
+    try test_utils.TestAssert.expectEqual(@as(u8, 0), result.exit_code);
+    try test_utils.TestAssert.expectContains(result.stdout, "GOT=x");
+    try test_utils.TestAssert.expectTrue(std.mem.indexOf(u8, result.stderr, "empty command") == null);
+}
+
+test "Operator: bare assignment succeeds so || skips next segment" {
+    const allocator = std.testing.allocator;
+
+    var fixture = try test_utils.DenShellFixture.init(allocator);
+    defer fixture.deinit();
+
+    const result = try fixture.execDirect("V=x || echo SHOULD_NOT_PRINT");
+    defer allocator.free(result.stdout);
+    defer allocator.free(result.stderr);
+
+    try test_utils.TestAssert.expectEqual(@as(u8, 0), result.exit_code);
+    try test_utils.TestAssert.expectTrue(std.mem.indexOf(u8, result.stdout, "SHOULD_NOT_PRINT") == null);
+    try test_utils.TestAssert.expectTrue(std.mem.indexOf(u8, result.stderr, "empty command") == null);
+}
+
+test "Operator: bare assignment persists across the && chain" {
+    const allocator = std.testing.allocator;
+
+    var fixture = try test_utils.DenShellFixture.init(allocator);
+    defer fixture.deinit();
+
+    const result = try fixture.execDirect("V=x && true; echo VAL=[$V]");
+    defer allocator.free(result.stdout);
+    defer allocator.free(result.stderr);
+
+    try test_utils.TestAssert.expectEqual(@as(u8, 0), result.exit_code);
+    try test_utils.TestAssert.expectContains(result.stdout, "VAL=[x]");
+}
+
+test "Operator: multiple bare assignments before && set all variables" {
+    const allocator = std.testing.allocator;
+
+    var fixture = try test_utils.DenShellFixture.init(allocator);
+    defer fixture.deinit();
+
+    const result = try fixture.execDirect("A=1 B=2 C=3 && echo RES=$A$B$C");
+    defer allocator.free(result.stdout);
+    defer allocator.free(result.stderr);
+
+    try test_utils.TestAssert.expectEqual(@as(u8, 0), result.exit_code);
+    try test_utils.TestAssert.expectContains(result.stdout, "RES=123");
+}
+
+test "Operator: temporary assignment prefix before && is unaffected" {
+    const allocator = std.testing.allocator;
+
+    var fixture = try test_utils.DenShellFixture.init(allocator);
+    defer fixture.deinit();
+
+    // FOO applies to printenv; the && chains to the next command.
+    const result = try fixture.execDirect("FOO=bar printenv FOO && echo done");
+    defer allocator.free(result.stdout);
+    defer allocator.free(result.stderr);
+
+    try test_utils.TestAssert.expectEqual(@as(u8, 0), result.exit_code);
+    try test_utils.TestAssert.expectContains(result.stdout, "bar");
+    try test_utils.TestAssert.expectContains(result.stdout, "done");
+}
