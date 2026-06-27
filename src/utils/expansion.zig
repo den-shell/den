@@ -971,6 +971,12 @@ pub const Expansion = struct {
         // Check for string/array length: ${#VAR} or ${#arr[@]} or ${#arr[index]}
         if (content.len > 0 and content[0] == '#') {
             const raw_name = content[1..];
+            // ${#} on its own is the positional-parameter count (same as $#),
+            // not the length of an empty variable name.
+            if (raw_name.len == 0) {
+                const value = try std.fmt.allocPrint(self.allocator, "{d}", .{self.positional_params.len});
+                return ExpansionResult{ .value = value, .consumed = end + 1, .owned = true };
+            }
             // Strip trailing [@] or [*] for array length lookups
             const is_all = std.mem.endsWith(u8, raw_name, "[@]") or std.mem.endsWith(u8, raw_name, "[*]");
             const var_name = if (is_all)
