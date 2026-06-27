@@ -756,3 +756,117 @@ test "Operator: temporary assignment prefix before && is unaffected" {
     try test_utils.TestAssert.expectContains(result.stdout, "bar");
     try test_utils.TestAssert.expectContains(result.stdout, "done");
 }
+
+// ----------------------------------------------------------------------------
+// **= power compound assignment in arithmetic.
+//
+// Regression: `*=` matched the second '*' of `**=`, so the operator was unread.
+// Both the $((...)) expansion path and the ((...)) statement path must apply it.
+// ----------------------------------------------------------------------------
+
+test "Operator: arithmetic expansion x**=3 raises x to the power" {
+    const allocator = std.testing.allocator;
+
+    var fixture = try test_utils.DenShellFixture.init(allocator);
+    defer fixture.deinit();
+
+    const result = try fixture.execDirect("x=2; echo $((x**=3)); echo x=$x");
+    defer allocator.free(result.stdout);
+    defer allocator.free(result.stderr);
+
+    try test_utils.TestAssert.expectEqual(@as(u8, 0), result.exit_code);
+    try test_utils.TestAssert.expectContains(result.stdout, "8");
+    try test_utils.TestAssert.expectContains(result.stdout, "x=8");
+}
+
+test "Operator: ((x **= 3)) statement form raises x to the power" {
+    const allocator = std.testing.allocator;
+
+    var fixture = try test_utils.DenShellFixture.init(allocator);
+    defer fixture.deinit();
+
+    const result = try fixture.execDirect("x=2; ((x**=3)); echo x=$x");
+    defer allocator.free(result.stdout);
+    defer allocator.free(result.stderr);
+
+    try test_utils.TestAssert.expectEqual(@as(u8, 0), result.exit_code);
+    try test_utils.TestAssert.expectContains(result.stdout, "x=8");
+}
+
+test "Operator: ((x *= 4)) still multiplies (no **= regression)" {
+    const allocator = std.testing.allocator;
+
+    var fixture = try test_utils.DenShellFixture.init(allocator);
+    defer fixture.deinit();
+
+    const result = try fixture.execDirect("x=5; ((x*=4)); echo x=$x");
+    defer allocator.free(result.stdout);
+    defer allocator.free(result.stderr);
+
+    try test_utils.TestAssert.expectEqual(@as(u8, 0), result.exit_code);
+    try test_utils.TestAssert.expectContains(result.stdout, "x=20");
+}
+
+// ----------------------------------------------------------------------------
+// Sparse indexed arrays (bash semantics): a high subscript materialises only
+// the elements actually assigned — not every index in between.
+// ----------------------------------------------------------------------------
+
+test "Operator: arr[5]=x is sparse (length 1, key 5)" {
+    const allocator = std.testing.allocator;
+
+    var fixture = try test_utils.DenShellFixture.init(allocator);
+    defer fixture.deinit();
+
+    const result = try fixture.execDirect("arr[5]=x; echo \"len=${#arr[@]} keys=${!arr[@]} val=${arr[5]}\"");
+    defer allocator.free(result.stdout);
+    defer allocator.free(result.stderr);
+
+    try test_utils.TestAssert.expectEqual(@as(u8, 0), result.exit_code);
+    try test_utils.TestAssert.expectContains(result.stdout, "len=1");
+    try test_utils.TestAssert.expectContains(result.stdout, "keys=5");
+    try test_utils.TestAssert.expectContains(result.stdout, "val=x");
+}
+
+test "Operator: dense array plus high subscript keeps real keys" {
+    const allocator = std.testing.allocator;
+
+    var fixture = try test_utils.DenShellFixture.init(allocator);
+    defer fixture.deinit();
+
+    const result = try fixture.execDirect("a=(1 2 3); a[10]=z; echo \"len=${#a[@]} keys=${!a[@]}\"");
+    defer allocator.free(result.stdout);
+    defer allocator.free(result.stderr);
+
+    try test_utils.TestAssert.expectEqual(@as(u8, 0), result.exit_code);
+    try test_utils.TestAssert.expectContains(result.stdout, "len=4");
+    try test_utils.TestAssert.expectContains(result.stdout, "keys=0 1 2 10");
+}
+
+test "Operator: sparse array values expand in ascending-subscript order" {
+    const allocator = std.testing.allocator;
+
+    var fixture = try test_utils.DenShellFixture.init(allocator);
+    defer fixture.deinit();
+
+    const result = try fixture.execDirect("a[5]=x; a[2]=y; a[9]=z; echo \"${a[@]}\"");
+    defer allocator.free(result.stdout);
+    defer allocator.free(result.stderr);
+
+    try test_utils.TestAssert.expectEqual(@as(u8, 0), result.exit_code);
+    try test_utils.TestAssert.expectContains(result.stdout, "y x z");
+}
+
+test "Operator: negative subscript indexes from the array end" {
+    const allocator = std.testing.allocator;
+
+    var fixture = try test_utils.DenShellFixture.init(allocator);
+    defer fixture.deinit();
+
+    const result = try fixture.execDirect("a=(p q r s); echo \"${a[-1]} ${a[-2]}\"");
+    defer allocator.free(result.stdout);
+    defer allocator.free(result.stderr);
+
+    try test_utils.TestAssert.expectEqual(@as(u8, 0), result.exit_code);
+    try test_utils.TestAssert.expectContains(result.stdout, "s r");
+}

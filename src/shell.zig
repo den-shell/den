@@ -1209,7 +1209,9 @@ pub const Shell = struct {
                     }
                 }
                 // Handle compound assignment operators: (( x += expr )), (( x -= expr )), etc.
-                const compound_ops = [_][]const u8{ "+=", "-=", "*=", "/=", "%=", "<<=", ">>=", "&=", "|=", "^=" };
+                // "**=" must precede "*=" so the longer power-assign operator matches
+                // first — otherwise indexOf("*=") would split on the second '*'.
+                const compound_ops = [_][]const u8{ "**=", "+=", "-=", "*=", "/=", "%=", "<<=", ">>=", "&=", "|=", "^=" };
                 var handled_compound = false;
                 inline for (compound_ops) |cop| {
                     if (!handled_compound) {
@@ -1225,7 +1227,9 @@ pub const Shell = struct {
                                 arith_c.arrays = &self.arrays;
                                 const rhs = arith_c.eval(value_expr_c) catch 0;
                                 // Apply operator
-                                const new_val_i: i64 = if (std.mem.eql(u8, cop, "+="))
+                                const new_val_i: i64 = if (std.mem.eql(u8, cop, "**="))
+                                    (std.math.powi(i64, cur_val, rhs) catch 0)
+                                else if (std.mem.eql(u8, cop, "+="))
                                     cur_val +| rhs
                                 else if (std.mem.eql(u8, cop, "-="))
                                     cur_val -| rhs

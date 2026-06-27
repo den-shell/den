@@ -1034,3 +1034,216 @@ test "scripting: single-line function with local and multiple statements" {
     try test_utils.TestAssert.expectContains(result.stdout, "a");
     try test_utils.TestAssert.expectContains(result.stdout, "5");
 }
+
+// ----------------------------------------------------------------------------
+// case statement fall-through terminators (bash 4): ;& and ;;&
+//
+// ;&  runs the NEXT clause's body unconditionally (fall through).
+// ;;& continues testing subsequent patterns after a match.
+// Regression: the one-liner splitter only understood ;; — ;& and ;;& were
+// mis-split, producing an "empty command" error. These run the real den binary
+// (DenShellFixture) because system /bin/sh also supports the syntax and would
+// mask a den-side regression.
+// ----------------------------------------------------------------------------
+
+test "scripting: case ;& falls through to next clause body" {
+    const allocator = std.testing.allocator;
+
+    var fixture = try test_utils.DenShellFixture.init(allocator);
+    defer fixture.deinit();
+
+    const result = try fixture.execDirect("case x in x) echo a;& *) echo b;; esac");
+    defer allocator.free(result.stdout);
+    defer allocator.free(result.stderr);
+
+    try test_utils.TestAssert.expectEqual(@as(u8, 0), result.exit_code);
+    // Both bodies run, in order: matched clause then the fall-through clause.
+    try test_utils.TestAssert.expectContains(result.stdout, "a");
+    try test_utils.TestAssert.expectContains(result.stdout, "b");
+    const a_pos = std.mem.indexOf(u8, result.stdout, "a").?;
+    const b_pos = std.mem.indexOf(u8, result.stdout, "b").?;
+    try test_utils.TestAssert.expectTrue(a_pos < b_pos);
+}
+
+test "scripting: case ;;& keeps testing later patterns" {
+    const allocator = std.testing.allocator;
+
+    var fixture = try test_utils.DenShellFixture.init(allocator);
+    defer fixture.deinit();
+
+    const result = try fixture.execDirect("case x in x) echo one;;& x) echo two;; esac");
+    defer allocator.free(result.stdout);
+    defer allocator.free(result.stderr);
+
+    try test_utils.TestAssert.expectEqual(@as(u8, 0), result.exit_code);
+    try test_utils.TestAssert.expectContains(result.stdout, "one");
+    try test_utils.TestAssert.expectContains(result.stdout, "two");
+    const one_pos = std.mem.indexOf(u8, result.stdout, "one").?;
+    const two_pos = std.mem.indexOf(u8, result.stdout, "two").?;
+    try test_utils.TestAssert.expectTrue(one_pos < two_pos);
+}
+
+test "scripting: plain case ;; still stops after the first match" {
+    const allocator = std.testing.allocator;
+
+    var fixture = try test_utils.DenShellFixture.init(allocator);
+    defer fixture.deinit();
+
+    const result = try fixture.execDirect("case x in x) echo a;; *) echo b;; esac");
+    defer allocator.free(result.stdout);
+    defer allocator.free(result.stderr);
+
+    try test_utils.TestAssert.expectEqual(@as(u8, 0), result.exit_code);
+    try test_utils.TestAssert.expectContains(result.stdout, "a");
+    try test_utils.TestAssert.expectTrue(std.mem.indexOf(u8, result.stdout, "b") == null);
+}
+
+test "scripting: multi-line case ;& and ;;& terminators" {
+    const allocator = std.testing.allocator;
+
+    var fixture = try test_utils.DenShellFixture.init(allocator);
+    defer fixture.deinit();
+
+    const result = try fixture.execDirect(
+        \\case x in
+        \\  x) echo one;;&
+        \\  x) echo two;&
+        \\  *) echo three;;
+        \\esac
+    );
+    defer allocator.free(result.stdout);
+    defer allocator.free(result.stderr);
+
+    // ;;& re-tests (matches the second x), then ;& falls through to the wildcard.
+    try test_utils.TestAssert.expectEqual(@as(u8, 0), result.exit_code);
+    try test_utils.TestAssert.expectContains(result.stdout, "one");
+    try test_utils.TestAssert.expectContains(result.stdout, "two");
+    try test_utils.TestAssert.expectContains(result.stdout, "three");
+}
+
+// ----------------------------------------------------------------------------
+// for loop with no `in` list iterates the positional parameters ("$@")
+// ----------------------------------------------------------------------------
+
+test "scripting: for without in iterates positional parameters" {
+    const allocator = std.testing.allocator;
+
+    var fixture = try test_utils.DenShellFixture.init(allocator);
+    defer fixture.deinit();
+
+    const result = try fixture.execDirect("set -- p q r; for w; do echo \"i=$w\"; done");
+    defer allocator.free(result.stdout);
+    defer allocator.free(result.stderr);
+
+    try test_utils.TestAssert.expectEqual(@as(u8, 0), result.exit_code);
+    try test_utils.TestAssert.expectContains(result.stdout, "i=p");
+    try test_utils.TestAssert.expectContains(result.stdout, "i=q");
+    try test_utils.TestAssert.expectContains(result.stdout, "i=r");
+}
+
+// ----------------------------------------------------------------------------
+// ${#} expands to the positional-parameter count (same as $#)
+// ----------------------------------------------------------------------------
+
+test "scripting: ${#} expands to the positional-parameter count" {
+    const allocator = std.testing.allocator;
+
+    var fixture = try test_utils.DenShellFixture.init(allocator);
+    defer fixture.deinit();
+
+    const result = try fixture.execDirect("set -- a b c d; echo \"count=${#}\"");
+    defer allocator.free(result.stdout);
+    defer allocator.free(result.stderr);
+
+    try test_utils.TestAssert.expectEqual(@as(u8, 0), result.exit_code);
+    try test_utils.TestAssert.expectContains(result.stdout, "count=4");
+}
+
+// ----------------------------------------------------------------------------
+// "$*" joins the positional parameters with the first character of IFS
+// ----------------------------------------------------------------------------
+
+test "scripting: double-quoted $* joins on first IFS char" {
+    const allocator = std.testing.allocator;
+
+    var fixture = try test_utils.DenShellFixture.init(allocator);
+    defer fixture.deinit();
+
+    const result = try fixture.execDirect("set -- a b c; IFS=-; echo \"$*\"");
+    defer allocator.free(result.stdout);
+    defer allocator.free(result.stderr);
+
+    try test_utils.TestAssert.expectEqual(@as(u8, 0), result.exit_code);
+    try test_utils.TestAssert.expectContains(result.stdout, "a-b-c");
+}
+
+// ----------------------------------------------------------------------------
+// Multi-segment glob: wildcards in intermediate path components
+// ----------------------------------------------------------------------------
+
+test "scripting: glob expands wildcards across multiple path segments" {
+    const allocator = std.testing.allocator;
+
+    var fixture = try test_utils.DenShellFixture.init(allocator);
+    defer fixture.deinit();
+
+    // exec() prefixes `cd <tmpdir> &&`, so the tree and the relative glob both
+    // resolve inside the isolated temp dir.
+    const result = try fixture.exec("mkdir -p a/b c/b && touch a/b/x.txt c/b/y.txt && echo */b/*.txt");
+    defer allocator.free(result.stdout);
+    defer allocator.free(result.stderr);
+
+    try test_utils.TestAssert.expectEqual(@as(u8, 0), result.exit_code);
+    try test_utils.TestAssert.expectContains(result.stdout, "a/b/x.txt");
+    try test_utils.TestAssert.expectContains(result.stdout, "c/b/y.txt");
+    // The literal pattern must not survive (i.e. it actually matched).
+    try test_utils.TestAssert.expectTrue(std.mem.indexOf(u8, result.stdout, "*/b") == null);
+}
+
+// ----------------------------------------------------------------------------
+// Parameter expansion: non-colon operators, nested defaults, negative length
+// ----------------------------------------------------------------------------
+
+test "scripting: non-colon ${var-word} treats empty as set" {
+    const allocator = std.testing.allocator;
+
+    var fixture = try test_utils.DenShellFixture.init(allocator);
+    defer fixture.deinit();
+
+    // unset -> substitutes; set-but-empty -> keeps the empty value.
+    const result = try fixture.execDirect("unset u; e=; echo \"[${u-DEF}][${e-X}]\"");
+    defer allocator.free(result.stdout);
+    defer allocator.free(result.stderr);
+
+    try test_utils.TestAssert.expectEqual(@as(u8, 0), result.exit_code);
+    try test_utils.TestAssert.expectContains(result.stdout, "[DEF][]");
+}
+
+test "scripting: nested default ${a:-${b:-fallback}} resolves inner word" {
+    const allocator = std.testing.allocator;
+
+    var fixture = try test_utils.DenShellFixture.init(allocator);
+    defer fixture.deinit();
+
+    const result = try fixture.execDirect("unset a b; echo \"[${a:-${b:-fallback}}]\"");
+    defer allocator.free(result.stdout);
+    defer allocator.free(result.stderr);
+
+    try test_utils.TestAssert.expectEqual(@as(u8, 0), result.exit_code);
+    try test_utils.TestAssert.expectContains(result.stdout, "[fallback]");
+}
+
+test "scripting: negative substring length counts from the end" {
+    const allocator = std.testing.allocator;
+
+    var fixture = try test_utils.DenShellFixture.init(allocator);
+    defer fixture.deinit();
+
+    // ${v:2:-1} -> from index 2, drop the last char: "cdef" -> "cde".
+    const result = try fixture.execDirect("v=abcdef; echo \"[${v:2:-1}]\"");
+    defer allocator.free(result.stdout);
+    defer allocator.free(result.stderr);
+
+    try test_utils.TestAssert.expectEqual(@as(u8, 0), result.exit_code);
+    try test_utils.TestAssert.expectContains(result.stdout, "[cde]");
+}

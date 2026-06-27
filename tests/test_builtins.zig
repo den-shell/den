@@ -671,3 +671,103 @@ test "builtin ls: unsupported flag falls back without erroring" {
     try test_utils.TestAssert.expectEqual(@as(u8, 0), result.exit_code);
     try test_utils.TestAssert.expectTrue(std.mem.indexOf(u8, result.stderr, "invalid option") == null);
 }
+
+// ----------------------------------------------------------------------------
+// test -t FD: is the file descriptor a terminal?
+//
+// Under the test harness stdin/stdout are pipes, so `-t` is always false.
+// We assert the exit status rather than a tty, which the harness can't provide.
+// ----------------------------------------------------------------------------
+
+test "builtin test: -t 0 is false when stdin is not a tty" {
+    const allocator = std.testing.allocator;
+
+    var fixture = try test_utils.DenShellFixture.init(allocator);
+    defer fixture.deinit();
+
+    // Pipe ensures fd 0 is definitely not a terminal; `-t 0` must return false.
+    const result = try fixture.execDirect("echo hi | { test -t 0; echo rc=$?; }");
+    defer allocator.free(result.stdout);
+    defer allocator.free(result.stderr);
+
+    try test_utils.TestAssert.expectContains(result.stdout, "rc=1");
+}
+
+test "builtin test: [ -t 1 ] takes the else branch on a pipe" {
+    const allocator = std.testing.allocator;
+
+    var fixture = try test_utils.DenShellFixture.init(allocator);
+    defer fixture.deinit();
+
+    const result = try fixture.execDirect("if [ -t 1 ]; then echo tty; else echo notty; fi | cat");
+    defer allocator.free(result.stdout);
+    defer allocator.free(result.stderr);
+
+    try test_utils.TestAssert.expectContains(result.stdout, "notty");
+}
+
+// ----------------------------------------------------------------------------
+// printf %.Nd integer precision: pad the number to at least N digits.
+// ----------------------------------------------------------------------------
+
+test "builtin printf: %.5d pads an integer to five digits" {
+    const allocator = std.testing.allocator;
+
+    var fixture = try test_utils.DenShellFixture.init(allocator);
+    defer fixture.deinit();
+
+    const result = try fixture.execDirect("printf '%.5d\\n' 42");
+    defer allocator.free(result.stdout);
+    defer allocator.free(result.stderr);
+
+    try test_utils.TestAssert.expectEqual(@as(u8, 0), result.exit_code);
+    try test_utils.TestAssert.expectContains(result.stdout, "00042");
+}
+
+test "builtin printf: %.3d precision composes with surrounding text" {
+    const allocator = std.testing.allocator;
+
+    var fixture = try test_utils.DenShellFixture.init(allocator);
+    defer fixture.deinit();
+
+    const result = try fixture.execDirect("printf '[%.3d]\\n' 7");
+    defer allocator.free(result.stdout);
+    defer allocator.free(result.stderr);
+
+    try test_utils.TestAssert.expectEqual(@as(u8, 0), result.exit_code);
+    try test_utils.TestAssert.expectContains(result.stdout, "[007]");
+}
+
+// ----------------------------------------------------------------------------
+// $'\NNN' octal escapes in ANSI-C quoting.
+// ----------------------------------------------------------------------------
+
+test "builtin: ANSI-C $'\\NNN' octal escapes decode to bytes" {
+    const allocator = std.testing.allocator;
+
+    var fixture = try test_utils.DenShellFixture.init(allocator);
+    defer fixture.deinit();
+
+    // \101 \102 \103 -> A B C
+    const result = try fixture.execDirect("printf '%s\\n' $'\\101\\102\\103'");
+    defer allocator.free(result.stdout);
+    defer allocator.free(result.stderr);
+
+    try test_utils.TestAssert.expectEqual(@as(u8, 0), result.exit_code);
+    try test_utils.TestAssert.expectContains(result.stdout, "ABC");
+}
+
+test "builtin: ANSI-C octal escapes for digit characters" {
+    const allocator = std.testing.allocator;
+
+    var fixture = try test_utils.DenShellFixture.init(allocator);
+    defer fixture.deinit();
+
+    // \060 \061 \062 -> 0 1 2
+    const result = try fixture.execDirect("printf '%s\\n' $'\\060\\061\\062'");
+    defer allocator.free(result.stdout);
+    defer allocator.free(result.stderr);
+
+    try test_utils.TestAssert.expectEqual(@as(u8, 0), result.exit_code);
+    try test_utils.TestAssert.expectContains(result.stdout, "012");
+}
