@@ -934,3 +934,33 @@ test "Operator: array += literal with subscript extends sparsely" {
     try test_utils.TestAssert.expectEqual(@as(u8, 0), result.exit_code);
     try test_utils.TestAssert.expectContains(result.stdout, "0 1 2 5 6 = p q r z w");
 }
+
+test "Operator: negative subscript assignment targets the last element" {
+    const allocator = std.testing.allocator;
+
+    var fixture = try test_utils.DenShellFixture.init(allocator);
+    defer fixture.deinit();
+
+    // a[-1] writes the last element, a[-2] the second-to-last (bash semantics).
+    const result = try fixture.execDirect("a=(p q r); a[-1]=X; a[-2]=Y; echo \"${a[@]}\"");
+    defer allocator.free(result.stdout);
+    defer allocator.free(result.stderr);
+
+    try test_utils.TestAssert.expectEqual(@as(u8, 0), result.exit_code);
+    try test_utils.TestAssert.expectContains(result.stdout, "p Y X");
+}
+
+test "Operator: negative subscript assignment resolves against highest key" {
+    const allocator = std.testing.allocator;
+
+    var fixture = try test_utils.DenShellFixture.init(allocator);
+    defer fixture.deinit();
+
+    // Highest set subscript is 9, so a[-1] resolves to index 9.
+    const result = try fixture.execDirect("a=([5]=x [9]=z); a[-1]=W; echo \"${!a[@]} = ${a[@]}\"");
+    defer allocator.free(result.stdout);
+    defer allocator.free(result.stderr);
+
+    try test_utils.TestAssert.expectEqual(@as(u8, 0), result.exit_code);
+    try test_utils.TestAssert.expectContains(result.stdout, "5 9 = x W");
+}

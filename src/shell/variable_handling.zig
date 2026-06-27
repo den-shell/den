@@ -171,7 +171,28 @@ pub fn executeArrayElementAssignment(self: *Shell, input: []const u8) !void {
         return;
     }
 
-    const index = std.fmt.parseInt(usize, index_str, 10) catch return;
+    // Resolve the subscript: a plain integer, or an arithmetic expression.
+    const signed_index: i64 = std.fmt.parseInt(i64, index_str, 10) catch blk: {
+        var arith = @import("../utils/arithmetic.zig").Arithmetic.initWithVariables(self.allocator, &self.environment);
+        arith.arrays = &self.arrays;
+        break :blk arith.eval(index_str) catch return;
+    };
+
+    // Negative subscripts count from one past the highest set subscript (bash):
+    // a[-1] is the last element. Resolve against any existing array first so a
+    // failed negative lookup doesn't materialise an empty one.
+    var resolved: i64 = signed_index;
+    if (signed_index < 0) {
+        const base: i64 = if (self.arrays.get(name)) |arr|
+            (if (arr.indices.len == 0) 0 else @as(i64, @intCast(arr.indices[arr.indices.len - 1])) + 1)
+        else
+            0;
+        resolved = base + signed_index;
+        if (resolved < 0) {
+            self.last_exit_code = 1;
+            return;
+        }
+    }
 
     // Get or create the indexed array, then set the single subscript sparsely
     // (gaps stay unset, matching bash).
@@ -180,7 +201,7 @@ pub fn executeArrayElementAssignment(self: *Shell, input: []const u8) !void {
         gop.key_ptr.* = try self.allocator.dupe(u8, name);
         gop.value_ptr.* = try types.IndexedArray.initEmpty(self.allocator);
     }
-    try gop.value_ptr.setIndex(self.allocator, index, raw_value);
+    try gop.value_ptr.setIndex(self.allocator, @intCast(resolved), raw_value);
     self.last_exit_code = 0;
 }
 
