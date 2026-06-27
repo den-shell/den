@@ -361,6 +361,38 @@ test "Integration: PIPESTATUS simulation" {
     try test_utils.TestAssert.expectContains(result.stdout, "0");
 }
 
+test "Integration: PIPESTATUS records each stage of a pipeline" {
+    const allocator = std.testing.allocator;
+
+    var fixture = try test_utils.DenShellFixture.init(allocator);
+    defer fixture.deinit();
+
+    const result = try fixture.execDirect("true | false | true; echo \"${PIPESTATUS[@]}\"");
+    defer allocator.free(result.stdout);
+    defer allocator.free(result.stderr);
+
+    try test_utils.TestAssert.expectEqual(@as(u8, 0), result.exit_code);
+    try test_utils.TestAssert.expectContains(result.stdout, "0 1 0");
+}
+
+test "Integration: PIPESTATUS is set after a single (non-pipeline) command" {
+    const allocator = std.testing.allocator;
+
+    var fixture = try test_utils.DenShellFixture.init(allocator);
+    defer fixture.deinit();
+
+    // Regression (PIPESTATUS set after every command, not just pipelines):
+    // a bare `false` must leave PIPESTATUS=(1), not a stale pipeline value.
+    const result = try fixture.execDirect("true | true; false; echo \"${PIPESTATUS[@]}\"");
+    defer allocator.free(result.stdout);
+    defer allocator.free(result.stderr);
+
+    try test_utils.TestAssert.expectEqual(@as(u8, 0), result.exit_code);
+    // A lone command resets PIPESTATUS to its single exit status.
+    try test_utils.TestAssert.expectContains(result.stdout, "1");
+    try test_utils.TestAssert.expectTrue(std.mem.indexOf(u8, result.stdout, "0 0") == null);
+}
+
 // ============================================================================
 // Script Mode Integration Tests
 // ============================================================================
