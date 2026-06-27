@@ -3451,8 +3451,27 @@ pub const Shell = struct {
                 } else if (c == ')' and paren_depth > 0) {
                     paren_depth -= 1;
                 } else if (c == ';' and paren_depth == 0) {
-                    // Check for ;; (case terminator) - keep it with the preceding part
-                    if (i + 1 < input.len and input[i + 1] == ';') {
+                    // Check for case terminators - keep them with the preceding part
+                    // so the case parser's detectTerminator can recognize them.
+                    if (i + 2 < input.len and input[i + 1] == ';' and input[i + 2] == '&') {
+                        // ;;& - continue testing subsequent patterns (longest match)
+                        const part = std.mem.trim(u8, input[start .. i + 3], &std.ascii.whitespace);
+                        if (part.len > 0 and line_count < lines_buf.len) {
+                            lines_buf[line_count] = part;
+                            line_count += 1;
+                        }
+                        i += 2; // skip second ; and &
+                        start = i + 1;
+                    } else if (i + 1 < input.len and input[i + 1] == '&') {
+                        // ;& - fallthrough to next case body
+                        const part = std.mem.trim(u8, input[start .. i + 2], &std.ascii.whitespace);
+                        if (part.len > 0 and line_count < lines_buf.len) {
+                            lines_buf[line_count] = part;
+                            line_count += 1;
+                        }
+                        i += 1; // skip &
+                        start = i + 1;
+                    } else if (i + 1 < input.len and input[i + 1] == ';') {
                         // Include the ;; in the current part, split after it
                         const part = std.mem.trim(u8, input[start .. i + 2], &std.ascii.whitespace);
                         if (part.len > 0 and line_count < lines_buf.len) {
