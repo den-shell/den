@@ -566,25 +566,24 @@ pub const Tokenizer = struct {
                                 continue;
                             }
                         }
-                        if (next_char == '0' and self.pos + 2 < self.input.len) {
-                            // \0NNN - octal escape
-                            var oct_end = self.pos + 2;
-                            while (oct_end < self.input.len and oct_end < self.pos + 5 and
+                        if (next_char >= '0' and next_char <= '7') {
+                            // \NNN - octal escape, 1-3 octal digits (e.g. \101 -> 'A',
+                            // \0101 reads only "010"). Covers the leading-zero form too.
+                            var oct_end = self.pos + 1;
+                            while (oct_end < self.input.len and oct_end < self.pos + 4 and
                                 self.input[oct_end] >= '0' and self.input[oct_end] <= '7')
                             {
                                 oct_end += 1;
                             }
-                            if (oct_end > self.pos + 2) {
-                                const oct_str = self.input[self.pos + 2 .. oct_end];
-                                const byte = std.fmt.parseInt(u8, oct_str, 8) catch 0;
-                                const advance = oct_end - self.pos;
-                                self.pos = oct_end;
-                                self.column += advance;
-                                if (word_len >= word_buffer.len) return error.WordTooLong;
-                                word_buffer[word_len] = byte;
-                                word_len += 1;
-                                continue;
-                            }
+                            const oct_str = self.input[self.pos + 1 .. oct_end];
+                            const val = std.fmt.parseInt(u16, oct_str, 8) catch 0;
+                            const advance = oct_end - self.pos;
+                            self.pos = oct_end;
+                            self.column += advance;
+                            if (word_len >= word_buffer.len) return error.WordTooLong;
+                            word_buffer[word_len] = @truncate(val);
+                            word_len += 1;
+                            continue;
                         }
                         if (next_char == 'u' and self.pos + 5 < self.input.len) {
                             // \uNNNN - unicode escape (basic, ASCII range only for now)
