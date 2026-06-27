@@ -2393,6 +2393,9 @@ pub const Shell = struct {
         // This avoids the full tokenizer/parser for common cases like "ls", "echo hello", etc.
         if (self.tryFastPath(trimmed_input)) |exit_code| {
             self.last_exit_code = exit_code;
+            // A simple command refreshes PIPESTATUS to a one-element array == $?.
+            const ps = [_]i32{exit_code};
+            self.setPipeStatus(&ps);
             // Fire ERR trap on non-zero exit codes
             if (exit_code != 0) {
                 shell_mod.executeErrTrap(self);
@@ -2524,6 +2527,9 @@ pub const Shell = struct {
                 };
                 saved_fds.restore();
                 self.last_exit_code = exit_code;
+                // A function call refreshes PIPESTATUS to a one-element array == $?.
+                const ps = [_]i32{exit_code};
+                self.setPipeStatus(&ps);
                 // Execute post_command hooks
                 var post_context = HookContext{
                     .hook_type = .post_command,
@@ -2541,6 +2547,9 @@ pub const Shell = struct {
             const cmd = &chain.commands[0];
             if (cmd.redirections.len == 0) {
                 if (try shell_mod.dispatchBuiltin(self, cmd) == .handled) {
+                    // A simple builtin refreshes PIPESTATUS to a one-element array == $?.
+                    const ps = [_]i32{self.last_exit_code};
+                    self.setPipeStatus(&ps);
                     if (self.last_exit_code != 0) {
                         shell_mod.executeErrTrap(self);
                     }
@@ -2641,6 +2650,9 @@ pub const Shell = struct {
                             _ = std.c.close(saved_fds[1]);
                         }
                         if (result == .handled) {
+                            // A simple builtin refreshes PIPESTATUS to a one-element array == $?.
+                            const ps = [_]i32{self.last_exit_code};
+                            self.setPipeStatus(&ps);
                             if (self.last_exit_code != 0) {
                                 shell_mod.executeErrTrap(self);
                             }
@@ -2689,6 +2701,53 @@ pub const Shell = struct {
             .allocator = self.allocator,
         };
         self.plugin_registry.executeHooks(.post_command, &post_context) catch {};
+    }
+
+    /// Set the PIPESTATUS array to the given per-stage exit codes.
+    ///
+    /// Pipelines pass one element per stage; simple (non-pipeline) commands
+    /// pass a single element equal to $?, matching bash where PIPESTATUS is
+    /// refreshed after every command. Frees the previous PIPESTATUS array
+    /// first, and on any allocation failure leaves PIPESTATUS unset rather
+    /// than leaking partial allocations.
+    pub fn setPipeStatus(self: *Shell, statuses: []const i32) void {
+        // Free old PIPESTATUS array if it exists.
+        if (self.arrays.fetchRemove("PIPESTATUS")) |kv| {
+            kv.value.deinit(self.allocator);
+            self.allocator.free(kv.key);
+        }
+        if (statuses.len == 0) return;
+
+        const arr = self.allocator.alloc([]const u8, statuses.len) catch return;
+        var filled: usize = 0;
+        for (statuses, 0..) |st, i| {
+            var num_buf: [12]u8 = undefined;
+            const s = std.fmt.bufPrint(&num_buf, "{d}", .{st}) catch "0";
+            arr[i] = self.allocator.dupe(u8, s) catch break;
+            filled += 1;
+        }
+        if (filled != statuses.len) {
+            // Partial failure — free what we allocated, then the slice itself.
+            for (arr[0..filled]) |item| self.allocator.free(item);
+            self.allocator.free(arr);
+            return;
+        }
+
+        const key = self.allocator.dupe(u8, "PIPESTATUS") catch {
+            for (arr) |item| self.allocator.free(item);
+            self.allocator.free(arr);
+            return;
+        };
+        const ia = types.IndexedArray.fromOwnedDense(self.allocator, arr) catch {
+            self.allocator.free(key);
+            for (arr) |item| self.allocator.free(item);
+            self.allocator.free(arr);
+            return;
+        };
+        self.arrays.put(key, ia) catch {
+            self.allocator.free(key);
+            ia.deinit(self.allocator);
+        };
     }
 
     /// Try fast path for simple commands.

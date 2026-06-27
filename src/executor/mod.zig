@@ -124,6 +124,9 @@ pub const Executor = struct {
             // Update shell's last_exit_code and execute ERR trap if command failed
             if (self.shell) |shell| {
                 shell.last_exit_code = exit_code;
+                // A simple command sets PIPESTATUS to a one-element array == $?.
+                const ps = [_]i32{exit_code};
+                shell.setPipeStatus(&ps);
                 if (exit_code != 0) {
                     shell.executeErrTrap();
                 }
@@ -217,6 +220,9 @@ pub const Executor = struct {
                 // Update shell's last_exit_code and execute ERR trap if command failed
                 if (self.shell) |shell| {
                     shell.last_exit_code = last_exit_code;
+                    // A simple command sets PIPESTATUS to a one-element array == $?.
+                    const ps = [_]i32{last_exit_code};
+                    shell.setPipeStatus(&ps);
                     if (last_exit_code != 0) {
                         shell.executeErrTrap();
                     }
@@ -521,53 +527,9 @@ pub const Executor = struct {
             }
         }
 
-        // Set PIPESTATUS array in the shell
+        // Set PIPESTATUS array in the shell (one element per pipeline stage).
         if (self.shell) |shell| {
-            // Free old PIPESTATUS array if it exists
-            if (shell.arrays.fetchRemove("PIPESTATUS")) |kv| {
-                kv.value.deinit(shell.allocator);
-                shell.allocator.free(kv.key);
-            }
-            // Create new PIPESTATUS array. On any failure we must free all
-            // already-allocated elements and the array itself to avoid leaks.
-            if (shell.allocator.alloc([]const u8, commands.len) catch null) |arr| {
-                var filled: usize = 0;
-                var all_ok = true;
-                for (0..commands.len) |pi| {
-                    var num_buf: [12]u8 = undefined;
-                    const s = std.fmt.bufPrint(&num_buf, "{d}", .{pipestatus_buf[pi]}) catch "0";
-                    arr[pi] = shell.allocator.dupe(u8, s) catch {
-                        all_ok = false;
-                        break;
-                    };
-                    filled += 1;
-                }
-                if (all_ok) {
-                    if (shell.allocator.dupe(u8, "PIPESTATUS") catch null) |k| {
-                        const ia = types.IndexedArray.fromOwnedDense(shell.allocator, arr) catch {
-                            shell.allocator.free(k);
-                            for (arr) |item| shell.allocator.free(item);
-                            shell.allocator.free(arr);
-                            return last_status;
-                        };
-                        shell.arrays.put(k, ia) catch {
-                            // put failed — free the key and array contents to
-                            // prevent a leak (previously arr+elements+k leaked).
-                            shell.allocator.free(k);
-                            ia.deinit(shell.allocator);
-                        };
-                    } else {
-                        // Key allocation failed — free the array contents.
-                        for (arr) |item| shell.allocator.free(item);
-                        shell.allocator.free(arr);
-                    }
-                } else {
-                    // Partial failure — free the elements we did allocate,
-                    // then the array slice itself.
-                    for (arr[0..filled]) |item| shell.allocator.free(item);
-                    shell.allocator.free(arr);
-                }
-            }
+            shell.setPipeStatus(pipestatus_buf[0..commands.len]);
 
             if (shell.option_pipefail and pipefail_status != 0) {
                 return pipefail_status;
