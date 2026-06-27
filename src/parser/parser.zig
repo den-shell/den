@@ -19,6 +19,17 @@ pub const Parser = struct {
         };
     }
 
+    /// Whether a token can serve as a file-target for a redirection.
+    /// A plain word is the common case; a process substitution `<(...)`/`>(...)`
+    /// is also valid (`cat < <(echo hi)`), where the construct's raw value is
+    /// later expanded to a `/dev/fd/N` path by the expander.
+    fn isRedirTarget(token_type: TokenType) bool {
+        return switch (token_type) {
+            .word, .process_sub_in, .process_sub_out => true,
+            else => false,
+        };
+    }
+
     pub fn parse(self: *Parser) !types.CommandChain {
         var commands_buffer: [32]types.ParsedCommand = undefined;
         var cmd_count: usize = 0;
@@ -112,7 +123,7 @@ pub const Parser = struct {
                 },
                 .redirect_out => {
                     self.pos += 1;
-                    if (self.pos >= self.tokens.len or self.tokens[self.pos].type != .word) {
+                    if (self.pos >= self.tokens.len or !isRedirTarget(self.tokens[self.pos].type)) {
                         return error.RedirectionMissingTarget;
                     }
                     const target = try self.allocator.dupe(u8, self.tokens[self.pos].value);
@@ -127,7 +138,7 @@ pub const Parser = struct {
                 },
                 .redirect_clobber => {
                     self.pos += 1;
-                    if (self.pos >= self.tokens.len or self.tokens[self.pos].type != .word) {
+                    if (self.pos >= self.tokens.len or !isRedirTarget(self.tokens[self.pos].type)) {
                         return error.RedirectionMissingTarget;
                     }
                     const target = try self.allocator.dupe(u8, self.tokens[self.pos].value);
@@ -142,7 +153,7 @@ pub const Parser = struct {
                 },
                 .redirect_append => {
                     self.pos += 1;
-                    if (self.pos >= self.tokens.len or self.tokens[self.pos].type != .word) {
+                    if (self.pos >= self.tokens.len or !isRedirTarget(self.tokens[self.pos].type)) {
                         return error.RedirectionMissingTarget;
                     }
                     const target = try self.allocator.dupe(u8, self.tokens[self.pos].value);
@@ -157,7 +168,7 @@ pub const Parser = struct {
                 },
                 .redirect_in => {
                     self.pos += 1;
-                    if (self.pos >= self.tokens.len or self.tokens[self.pos].type != .word) {
+                    if (self.pos >= self.tokens.len or !isRedirTarget(self.tokens[self.pos].type)) {
                         return error.RedirectionMissingTarget;
                     }
                     const target = try self.allocator.dupe(u8, self.tokens[self.pos].value);
@@ -172,7 +183,7 @@ pub const Parser = struct {
                 },
                 .redirect_inout => {
                     self.pos += 1;
-                    if (self.pos >= self.tokens.len or self.tokens[self.pos].type != .word) {
+                    if (self.pos >= self.tokens.len or !isRedirTarget(self.tokens[self.pos].type)) {
                         return error.RedirectionMissingTarget;
                     }
                     const target = try self.allocator.dupe(u8, self.tokens[self.pos].value);
@@ -187,7 +198,7 @@ pub const Parser = struct {
                 },
                 .redirect_err => {
                     self.pos += 1;
-                    if (self.pos >= self.tokens.len or self.tokens[self.pos].type != .word) {
+                    if (self.pos >= self.tokens.len or !isRedirTarget(self.tokens[self.pos].type)) {
                         return error.RedirectionMissingTarget;
                     }
                     const target = try self.allocator.dupe(u8, self.tokens[self.pos].value);
@@ -233,7 +244,7 @@ pub const Parser = struct {
                 .redirect_both => {
                     // &> redirects both stdout and stderr to file
                     self.pos += 1;
-                    if (self.pos >= self.tokens.len or self.tokens[self.pos].type != .word) {
+                    if (self.pos >= self.tokens.len or !isRedirTarget(self.tokens[self.pos].type)) {
                         return error.RedirectionMissingTarget;
                     }
                     const target = try self.allocator.dupe(u8, self.tokens[self.pos].value);
@@ -258,7 +269,7 @@ pub const Parser = struct {
                 .redirect_both_append => {
                     // &>> appends both stdout and stderr to file
                     self.pos += 1;
-                    if (self.pos >= self.tokens.len or self.tokens[self.pos].type != .word) {
+                    if (self.pos >= self.tokens.len or !isRedirTarget(self.tokens[self.pos].type)) {
                         return error.RedirectionMissingTarget;
                     }
                     const target = try self.allocator.dupe(u8, self.tokens[self.pos].value);
