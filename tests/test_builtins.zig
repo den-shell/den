@@ -771,3 +771,19 @@ test "builtin: ANSI-C octal escapes for digit characters" {
     try test_utils.TestAssert.expectEqual(@as(u8, 0), result.exit_code);
     try test_utils.TestAssert.expectContains(result.stdout, "012");
 }
+
+test "builtin: ANSI-C $'\\cX' control-character escapes" {
+    const allocator = std.testing.allocator;
+
+    var fixture = try test_utils.DenShellFixture.init(allocator);
+    defer fixture.deinit();
+
+    // \cI -> 0x09 (tab), \c[ -> 0x1B (ESC).
+    const result = try fixture.execDirect("printf 'A%sB%sC' $'\\cI' $'\\c['");
+    defer allocator.free(result.stdout);
+    defer allocator.free(result.stderr);
+
+    try test_utils.TestAssert.expectEqual(@as(u8, 0), result.exit_code);
+    try test_utils.TestAssert.expectContains(result.stdout, "A\tB");
+    try test_utils.TestAssert.expectContains(result.stdout, "\x1B");
+}

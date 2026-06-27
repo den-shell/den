@@ -617,6 +617,18 @@ pub const Tokenizer = struct {
                                 continue;
                             }
                         }
+                        if (next_char == 'c' and self.pos + 2 < self.input.len) {
+                            // \cX - control character: toupper(X) XOR 0x40
+                            // (\cA -> 0x01, \c? -> 0x7F, \c[ -> 0x1B). Matches bash/zsh.
+                            const ctrl_src = self.input[self.pos + 2];
+                            const byte: u8 = std.ascii.toUpper(ctrl_src) ^ 0x40;
+                            self.pos += 3;
+                            self.column += 3;
+                            if (word_len >= word_buffer.len) return error.WordTooLong;
+                            word_buffer[word_len] = byte;
+                            word_len += 1;
+                            continue;
+                        }
                         // Simple single-char escape
                         self.pos += 2;
                         self.column += 2;
