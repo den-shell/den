@@ -96,6 +96,11 @@ fn evaluateTestArgs(args: []const []const u8) !i32 {
         } else if (std.mem.eql(u8, op, "-L") or std.mem.eql(u8, op, "-h")) {
             const stat = std.Io.Dir.cwd().statFile(std.Options.debug_io, arg, .{ .follow_symlinks = false }) catch return 1;
             return if (stat.kind == .sym_link) 0 else 1;
+        } else if (std.mem.eql(u8, op, "-t")) {
+            // -t FD: true if file descriptor FD is open and refers to a terminal.
+            const fd = std.fmt.parseInt(std.posix.fd_t, arg, 10) catch return 1;
+            const is_tty = (std.Io.File{ .handle = fd, .flags = .{ .nonblocking = false } }).isTty(std.Options.debug_io) catch false;
+            return if (is_tty) 0 else 1;
         }
     }
 
