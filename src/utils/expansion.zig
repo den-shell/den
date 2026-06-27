@@ -787,13 +787,15 @@ pub const Expansion = struct {
                             for (array.values) |item| {
                                 var piece: []u8 = undefined;
                                 if (anchor_prefix) {
-                                    if (pattern.len > 0 and std.mem.startsWith(u8, item, pattern)) {
+                                    // An empty pattern matches at the start (append-at-front).
+                                    if (std.mem.startsWith(u8, item, pattern)) {
                                         piece = try self.allocator.alloc(u8, replacement.len + item.len - pattern.len);
                                         @memcpy(piece[0..replacement.len], replacement);
                                         @memcpy(piece[replacement.len..], item[pattern.len..]);
                                     } else piece = try self.allocator.dupe(u8, item);
                                 } else if (anchor_suffix) {
-                                    if (pattern.len > 0 and std.mem.endsWith(u8, item, pattern)) {
+                                    // An empty pattern matches at the end (append).
+                                    if (std.mem.endsWith(u8, item, pattern)) {
                                         piece = try self.allocator.alloc(u8, item.len - pattern.len + replacement.len);
                                         @memcpy(piece[0 .. item.len - pattern.len], item[0 .. item.len - pattern.len]);
                                         @memcpy(piece[item.len - pattern.len ..], replacement);
@@ -1183,7 +1185,7 @@ pub const Expansion = struct {
                     if (self.getVariableValue(var_name)) |value| {
                         // Parse offset and optional length
                         var offset: i64 = 0;
-                        var length: ?usize = null;
+                        var length: ?i64 = null;
 
                         if (std.mem.indexOf(u8, params, ":")) |second_colon| {
                             // ${VAR:offset:length}
@@ -1194,7 +1196,7 @@ pub const Expansion = struct {
                             else
                                 offset_str;
                             offset = std.fmt.parseInt(i64, std.mem.trim(u8, clean_offset, &std.ascii.whitespace), 10) catch 0;
-                            length = std.fmt.parseInt(usize, params[second_colon + 1 ..], 10) catch null;
+                            length = std.fmt.parseInt(i64, std.mem.trim(u8, params[second_colon + 1 ..], &std.ascii.whitespace), 10) catch null;
                         } else {
                             // ${VAR:offset}
                             // Strip parens: ${x:(-2)} -> -2
@@ -1218,8 +1220,14 @@ pub const Expansion = struct {
                             start = @min(@as(usize, @intCast(offset)), value.len);
                         }
 
-                        // Calculate end position
-                        const end_pos = if (length) |len| @min(start + len, value.len) else value.len;
+                        // Calculate end position. A negative length is an offset
+                        // from the end of the string (bash): ${x:0:-1} drops the
+                        // last char. end_pos < start yields an empty result.
+                        const end_pos = if (length) |len| blk: {
+                            if (len >= 0) break :blk @min(start + @as(usize, @intCast(len)), value.len);
+                            const back: usize = @intCast(@abs(len));
+                            break :blk if (value.len >= back) value.len - back else 0;
+                        } else value.len;
 
                         if (start <= end_pos and start <= value.len) {
                             const result = try self.allocator.dupe(u8, value[start..end_pos]);
@@ -1537,31 +1545,73 @@ pub const Expansion = struct {
             return ExpansionResult{ .value = "", .consumed = end + 1, .owned = false };
         }
 
-        // Non-colon variants: check if set (regardless of empty)
-        // ${VAR-default}: use default only if VAR is unset
-        if (std.mem.indexOfScalar(u8, content, '-')) |sep_pos| {
-            if (sep_pos > 0 and (sep_pos < 2 or content[sep_pos - 1] != ':')) {
-                const var_name = content[0..sep_pos];
-                const default_value = content[sep_pos + 1 ..];
-                if (self.getVariableValue(var_name)) |value| {
-                    const result = try self.allocator.dupe(u8, value);
-                    return ExpansionResult{ .value = result, .consumed = end + 1, .owned = true };
+        // Non-colon parameter operators: ${VAR-word} ${VAR=word} ${VAR?msg}
+        // ${VAR+word}. Unlike the colon forms above, these act only when VAR is
+        // truly *unset* (an empty value counts as set). A variable name never
+        // contains -, +, ?, or =, so the first such character is the operator.
+        // (The colon forms :- := :? :+ already returned above.)
+        {
+            var op_pos: ?usize = null;
+            for (content, 0..) |c, i| {
+                if (i == 0) continue;
+                if (c == '-' or c == '+' or c == '?' or c == '=') {
+                    op_pos = i;
+                    break;
                 }
-                const result = try self.allocator.dupe(u8, default_value);
-                return ExpansionResult{ .value = result, .consumed = end + 1, .owned = true };
             }
-        }
-
-        // ${VAR+word}: use word if VAR is set (even if empty)
-        if (std.mem.indexOfScalar(u8, content, '+')) |sep_pos| {
-            if (sep_pos > 0 and (sep_pos < 2 or content[sep_pos - 1] != ':')) {
+            if (op_pos) |sep_pos| {
                 const var_name = content[0..sep_pos];
-                const alt_value = content[sep_pos + 1 ..];
-                if (self.getVariableValue(var_name) != null) {
-                    const result = try self.allocator.dupe(u8, alt_value);
-                    return ExpansionResult{ .value = result, .consumed = end + 1, .owned = true };
+                const word = content[sep_pos + 1 ..];
+                const existing = self.getVariableValue(var_name);
+                switch (content[sep_pos]) {
+                    '-' => {
+                        if (existing) |value| {
+                            const result = try self.allocator.dupe(u8, value);
+                            return ExpansionResult{ .value = result, .consumed = end + 1, .owned = true };
+                        }
+                        // Default value — expand it (supports nested ${...}).
+                        const result = self.expandNested(word);
+                        return ExpansionResult{ .value = result, .consumed = end + 1, .owned = true };
+                    },
+                    '=' => {
+                        if (existing) |value| {
+                            const result = try self.allocator.dupe(u8, value);
+                            return ExpansionResult{ .value = result, .consumed = end + 1, .owned = true };
+                        }
+                        // Assign the (expanded) default to VAR, then use it.
+                        const expanded = self.expandNested(word);
+                        const name_copy = try self.allocator.dupe(u8, var_name);
+                        const value_copy = try self.allocator.dupe(u8, expanded);
+                        self.environment.put(name_copy, value_copy) catch {
+                            self.allocator.free(name_copy);
+                            self.allocator.free(value_copy);
+                        };
+                        return ExpansionResult{ .value = expanded, .consumed = end + 1, .owned = true };
+                    },
+                    '?' => {
+                        if (existing) |value| {
+                            const result = try self.allocator.dupe(u8, value);
+                            return ExpansionResult{ .value = result, .consumed = end + 1, .owned = true };
+                        }
+                        var buf: [512]u8 = undefined;
+                        const msg = if (word.len > 0)
+                            std.fmt.bufPrint(&buf, "den: {s}: {s}\n", .{ var_name, word }) catch "den: parameter not set\n"
+                        else
+                            std.fmt.bufPrint(&buf, "den: {s}: parameter not set\n", .{var_name}) catch "den: parameter not set\n";
+                        const IO = @import("../utils/io.zig").IO;
+                        IO.eprint("{s}", .{msg}) catch {};
+                        return error.ParameterNullOrNotSet;
+                    },
+                    '+' => {
+                        // Use word only if VAR is set (even if empty).
+                        if (existing != null) {
+                            const result = self.expandNested(word);
+                            return ExpansionResult{ .value = result, .consumed = end + 1, .owned = true };
+                        }
+                        return ExpansionResult{ .value = "", .consumed = end + 1, .owned = false };
+                    },
+                    else => unreachable,
                 }
-                return ExpansionResult{ .value = "", .consumed = end + 1, .owned = false };
             }
         }
 
