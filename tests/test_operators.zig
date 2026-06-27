@@ -870,3 +870,67 @@ test "Operator: negative subscript indexes from the array end" {
     try test_utils.TestAssert.expectEqual(@as(u8, 0), result.exit_code);
     try test_utils.TestAssert.expectContains(result.stdout, "s r");
 }
+
+// ----------------------------------------------------------------------------
+// Array literal with explicit [subscript]=value elements (bash semantics):
+// bare elements take the index after the last one set; subscripts may be sparse,
+// out of order, quoted, or arithmetic.
+// ----------------------------------------------------------------------------
+
+test "Operator: array literal with sparse out-of-order subscripts" {
+    const allocator = std.testing.allocator;
+
+    var fixture = try test_utils.DenShellFixture.init(allocator);
+    defer fixture.deinit();
+
+    const result = try fixture.execDirect("a=([3]=c [1]=a); echo \"${a[@]} | ${!a[@]} | ${#a[@]}\"");
+    defer allocator.free(result.stdout);
+    defer allocator.free(result.stderr);
+
+    try test_utils.TestAssert.expectEqual(@as(u8, 0), result.exit_code);
+    // Stored ascending by subscript: index 1 -> a, index 3 -> c.
+    try test_utils.TestAssert.expectContains(result.stdout, "a c | 1 3 | 2");
+}
+
+test "Operator: array literal mixes bare and subscripted elements" {
+    const allocator = std.testing.allocator;
+
+    var fixture = try test_utils.DenShellFixture.init(allocator);
+    defer fixture.deinit();
+
+    // x at 0, y at 5, then a bare element continues at 6.
+    const result = try fixture.execDirect("a=(x [5]=y z); echo \"${a[@]} | ${!a[@]}\"");
+    defer allocator.free(result.stdout);
+    defer allocator.free(result.stderr);
+
+    try test_utils.TestAssert.expectEqual(@as(u8, 0), result.exit_code);
+    try test_utils.TestAssert.expectContains(result.stdout, "x y z | 0 5 6");
+}
+
+test "Operator: subscripted array literal keeps quoted values intact" {
+    const allocator = std.testing.allocator;
+
+    var fixture = try test_utils.DenShellFixture.init(allocator);
+    defer fixture.deinit();
+
+    const result = try fixture.execDirect("a=([2]=\"hi there\" [0]=lo); echo \"[${a[2]}][${a[0]}] keys=${!a[@]}\"");
+    defer allocator.free(result.stdout);
+    defer allocator.free(result.stderr);
+
+    try test_utils.TestAssert.expectEqual(@as(u8, 0), result.exit_code);
+    try test_utils.TestAssert.expectContains(result.stdout, "[hi there][lo] keys=0 2");
+}
+
+test "Operator: array += literal with subscript extends sparsely" {
+    const allocator = std.testing.allocator;
+
+    var fixture = try test_utils.DenShellFixture.init(allocator);
+    defer fixture.deinit();
+
+    const result = try fixture.execDirect("a=(p q r); a+=([5]=z w); echo \"${!a[@]} = ${a[@]}\"");
+    defer allocator.free(result.stdout);
+    defer allocator.free(result.stderr);
+
+    try test_utils.TestAssert.expectEqual(@as(u8, 0), result.exit_code);
+    try test_utils.TestAssert.expectContains(result.stdout, "0 1 2 5 6 = p q r z w");
+}

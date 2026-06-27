@@ -6,6 +6,7 @@ const IO = @import("../utils/io.zig").IO;
 const types = @import("../types/mod.zig");
 const Shell = @import("../shell.zig").Shell;
 const HookContext = @import("../plugins/interface.zig").HookContext;
+const expansion = @import("../utils/expansion.zig");
 
 /// Resolve nameref chain to get the actual variable name
 pub fn resolveNameref(self: *Shell, name: []const u8) []const u8 {
@@ -251,6 +252,14 @@ pub fn executeArrayAssignment(self: *Shell, input: []const u8) !void {
     // Parse array elements (respecting quoted strings)
     const content = std.mem.trim(u8, input[start_paren + 1 .. end_paren], &std.ascii.whitespace);
 
+    // Subscript form: arr=([3]=c [1]=a) or arr=(x [5]=y z). If any element
+    // begins with an unquoted '[', build a sparse array with explicit subscripts
+    // (bash semantics: a bare element takes the index after the last one set).
+    if (containsSubscriptElement(content)) {
+        try executeSubscriptedArrayLiteral(self, name, content, is_append);
+        return;
+    }
+
     // First pass: count elements (respecting quotes)
     var count: usize = 0;
     {
@@ -337,6 +346,105 @@ pub fn executeArrayAssignment(self: *Shell, input: []const u8) !void {
         try self.arrays.put(key, try types.IndexedArray.fromOwnedDense(self.allocator, array));
     }
     self.last_exit_code = 0;
+}
+
+/// Read the next whitespace-separated word from `content`, treating quotes as
+/// boundary-suppressing. Returns the raw slice (quotes included) and advances
+/// `ci` past it; null when only trailing whitespace remains.
+fn nextRawWord(content: []const u8, ci: *usize) ?[]const u8 {
+    while (ci.* < content.len and std.ascii.isWhitespace(content[ci.*])) : (ci.* += 1) {}
+    if (ci.* >= content.len) return null;
+    const start = ci.*;
+    var in_sq = false;
+    var in_dq = false;
+    while (ci.* < content.len) : (ci.* += 1) {
+        const c = content[ci.*];
+        if (c == '\\' and !in_sq and ci.* + 1 < content.len) {
+            ci.* += 1; // skip escaped char
+            continue;
+        }
+        if (c == '\'' and !in_dq) {
+            in_sq = !in_sq;
+            continue;
+        }
+        if (c == '"' and !in_sq) {
+            in_dq = !in_dq;
+            continue;
+        }
+        if (!in_sq and !in_dq and std.ascii.isWhitespace(c)) break;
+    }
+    return content[start..ci.*];
+}
+
+/// True if any element of an array literal body begins with an unquoted '[',
+/// i.e. uses explicit `[subscript]=value` syntax.
+fn containsSubscriptElement(content: []const u8) bool {
+    var ci: usize = 0;
+    while (nextRawWord(content, &ci)) |word| {
+        if (word.len > 0 and word[0] == '[') return true;
+    }
+    return false;
+}
+
+/// Build a sparse indexed array from a literal that mixes bare and
+/// `[subscript]=value` elements, e.g. `arr=(x [5]=y z)` → 0:x 5:y 6:z.
+/// For `+=`, bare elements continue after the existing highest subscript.
+fn executeSubscriptedArrayLiteral(self: *Shell, name: []const u8, content: []const u8, is_append: bool) !void {
+    // Seed from the existing array on append; otherwise start fresh (freeing any
+    // previous value, since a plain `=` replaces).
+    var arr: types.IndexedArray = blk: {
+        if (self.arrays.fetchRemove(name)) |old| {
+            if (is_append) {
+                self.allocator.free(old.key);
+                break :blk old.value;
+            }
+            old.value.deinit(self.allocator);
+            self.allocator.free(old.key);
+        }
+        break :blk try types.IndexedArray.initEmpty(self.allocator);
+    };
+    errdefer arr.deinit(self.allocator);
+
+    // Next implicit subscript: one past the current highest (0 for a fresh array).
+    var cur: usize = if (arr.indices.len > 0) arr.indices[arr.indices.len - 1] + 1 else 0;
+
+    var ci: usize = 0;
+    while (nextRawWord(content, &ci)) |word| {
+        var idx = cur;
+        var value_raw = word;
+        if (word.len > 0 and word[0] == '[') {
+            if (std.mem.indexOfScalar(u8, word, ']')) |rb| {
+                if (rb + 1 < word.len and word[rb + 1] == '=') {
+                    const idx_str = std.mem.trim(u8, word[1..rb], &std.ascii.whitespace);
+                    idx = parseArraySubscript(self, idx_str) orelse cur;
+                    value_raw = word[rb + 2 ..];
+                }
+            }
+        }
+        const value = try expansion.removeQuotes(self.allocator, value_raw);
+        defer self.allocator.free(value);
+        try arr.setIndex(self.allocator, idx, value);
+        cur = idx + 1;
+    }
+
+    const key = try self.allocator.dupe(u8, name);
+    errdefer self.allocator.free(key);
+    try self.arrays.put(key, arr);
+    self.last_exit_code = 0;
+}
+
+/// Parse an array subscript that may be a plain integer or an arithmetic
+/// expression (`[1+2]`). Returns null when it cannot be resolved to a
+/// non-negative index.
+fn parseArraySubscript(self: *Shell, idx_str: []const u8) ?usize {
+    if (std.fmt.parseInt(usize, idx_str, 10)) |n| {
+        return n;
+    } else |_| {}
+    var arith = @import("../utils/arithmetic.zig").Arithmetic.initWithVariables(self.allocator, &self.environment);
+    arith.arrays = &self.arrays;
+    const v = arith.eval(idx_str) catch return null;
+    if (v < 0) return null;
+    return @intCast(v);
 }
 
 /// Parse and execute associative array assignment: name=([key1]=val1 [key2]=val2 ...)
