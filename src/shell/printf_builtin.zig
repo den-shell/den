@@ -175,7 +175,7 @@ pub fn builtinPrintf(shell: *Shell, cmd: *types.ParsedCommand) !void {
                     if (arg_idx < cmd.args.len) {
                         const arg = cmd.args[arg_idx];
                         const num = parseIntArg(i64, arg);
-                        try printfInt(num, width, zero_pad, left_justify, sign_prefix);
+                        try printfInt(num, width, zero_pad, left_justify, sign_prefix, if (has_precision) precision else null);
                         arg_idx += 1;
                         did_consume_arg = true;
                     }
@@ -466,7 +466,7 @@ pub fn builtinPrintf(shell: *Shell, cmd: *types.ParsedCommand) !void {
 }
 
 /// Helper for printf - format signed integer with width/padding
-pub fn printfInt(num: i64, width: usize, zero_pad: bool, left_justify: bool, sign_prefix: u8) !void {
+pub fn printfInt(num: i64, width: usize, zero_pad: bool, left_justify: bool, sign_prefix: u8, precision: ?usize) !void {
     var buf: [32]u8 = undefined;
     const raw = std.fmt.bufPrint(&buf, "{d}", .{num}) catch return;
     // Split off the sign so width/zero-pad logic operates on the digits.
@@ -479,6 +479,22 @@ pub fn printfInt(num: i64, width: usize, zero_pad: bool, left_justify: bool, sig
     } else if (sign_prefix != 0) {
         sign = sign_prefix;
     }
+    // Precision for integers is the *minimum* digit count (zero-filled); when
+    // present, the '0' width flag is ignored (POSIX). `%.0d` of 0 prints nothing.
+    var prec_buf: [64]u8 = undefined;
+    var use_zero_pad = zero_pad;
+    if (precision) |prec| {
+        use_zero_pad = false;
+        if (prec == 0 and num == 0) {
+            digits = "";
+        } else if (digits.len < prec and prec <= prec_buf.len) {
+            const zeros = prec - digits.len;
+            var z: usize = 0;
+            while (z < zeros) : (z += 1) prec_buf[z] = '0';
+            @memcpy(prec_buf[zeros..][0..digits.len], digits);
+            digits = prec_buf[0 .. zeros + digits.len];
+        }
+    }
     const total_len = digits.len + @as(usize, if (sign != 0) 1 else 0);
     if (width > 0 and total_len < width) {
         const pad = width - total_len;
@@ -487,7 +503,7 @@ pub fn printfInt(num: i64, width: usize, zero_pad: bool, left_justify: bool, sig
             try IO.print("{s}", .{digits});
             var p: usize = 0;
             while (p < pad) : (p += 1) try IO.print(" ", .{});
-        } else if (zero_pad) {
+        } else if (use_zero_pad) {
             // Zero-pad: place zeros after the sign but before the digits
             // e.g., printf "%05d" -1 -> "-0001", printf "%+05d" 1 -> "+0001"
             if (sign != 0) try IO.print("{c}", .{sign});

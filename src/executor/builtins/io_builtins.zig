@@ -334,7 +334,7 @@ pub fn printf(command: *types.ParsedCommand) !i32 {
                             @as(i64, arg[1])
                         else
                             std.fmt.parseInt(i64, arg, 10) catch 0;
-                        try printfInt(num, width, zero_pad, left_justify, sign_prefix);
+                        try printfInt(num, width, zero_pad, left_justify, sign_prefix, if (has_precision) precision else null);
                         arg_idx += 1;
                     }
                     i = j + 1;
@@ -496,7 +496,7 @@ pub fn printf(command: *types.ParsedCommand) !i32 {
     return 0;
 }
 
-fn printfInt(num: i64, width: usize, zero_pad: bool, left_justify: bool, sign_prefix: u8) !void {
+fn printfInt(num: i64, width: usize, zero_pad: bool, left_justify: bool, sign_prefix: u8, precision: ?usize) !void {
     var buf: [32]u8 = undefined;
     const raw = std.fmt.bufPrint(&buf, "{d}", .{num}) catch return;
     // Split off the sign so width/zero-pad operate on the digits. For
@@ -509,6 +509,22 @@ fn printfInt(num: i64, width: usize, zero_pad: bool, left_justify: bool, sign_pr
     } else if (sign_prefix != 0) {
         sign = sign_prefix;
     }
+    // Integer precision = minimum digit count (zero-filled); disables '0' width
+    // flag. `%.0d` of 0 prints nothing.
+    var prec_buf: [64]u8 = undefined;
+    var use_zero_pad = zero_pad;
+    if (precision) |prec| {
+        use_zero_pad = false;
+        if (prec == 0 and num == 0) {
+            digits = "";
+        } else if (digits.len < prec and prec <= prec_buf.len) {
+            const zeros = prec - digits.len;
+            var z: usize = 0;
+            while (z < zeros) : (z += 1) prec_buf[z] = '0';
+            @memcpy(prec_buf[zeros..][0..digits.len], digits);
+            digits = prec_buf[0 .. zeros + digits.len];
+        }
+    }
     const total_len = digits.len + @as(usize, if (sign != 0) 1 else 0);
     if (width > 0 and total_len < width) {
         const pad = width - total_len;
@@ -517,7 +533,7 @@ fn printfInt(num: i64, width: usize, zero_pad: bool, left_justify: bool, sign_pr
             try IO.print("{s}", .{digits});
             var p: usize = 0;
             while (p < pad) : (p += 1) try IO.print(" ", .{});
-        } else if (zero_pad) {
+        } else if (use_zero_pad) {
             if (sign != 0) try IO.print("{c}", .{sign});
             var p: usize = 0;
             while (p < pad) : (p += 1) try IO.print("0", .{});
@@ -570,12 +586,13 @@ fn printfUint(num: u64, width: usize, zero_pad: bool, left_justify: bool, base: 
 test "printfInt formatting" {
     // Just verify the function compiles and doesn't crash with edge cases
     // These write to stdout which we can't capture easily, but we verify no panic
-    try printfInt(0, 0, false, false, 0);
-    try printfInt(-42, 0, false, false, 0);
-    try printfInt(999999, 10, true, false, 0);
-    try printfInt(5, 5, false, true, 0);
-    try printfInt(5, 0, false, false, '+');
-    try printfInt(7, 6, true, false, '+');
+    try printfInt(0, 0, false, false, 0, null);
+    try printfInt(-42, 0, false, false, 0, null);
+    try printfInt(999999, 10, true, false, 0, null);
+    try printfInt(5, 5, false, true, 0, null);
+    try printfInt(5, 0, false, false, '+', null);
+    try printfInt(7, 6, true, false, '+', null);
+    try printfInt(7, 5, false, false, 0, 3);
 }
 
 test "printfUint formatting" {
