@@ -270,7 +270,7 @@ const Parser = struct {
 
             // Check for compound assignment operators: <<=, >>=, +=, -=, *=, /=, %=, &=, |=, ^=
             // and simple assignment: =
-            const CompoundOp = enum { none, assign, add, sub, mul, div, mod, shl, shr, band, bor, bxor };
+            const CompoundOp = enum { none, assign, add, sub, mul, div, mod, pow, shl, shr, band, bor, bxor };
             var compound_op: CompoundOp = .none;
             var op_len: usize = 0;
 
@@ -279,6 +279,11 @@ const Parser = struct {
                 op_len = 3;
             } else if (op_pos + 2 < self.input.len and self.input[op_pos] == '>' and self.input[op_pos + 1] == '>' and self.input[op_pos + 2] == '=') {
                 compound_op = .shr;
+                op_len = 3;
+            } else if (op_pos + 2 < self.input.len and self.input[op_pos] == '*' and self.input[op_pos + 1] == '*' and self.input[op_pos + 2] == '=') {
+                // ** = (power assign) — must be checked before *= so the second
+                // '*' isn't mistaken for the start of the value.
+                compound_op = .pow;
                 op_len = 3;
             } else if (op_pos + 1 < self.input.len and self.input[op_pos + 1] == '=') {
                 const op_char = self.input[op_pos];
@@ -353,6 +358,7 @@ const Parser = struct {
                         const shift_amt: u6 = @intCast(@min(@max(rhs, 0), 63));
                         break :blk cur >> shift_amt;
                     },
+                    .pow => try self.power(cur, rhs),
                     .band => cur & rhs,
                     .bor => cur | rhs,
                     .bxor => cur ^ rhs,
