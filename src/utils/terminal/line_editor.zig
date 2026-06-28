@@ -628,10 +628,14 @@ pub const LineEditor = struct {
                         continue;
                     }
 
-                    // If we have an active completion list, accept it instead of submitting
+                    // If a completion grid is showing, Enter accepts the highlighted
+                    // entry and runs the line. applyCurrentCompletion is idempotent
+                    // (it replaces the same word span), so this works whether the
+                    // user cycled to a choice or just opened the grid. Then dismiss
+                    // the grid and fall through to submit the completed line.
                     if (self.completion_list != null) {
+                        try self.applyCurrentCompletion();
                         self.clearCompletionState();
-                        continue;
                     }
 
                     // Get current line content
@@ -2236,6 +2240,14 @@ pub const LineEditor = struct {
     /// Handle tab completion
     fn handleTabCompletion(self: *LineEditor, reverse: bool) !void {
         const completion_fn = self.completion_fn orelse return;
+
+        // Erase any inline (ghost-text) autosuggestion before completing. Leaving
+        // it drawn lets it collide with the completion grid / applied word on
+        // redraw, which can corrupt what's shown on the input line.
+        if (self.suggestion != null) {
+            try self.writeBytes("\x1b[0K");
+            self.clearSuggestion();
+        }
 
         // Get current line up to cursor
         const input = self.buffer[0..self.cursor];
