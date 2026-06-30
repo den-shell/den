@@ -4179,3 +4179,23 @@ test "shell initialization" {
 
     try std.testing.expect(!sh.running);
 }
+
+test "scalar `path` assignment is an ordinary variable and never clobbers PATH" {
+    // Regression guard. zsh ties the array parameter `$path` to `$PATH` via a
+    // built-in `typeset -T PATH path`, so a bare `path=/foo` silently nukes PATH
+    // and breaks every external command lookup. den intentionally has NO such
+    // tie: a scalar `path` is just an ordinary variable. (PATH-clobbering seen
+    // through tooling that shells out via /bin/zsh comes from zsh, not den.)
+    const allocator = std.testing.allocator;
+    var sh = try Shell.initNoConfig(allocator);
+    defer sh.deinit();
+
+    const before = try allocator.dupe(u8, sh.environment.get("PATH") orelse "");
+    defer allocator.free(before);
+
+    try sh.executeCommand("path=/qqq");
+
+    // PATH is untouched; `path` is its own variable.
+    try std.testing.expectEqualStrings(before, sh.environment.get("PATH") orelse "");
+    try std.testing.expectEqualStrings("/qqq", sh.environment.get("path") orelse "");
+}
