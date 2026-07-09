@@ -282,7 +282,7 @@ pub fn builtinMapfile(self: *Shell, cmd: *types.ParsedCommand) !void {
     var count: ?usize = null; // -n count: read at most count lines
     var origin: usize = 0; // -O origin: begin at index origin
     var skip: usize = 0; // -s count: skip first count lines
-    var remove_delimiter = true; // -t: remove delimiter (default)
+    var remove_delimiter = false; // -t: strip delimiter (bash keeps it by default)
     var callback: ?[]const u8 = null; // -C callback: eval callback
     var callback_quantum: usize = 5000; // -c quantum: callback every quantum lines
     var array_name: []const u8 = "MAPFILE";
@@ -309,6 +309,10 @@ pub fn builtinMapfile(self: *Shell, cmd: *types.ParsedCommand) !void {
                     } else if (arg_start < cmd.args.len) {
                         count = std.fmt.parseInt(usize, cmd.args[arg_start], 10) catch null;
                         arg_start += 1;
+                    }
+                    // bash: `-n 0` means read ALL lines (no limit), not zero.
+                    if (count) |c| {
+                        if (c == 0) count = null;
                     }
                 },
                 'O' => {
@@ -415,7 +419,7 @@ pub fn builtinMapfile(self: *Shell, cmd: *types.ParsedCommand) !void {
         else blk: {
             const with_delim = try self.allocator.alloc(u8, line.?.len + 1);
             @memcpy(with_delim[0..line.?.len], line.?);
-            with_delim[line.?.len] = '\n';
+            with_delim[line.?.len] = delimiter;
             break :blk with_delim;
         };
         try lines.append(self.allocator, line_copy);

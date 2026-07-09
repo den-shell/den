@@ -199,6 +199,20 @@ check "read single" "hello world" "$(echo "hello world" | timeout 3 $DEN -c 'rea
 check "read multi" "hello world" "$(echo "hello world" | timeout 3 $DEN -c 'read x y; echo "$x $y"')"
 
 # ===========================================================================
+# 19b. mapfile / readarray (bash 4+ semantics)
+# ===========================================================================
+check "mapfile count" "3" "$(printf 'a\nb\nc\n' | timeout 3 $DEN -c 'mapfile -t arr; echo ${#arr[@]}')"
+check "mapfile -t strips newline" "a" "$(printf 'a\nb\n' | timeout 3 $DEN -c 'mapfile -t arr; echo "${arr[0]}"')"
+# Default (no -t) KEEPS the trailing delimiter: arr[0] is "a\n", so +"x" spans two lines.
+check "mapfile default keeps delim" "a
+x" "$(printf 'a\nb\n' | timeout 3 $DEN -c 'mapfile arr; printf "%sx" "${arr[0]}"')"
+check "mapfile -n 0 unlimited" "3" "$(printf 'a\nb\nc\n' | timeout 3 $DEN -c 'mapfile -t -n 0 arr; echo ${#arr[@]}')"
+check "mapfile -n limit" "2" "$(printf 'a\nb\nc\n' | timeout 3 $DEN -c 'mapfile -t -n 2 arr; echo ${#arr[@]}')"
+check "mapfile -s skip" "b" "$(printf 'a\nb\nc\n' | timeout 3 $DEN -c 'mapfile -t -s 1 arr; echo "${arr[0]}"')"
+check "mapfile -d custom delim" "x|y|z" "$(printf 'x:y:z:' | timeout 3 $DEN -c 'mapfile -t -d : arr; echo "${arr[0]}|${arr[1]}|${arr[2]}"')"
+check "readarray alias" "2" "$(printf 'a\nb\n' | timeout 3 $DEN -c 'readarray -t arr; echo ${#arr[@]}')"
+
+# ===========================================================================
 # 20. Multiple pipes
 # ===========================================================================
 check "multiple pipes" "3" "$(timeout 3 $DEN -c 'echo -e "aa\nbb\ncc" | /usr/bin/wc -l | tr -d " "')"
