@@ -55,7 +55,8 @@ pub fn updatePromptContext(self: *Shell) !void {
     defer self.allocator.free(cwd);
 
     // Get home directory
-    const home = try sysinfo.getHomeDir();
+    var home = try sysinfo.getHomeDir();
+    errdefer if (home) |owned_home| self.allocator.free(owned_home);
 
     // Get username
     const username = try sysinfo.getUsername();
@@ -74,6 +75,7 @@ pub fn updatePromptContext(self: *Shell) !void {
         self.allocator.free(old_home);
     }
     self.prompt_context.home_dir = home;
+    home = null;
 
     // Free old username/hostname if they exist
     if (self.prompt_context.username.len > 0) {

@@ -60,19 +60,19 @@ pub const SystemInfo = struct {
             };
             defer file.close(std.Options.debug_io);
 
-            var buf: [256]u8 = undefined;
-            var size: usize = 0;
-            while (size < buf.len) {
-                const n = try file.readStreaming(std.Options.debug_io, &.{buf[size..]});
-                if (n == 0) break;
-                size += n;
-            }
-            const hostname = std.mem.trim(u8, buf[0..size], &std.ascii.whitespace);
-
-            return try self.allocator.dupe(u8, hostname);
+            return self.readHostnameFile(file) catch
+                try self.allocator.dupe(u8, "localhost");
         }
 
         return try self.allocator.dupe(u8, "localhost");
+    }
+
+    fn readHostnameFile(self: *SystemInfo, file: std.Io.File) ![]const u8 {
+        var buf: [256]u8 = undefined;
+        const size = try file.readPositionalAll(std.Options.debug_io, &buf, 0);
+        const hostname = std.mem.trim(u8, buf[0..size], &std.ascii.whitespace);
+        if (hostname.len == 0) return try self.allocator.dupe(u8, "localhost");
+        return try self.allocator.dupe(u8, hostname);
     }
 
     /// Check if current user is root
@@ -238,6 +238,25 @@ pub const RuntimeModules = struct {
 const FILE = opaque {};
 extern "c" fn popen(command: [*:0]const u8, mode: [*:0]const u8) ?*FILE;
 extern "c" fn pclose(stream: *FILE) c_int;
+
+test "hostname file read treats EOF as successful completion" {
+    const allocator = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    var writable = try tmp.dir.createFile(std.Options.debug_io, "hostname", .{});
+    try writable.writeStreamingAll(std.Options.debug_io, "ci-runner\n");
+    writable.close(std.Options.debug_io);
+
+    const readable = try tmp.dir.openFile(std.Options.debug_io, "hostname", .{});
+    defer readable.close(std.Options.debug_io);
+
+    var sysinfo = SystemInfo.init(allocator);
+    const hostname = try sysinfo.readHostnameFile(readable);
+    defer allocator.free(hostname);
+
+    try std.testing.expectEqualStrings("ci-runner", hostname);
+}
 extern "c" fn fgetc(stream: *FILE) c_int;
 
 /// Read battery percentage on macOS via popen("pmset -g batt")
