@@ -312,13 +312,7 @@ pub const Completion = struct {
     /// Find directory-only completions
     pub fn completeDirectory(self: *Completion, prefix: []const u8) ![][]const u8 {
         // First, try mid-word path expansion (e.g., /u/l/b -> /usr/local/bin)
-        const expanded_prefix = try self.expandMidWordPath(prefix);
-        const use_prefix = if (expanded_prefix) |exp| blk: {
-            defer self.allocator.free(exp);
-            break :blk try self.allocator.dupe(u8, exp);
-        } else blk: {
-            break :blk try self.allocator.dupe(u8, prefix);
-        };
+        const use_prefix = try self.completionPathPrefix(prefix);
         defer self.allocator.free(use_prefix);
 
         var matches_buffer: [256][]const u8 = undefined;
@@ -358,8 +352,14 @@ pub const Completion = struct {
         // Iterate directory
         var iter = dir.iterate();
         while (iter.next(std.Options.debug_io) catch null) |entry| {
-            // Only show directories
-            if (entry.kind != .directory) continue;
+            // `cd` accepts symlinks to directories too. Some filesystems report
+            // an unknown kind while iterating, so probe those entries rather
+            // than silently omitting valid destinations.
+            if (entry.kind != .directory) {
+                if (entry.kind != .sym_link and entry.kind != .unknown) continue;
+                var child = dir.openDir(std.Options.debug_io, entry.name, .{}) catch continue;
+                child.close(std.Options.debug_io);
+            }
 
             // Skip hidden files unless explicitly requested
             if (!show_hidden and entry.name.len > 0 and entry.name[0] == '.') continue;
@@ -367,27 +367,12 @@ pub const Completion = struct {
             if (std.mem.startsWith(u8, entry.name, file_prefix)) {
                 if (match_count >= matches_buffer.len) break;
 
-                // If the original prefix ended with '/', return just the basename
-                // Otherwise, return the full path
-                const completion_text = blk: {
-                    var slash_buf: [std.Io.Dir.max_path_bytes + 1]u8 = undefined;
-
-                    if (use_prefix.len > 0 and use_prefix[use_prefix.len - 1] == '/') {
-                        // Prefix ended with slash: return just basename with trailing slash
-                        const with_slash = try std.fmt.bufPrint(&slash_buf, "{s}/", .{entry.name});
-                        break :blk with_slash;
-                    } else {
-                        // Prefix didn't end with slash: return full path with trailing slash
-                        var path_buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
-                        const full_path = if (std.mem.eql(u8, dir_path, ".")) blk2: {
-                            break :blk2 try std.fmt.bufPrint(&path_buf, "{s}", .{entry.name});
-                        } else blk2: {
-                            break :blk2 try std.fmt.bufPrint(&path_buf, "{s}/{s}", .{ dir_path, entry.name });
-                        };
-                        const with_slash = try std.fmt.bufPrint(&slash_buf, "{s}/", .{full_path});
-                        break :blk with_slash;
-                    }
-                };
+                // Every candidate is the complete shell word, even when the
+                // prefix ends in '/'. A uniform contract prevents the chooser
+                // from guessing whether it should prepend the typed path.
+                const dir_prefix = use_prefix[0 .. use_prefix.len - file_prefix.len];
+                var path_buf: [std.Io.Dir.max_path_bytes + 1]u8 = undefined;
+                const completion_text = try std.fmt.bufPrint(&path_buf, "{s}{s}/", .{ dir_prefix, entry.name });
 
                 // Escape special characters (spaces, etc.)
                 const escaped = try self.escapeFilename(completion_text);
@@ -409,21 +394,7 @@ pub const Completion = struct {
     pub fn completeFile(self: *Completion, prefix: []const u8) ![][]const u8 {
         // First, try mid-word path expansion (e.g., /u/l/b -> /usr/local/bin)
         // This attempts to expand abbreviated path components
-        const expanded_prefix = try self.expandMidWordPath(prefix);
-        const use_prefix = if (expanded_prefix) |exp| blk: {
-            defer self.allocator.free(exp);
-            // Reject an expansion that drops a leading "./" or "../" the user
-            // typed: expandMidWordPath treats "." as a segment, so "./sub" can
-            // come back as "subdir", which would complete to "subdir/" and lose
-            // the "./". Keep the original prefix in that case.
-            const drops_dot = (std.mem.startsWith(u8, prefix, "./") and !std.mem.startsWith(u8, exp, "./")) or
-                (std.mem.startsWith(u8, prefix, "../") and !std.mem.startsWith(u8, exp, "../"));
-            if (drops_dot) break :blk try self.allocator.dupe(u8, prefix);
-            break :blk try self.allocator.dupe(u8, exp);
-        } else blk: {
-            // Use original prefix if expansion failed or wasn't needed
-            break :blk try self.allocator.dupe(u8, prefix);
-        };
+        const use_prefix = try self.completionPathPrefix(prefix);
         defer self.allocator.free(use_prefix);
 
         // Now do regular file completion on the (possibly expanded) prefix
@@ -470,33 +441,17 @@ pub const Completion = struct {
             if (std.mem.startsWith(u8, entry.name, file_prefix)) {
                 if (match_count >= matches_buffer.len) break;
 
-                // If the original prefix ended with '/', return just the basename
-                // Otherwise, return the full path
                 const completion_text = blk: {
-                    if (use_prefix.len > 0 and use_prefix[use_prefix.len - 1] == '/') {
-                        // Prefix ended with slash: return just basename (with slash if directory)
-                        if (entry.kind == .directory) {
-                            var slash_buf: [std.Io.Dir.max_path_bytes + 1]u8 = undefined;
-                            const with_slash = try std.fmt.bufPrint(&slash_buf, "{s}/", .{entry.name});
-                            break :blk with_slash;
-                        } else {
-                            break :blk entry.name;
-                        }
+                    // Rebuild with the literal directory prefix the user typed,
+                    // including "./", "../", or a trailing slash. Candidates are
+                    // always complete shell words rather than sometimes being a
+                    // basename and sometimes a full path.
+                    const dir_prefix = use_prefix[0 .. use_prefix.len - file_prefix.len];
+                    var path_buf: [std.Io.Dir.max_path_bytes + 1]u8 = undefined;
+                    if (entry.kind == .directory) {
+                        break :blk try std.fmt.bufPrint(&path_buf, "{s}{s}/", .{ dir_prefix, entry.name });
                     } else {
-                        // Prefix didn't end with slash: rebuild the path by keeping
-                        // exactly the directory text the user typed before the
-                        // basename. Using dir_path (from dirname) would normalize
-                        // "./lan" to "langfile" — dropping the "./" the user typed —
-                        // and likewise collapse "../" etc. file_prefix is the
-                        // basename of use_prefix, so the slice before it is the
-                        // literal prefix ("", "./", "../", "/usr/", "sub/", …).
-                        const dir_prefix = use_prefix[0 .. use_prefix.len - file_prefix.len];
-                        var path_buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
-                        if (entry.kind == .directory) {
-                            break :blk try std.fmt.bufPrint(&path_buf, "{s}{s}/", .{ dir_prefix, entry.name });
-                        } else {
-                            break :blk try std.fmt.bufPrint(&path_buf, "{s}{s}", .{ dir_prefix, entry.name });
-                        }
+                        break :blk try std.fmt.bufPrint(&path_buf, "{s}{s}", .{ dir_prefix, entry.name });
                     }
                 };
 
@@ -514,6 +469,22 @@ pub const Completion = struct {
         const result = try self.allocator.alloc([]const u8, match_count);
         @memcpy(result, matches_buffer[0..match_count]);
         return result;
+    }
+
+    /// Return the owned path prefix used for filesystem lookup while preserving
+    /// explicit relative syntax that must remain in the inserted shell word.
+    fn completionPathPrefix(self: *Completion, prefix: []const u8) ![]const u8 {
+        const expanded = try self.expandMidWordPath(prefix) orelse
+            return try self.allocator.dupe(u8, prefix);
+
+        const drops_explicit_relative =
+            (std.mem.startsWith(u8, prefix, "./") and !std.mem.startsWith(u8, expanded, "./")) or
+            (std.mem.startsWith(u8, prefix, "../") and !std.mem.startsWith(u8, expanded, "../"));
+        if (drops_explicit_relative) {
+            self.allocator.free(expanded);
+            return try self.allocator.dupe(u8, prefix);
+        }
+        return expanded;
     }
 
     /// Regular file completion (without mid-word expansion)
@@ -698,7 +669,11 @@ pub const Completion = struct {
 
         var dir_iter = dir.iterate();
         while (dir_iter.next(std.Options.debug_io) catch null) |entry| {
-            if (entry.kind != .directory) continue;
+            if (entry.kind != .directory) {
+                if (entry.kind != .sym_link and entry.kind != .unknown) continue;
+                var child = dir.openDir(std.Options.debug_io, entry.name, .{}) catch continue;
+                child.close(std.Options.debug_io);
+            }
             if (segment[0] != '.' and entry.name.len > 0 and entry.name[0] == '.') continue;
 
             if (std.mem.startsWith(u8, entry.name, segment)) {
@@ -1093,6 +1068,123 @@ test "completeFile preserves a leading ./ prefix" {
         }
         try std.testing.expect(found);
     }
+}
+
+test "completeDirectory returns complete nested path candidates" {
+    const allocator = std.testing.allocator;
+    var comp = Completion.init(allocator);
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.createDirPath(std.Options.debug_io, "my/path-alpha");
+    try tmp.dir.createDirPath(std.Options.debug_io, "my/path-beta");
+    try tmp.dir.createDirPath(std.Options.debug_io, "my/other");
+    const file = try tmp.dir.createFile(std.Options.debug_io, "my/path-file", .{});
+    file.close(std.Options.debug_io);
+
+    var cwd_buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
+    const orig_len = try std.Io.Dir.cwd().realPathFile(std.Options.debug_io, ".", &cwd_buf);
+    const orig = try allocator.dupe(u8, cwd_buf[0..orig_len]);
+    defer allocator.free(orig);
+    var tmp_buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
+    const tmp_len = try tmp.dir.realPathFile(std.Options.debug_io, ".", &tmp_buf);
+    {
+        var chdir_buf: [std.fs.max_path_bytes]u8 = undefined;
+        @memcpy(chdir_buf[0..tmp_len], tmp_buf[0..tmp_len]);
+        chdir_buf[tmp_len] = 0;
+        if (std.c.chdir(chdir_buf[0..tmp_len :0]) != 0) return error.ChdirFailed;
+    }
+    defer {
+        var chdir_buf: [std.fs.max_path_bytes]u8 = undefined;
+        @memcpy(chdir_buf[0..orig.len], orig);
+        chdir_buf[orig.len] = 0;
+        _ = std.c.chdir(chdir_buf[0..orig.len :0]);
+    }
+
+    {
+        const results = try comp.completeDirectory("my/pa");
+        defer {
+            for (results) |result| allocator.free(result);
+            allocator.free(results);
+        }
+        try std.testing.expectEqual(@as(usize, 2), results.len);
+        try std.testing.expectEqualStrings("my/path-alpha/", results[0]);
+        try std.testing.expectEqualStrings("my/path-beta/", results[1]);
+    }
+    {
+        const results = try comp.completeDirectory("my/");
+        defer {
+            for (results) |result| allocator.free(result);
+            allocator.free(results);
+        }
+        try std.testing.expectEqual(@as(usize, 3), results.len);
+        for (results) |result| {
+            try std.testing.expect(std.mem.startsWith(u8, result, "my/"));
+            try std.testing.expect(std.mem.endsWith(u8, result, "/"));
+            try std.testing.expect(!std.mem.endsWith(u8, result, "path-file"));
+        }
+    }
+    {
+        const results = try comp.completeDirectory("./my/pa");
+        defer {
+            for (results) |result| allocator.free(result);
+            allocator.free(results);
+        }
+        try std.testing.expectEqual(@as(usize, 2), results.len);
+        for (results) |result| {
+            try std.testing.expect(std.mem.startsWith(u8, result, "./my/path-"));
+        }
+    }
+    {
+        const results = try comp.completeDirectory("my/oth");
+        defer {
+            for (results) |result| allocator.free(result);
+            allocator.free(results);
+        }
+        try std.testing.expectEqual(@as(usize, 1), results.len);
+        try std.testing.expectEqualStrings("my/other/", results[0]);
+    }
+}
+
+test "completeDirectory includes symlinks to directories" {
+    if (@import("builtin").os.tag == .windows) return;
+
+    const allocator = std.testing.allocator;
+    var comp = Completion.init(allocator);
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.createDirPath(std.Options.debug_io, "target");
+    tmp.dir.symLink(std.Options.debug_io, "target", "target-link", .{}) catch |err| {
+        if (err == error.AccessDenied) return;
+        return err;
+    };
+
+    var cwd_buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
+    const orig_len = try std.Io.Dir.cwd().realPathFile(std.Options.debug_io, ".", &cwd_buf);
+    const orig = try allocator.dupe(u8, cwd_buf[0..orig_len]);
+    defer allocator.free(orig);
+    var tmp_buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
+    const tmp_len = try tmp.dir.realPathFile(std.Options.debug_io, ".", &tmp_buf);
+    {
+        var chdir_buf: [std.fs.max_path_bytes]u8 = undefined;
+        @memcpy(chdir_buf[0..tmp_len], tmp_buf[0..tmp_len]);
+        chdir_buf[tmp_len] = 0;
+        if (std.c.chdir(chdir_buf[0..tmp_len :0]) != 0) return error.ChdirFailed;
+    }
+    defer {
+        var chdir_buf: [std.fs.max_path_bytes]u8 = undefined;
+        @memcpy(chdir_buf[0..orig.len], orig);
+        chdir_buf[orig.len] = 0;
+        _ = std.c.chdir(chdir_buf[0..orig.len :0]);
+    }
+
+    const results = try comp.completeDirectory("target-l");
+    defer {
+        for (results) |result| allocator.free(result);
+        allocator.free(results);
+    }
+    try std.testing.expectEqual(@as(usize, 1), results.len);
+    try std.testing.expectEqualStrings("target-link/", results[0]);
 }
 
 test "username completion - current user" {
