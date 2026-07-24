@@ -85,11 +85,10 @@
       { "name": "....", "command": "cd ../../.." },
       { "name": "-", "command": "cd -" },
 
-      // List files (use absolute paths to avoid circular alias)
-      { "name": "l", "command": "/bin/ls -lah" },
-      { "name": "la", "command": "/bin/ls -lAh" },
-      { "name": "ll", "command": "/bin/ls -lh" },
-      { "name": "ls", "command": "/bin/ls --color=auto" },
+      // List files through Den's native builtin
+      { "name": "l", "command": "builtin ls -lah" },
+      { "name": "la", "command": "builtin ls -lAh" },
+      { "name": "ll", "command": "builtin ls -lh" },
 
       // Git shortcuts
       { "name": "g", "command": "git" },

@@ -751,12 +751,51 @@ pub fn ls(allocator: std.mem.Allocator, command: *types.ParsedCommand) !i32 {
     var one_per_line = false;
     var directory_only = false;
     var target_path: []const u8 = ".";
+    var operand_count: usize = 0;
+    var parse_options = true;
+    var color_mode: enum { auto, always, never } = .auto;
 
     for (command.args) |arg| {
-        if (arg.len > 0 and arg[0] == '-') {
+        if (parse_options and std.mem.eql(u8, arg, "--")) {
+            parse_options = false;
+        } else if (parse_options and std.mem.startsWith(u8, arg, "--")) {
+            if (std.mem.eql(u8, arg, "--all")) {
+                show_all = true;
+            } else if (std.mem.eql(u8, arg, "--almost-all")) {
+                // Directory iteration does not yield "." or "..", so this has
+                // the same filtering behavior as -a for real entries.
+                show_all = true;
+            } else if (std.mem.eql(u8, arg, "--directory")) {
+                directory_only = true;
+            } else if (std.mem.eql(u8, arg, "--human-readable")) {
+                human_readable = true;
+            } else if (std.mem.eql(u8, arg, "--recursive")) {
+                recursive = true;
+            } else if (std.mem.eql(u8, arg, "--reverse")) {
+                reverse = true;
+            } else if (std.mem.eql(u8, arg, "--color") or std.mem.eql(u8, arg, "--color=always")) {
+                color_mode = .always;
+            } else if (std.mem.eql(u8, arg, "--color=auto")) {
+                color_mode = .auto;
+            } else if (std.mem.eql(u8, arg, "--color=never")) {
+                color_mode = .never;
+            } else if (std.mem.eql(u8, arg, "--sort=time")) {
+                sort_by_time = true;
+                sort_by_size = false;
+            } else if (std.mem.eql(u8, arg, "--sort=size")) {
+                sort_by_size = true;
+                sort_by_time = false;
+            } else if (std.mem.eql(u8, arg, "--sort=name")) {
+                sort_by_size = false;
+                sort_by_time = false;
+            } else {
+                return error.FallbackToExternal;
+            }
+        } else if (parse_options and arg.len > 1 and arg[0] == '-') {
             for (arg[1..]) |c| {
                 switch (c) {
                     'a' => show_all = true,
+                    'A' => show_all = true,
                     'l' => long_format = true,
                     'r' => reverse = true,
                     't' => sort_by_time = true,
@@ -774,8 +813,14 @@ pub fn ls(allocator: std.mem.Allocator, command: *types.ParsedCommand) !i32 {
             }
         } else {
             target_path = arg;
+            operand_count += 1;
         }
     }
+
+    // The optimized builtin currently handles the overwhelmingly common
+    // single-operand form. Preserve complete coreutils behavior for multi-path
+    // invocations instead of silently listing only the final operand.
+    if (operand_count > 1) return error.FallbackToExternal;
 
     // Match `ls --color=auto`: only colorize when stdout is a terminal, and
     // fall back to one-entry-per-line output when piped/redirected (like bash).
@@ -784,6 +829,11 @@ pub fn ls(allocator: std.mem.Allocator, command: *types.ParsedCommand) !i32 {
         .flags = .{ .nonblocking = false },
     }).isTty(std.Options.debug_io) catch false;
     if (!stdout_is_tty) one_per_line = true;
+    const use_color = switch (color_mode) {
+        .auto => stdout_is_tty,
+        .always => true,
+        .never => false,
+    };
 
     if (directory_only) {
         try IO.print("{s}\n", .{target_path});
@@ -804,54 +854,29 @@ pub fn ls(allocator: std.mem.Allocator, command: *types.ParsedCommand) !i32 {
         mtime_ns: i96,
     };
 
-    var entries: [512]EntryInfo = undefined;
-    var count: usize = 0;
+    var entries: std.ArrayList(EntryInfo) = .empty;
+    defer {
+        for (entries.items) |entry| allocator.free(entry.name);
+        entries.deinit(allocator);
+    }
 
     var iter = dir.iterate();
     while (try iter.next(std.Options.debug_io)) |entry| {
         if (!show_all and entry.name.len > 0 and entry.name[0] == '.') continue;
-        if (count >= 512) {
-            try IO.eprint("den: ls: too many entries, listing truncated at 512\n", .{});
-            break;
-        }
 
-        const stat = dir.statFile(std.Options.debug_io, entry.name, .{}) catch |err| {
-            if (err == error.IsDir) {
-                const dir_stat = dir.stat(std.Options.debug_io) catch {
-                    entries[count] = .{
-                        .name = try allocator.dupe(u8, entry.name),
-                        .kind = entry.kind,
-                        .size = 0,
-                        .mtime_ns = 0,
-                    };
-                    count += 1;
-                    continue;
-                };
-                entries[count] = .{
-                    .name = try allocator.dupe(u8, entry.name),
-                    .kind = entry.kind,
-                    .size = dir_stat.size,
-                    .mtime_ns = dir_stat.mtime.nanoseconds,
-                };
-            } else {
-                entries[count] = .{
-                    .name = try allocator.dupe(u8, entry.name),
-                    .kind = entry.kind,
-                    .size = 0,
-                    .mtime_ns = 0,
-                };
-            }
-            count += 1;
-            continue;
-        };
-
-        entries[count] = .{
+        // Plain `ls` only needs dirent names and kinds. Avoiding a stat syscall
+        // per entry is the main reason the builtin beats spawning system ls.
+        const needs_metadata = long_format or sort_by_size or sort_by_time;
+        const stat = if (needs_metadata)
+            dir.statFile(std.Options.debug_io, entry.name, .{}) catch null
+        else
+            null;
+        try entries.append(allocator, .{
             .name = try allocator.dupe(u8, entry.name),
             .kind = entry.kind,
-            .size = stat.size,
-            .mtime_ns = stat.mtime.nanoseconds,
-        };
-        count += 1;
+            .size = if (stat) |value| value.size else 0,
+            .mtime_ns = if (stat) |value| value.mtime.nanoseconds else 0,
+        });
     }
 
     // Sort entries using O(n log n) sort
@@ -865,17 +890,19 @@ pub fn ls(allocator: std.mem.Allocator, command: *types.ParsedCommand) !i32 {
         .sort_time = sort_by_time,
         .do_reverse = reverse,
     };
-    std.mem.sort(EntryInfo, entries[0..count], sort_ctx, struct {
+    std.mem.sort(EntryInfo, entries.items, sort_ctx, struct {
         fn lessThan(ctx: SortCtx, a: EntryInfo, b: EntryInfo) bool {
-            const cmp: bool = if (ctx.sort_size)
-                a.size < b.size
+            var order = if (ctx.sort_size)
+                std.math.order(b.size, a.size)
             else if (ctx.sort_time)
-                a.mtime_ns < b.mtime_ns
+                std.math.order(b.mtime_ns, a.mtime_ns)
             else
-                std.mem.order(u8, a.name, b.name) == .lt;
-            return if (ctx.do_reverse) !cmp else cmp;
+                std.mem.order(u8, a.name, b.name);
+            if (order == .eq) order = std.mem.order(u8, a.name, b.name);
+            return if (ctx.do_reverse) order == .gt else order == .lt;
         }
     }.lessThan);
+    const count = entries.items.len;
     var i: usize = 0;
 
     if (long_format) {
@@ -883,13 +910,13 @@ pub fn ls(allocator: std.mem.Allocator, command: *types.ParsedCommand) !i32 {
         i = 0;
         while (i < count) : (i += 1) {
             // Approximate blocks from size (512-byte blocks)
-            total_blocks += (entries[i].size + 511) / 512;
+            total_blocks += (entries.items[i].size + 511) / 512;
         }
         try IO.print("total {d}\n", .{total_blocks});
 
         i = 0;
         while (i < count) : (i += 1) {
-            const entry = entries[i];
+            const entry = entries.items[i];
 
             const path_buf = try std.fmt.allocPrint(allocator, "{s}/{s}", .{ target_path, entry.name });
             defer allocator.free(path_buf);
@@ -977,7 +1004,7 @@ pub fn ls(allocator: std.mem.Allocator, command: *types.ParsedCommand) !i32 {
             defer allocator.free(time_str);
 
             const xattr_char = if (has_xattr) "@" else " ";
-            if (entry.kind == .directory and stdout_is_tty) {
+            if (entry.kind == .directory and use_color) {
                 try IO.print("{c}{s}{s} {d:>3} {s:<20} {s:<10} {d:>8} {s} \x1b[1;36m{s}\x1b[0m\n", .{
                     kind_char,
                     perms,
@@ -1007,18 +1034,18 @@ pub fn ls(allocator: std.mem.Allocator, command: *types.ParsedCommand) !i32 {
         if (one_per_line) {
             i = 0;
             while (i < count) : (i += 1) {
-                if (entries[i].kind == .directory and stdout_is_tty) {
-                    try IO.print("\x1b[1;36m{s}\x1b[0m\n", .{entries[i].name});
+                if (entries.items[i].kind == .directory and use_color) {
+                    try IO.print("\x1b[1;36m{s}\x1b[0m\n", .{entries.items[i].name});
                 } else {
-                    try IO.print("{s}\n", .{entries[i].name});
+                    try IO.print("{s}\n", .{entries.items[i].name});
                 }
             }
         } else {
             var max_len: usize = 0;
             i = 0;
             while (i < count) : (i += 1) {
-                if (entries[i].name.len > max_len) {
-                    max_len = entries[i].name.len;
+                if (entries.items[i].name.len > max_len) {
+                    max_len = entries.items[i].name.len;
                 }
             }
 
@@ -1036,10 +1063,10 @@ pub fn ls(allocator: std.mem.Allocator, command: *types.ParsedCommand) !i32 {
                     const idx = col * num_rows + row;
                     if (idx >= count) break;
 
-                    const entry = entries[idx];
+                    const entry = entries.items[idx];
                     const padding = col_width - entry.name.len;
 
-                    if (entry.kind == .directory and stdout_is_tty) {
+                    if (entry.kind == .directory and use_color) {
                         try IO.print("\x1b[1;36m{s}\x1b[0m", .{entry.name});
                     } else {
                         try IO.print("{s}", .{entry.name});
@@ -1060,17 +1087,17 @@ pub fn ls(allocator: std.mem.Allocator, command: *types.ParsedCommand) !i32 {
     if (recursive) {
         i = 0;
         while (i < count) : (i += 1) {
-            if (entries[i].kind == .directory) {
-                if (std.mem.eql(u8, entries[i].name, ".") or std.mem.eql(u8, entries[i].name, "..")) {
+            if (entries.items[i].kind == .directory) {
+                if (std.mem.eql(u8, entries.items[i].name, ".") or std.mem.eql(u8, entries.items[i].name, "..")) {
                     continue;
                 }
 
-                try IO.print("\n{s}/{s}:\n", .{ target_path, entries[i].name });
+                try IO.print("\n{s}/{s}:\n", .{ target_path, entries.items[i].name });
 
                 const new_path = try std.fmt.allocPrint(
                     allocator,
                     "{s}/{s}",
-                    .{ target_path, entries[i].name },
+                    .{ target_path, entries.items[i].name },
                 );
                 defer allocator.free(new_path);
 
@@ -1106,12 +1133,6 @@ pub fn ls(allocator: std.mem.Allocator, command: *types.ParsedCommand) !i32 {
                 _ = ls(allocator, &recursive_cmd) catch {};
             }
         }
-    }
-
-    // Free copied names
-    i = 0;
-    while (i < count) : (i += 1) {
-        allocator.free(entries[i].name);
     }
 
     return 0;
