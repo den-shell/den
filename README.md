@@ -97,6 +97,8 @@ zig build -Doptimize=ReleaseSmall && zig build install --prefix ~/.local
 
 Distribution packages are provided for Debian/Ubuntu (`.deb`), Fedora/RHEL (`.rpm`), Arch (`PKGBUILD`), and Nix ([`packaging/`](packaging/)). To make Den your login shell, add it to `/etc/shells` and run `chsh`. Full details — prebuilt binaries, package managers, and login-shell setup — are in the [Installation guide](docs/install.md).
 
+Already installed? Run `den upgrade` to install the latest verified GitHub release.
+
 ## Configuration
 
 Den reads two files at startup:

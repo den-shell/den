@@ -55,6 +55,21 @@ Packaging definitions live in [`packaging/`](https://github.com/stacksjs/den/tre
 - **Arch** — `PKGBUILD`
 - **Nix** — `flake.nix` / `default.nix`
 
+## Upgrade an existing installation
+
+Den can replace its current executable with the latest compatible binary from
+[`den-shell/den` GitHub Releases](https://github.com/den-shell/den/releases):
+
+```sh
+den upgrade
+```
+
+The updater selects the archive for the current operating system and CPU,
+verifies it against the release's `checksums.txt`, and confirms the extracted
+binary reports the release version before replacing the existing executable.
+Use `den upgrade --check` to check without downloading, or `--force` to
+reinstall the latest version.
+
 ## Build from source
 
 **Requirements:** Zig 0.17-dev or later; macOS, Linux, or BSD.
