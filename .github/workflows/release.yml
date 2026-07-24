@@ -117,7 +117,7 @@ jobs:
           merge-multiple: true
 
       - name: Create GitHub Release with Pantry
-        uses: pantry-pm/pantry/packages/action@v0.10.48
+        uses: pantry-pm/pantry/packages/action@e2bc11fa83e4baff009dea2a12ef04ae6826976c # main
         with:
           install: 'false'
           release: 'true'
