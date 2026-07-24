@@ -8,7 +8,7 @@ fn getStdinFile() !std.Io.File {
     if (is_windows) {
         // Return an error rather than panic via `unreachable` if stdin isn't
         // available (e.g., GUI apps, detached processes).
-        const handle = std.os.windows.kernel32.GetStdHandle(std.os.windows.STD_INPUT_HANDLE) orelse return error.NoStdin;
+        const handle = @import("windows_compat").GetStdHandle(@import("windows_compat").STD_INPUT_HANDLE) orelse return error.NoStdin;
         return .{ .handle = handle, .flags = .{ .nonblocking = false } };
     } else {
         return .{ .handle = posix.STDIN_FILENO, .flags = .{ .nonblocking = false } };
@@ -17,7 +17,7 @@ fn getStdinFile() !std.Io.File {
 
 fn getStdoutFile() !std.Io.File {
     if (is_windows) {
-        const handle = std.os.windows.kernel32.GetStdHandle(std.os.windows.STD_OUTPUT_HANDLE) orelse return error.NoStdout;
+        const handle = @import("windows_compat").GetStdHandle(@import("windows_compat").STD_OUTPUT_HANDLE) orelse return error.NoStdout;
         return .{ .handle = handle, .flags = .{ .nonblocking = false } };
     } else {
         return .{ .handle = posix.STDOUT_FILENO, .flags = .{ .nonblocking = false } };
@@ -26,9 +26,9 @@ fn getStdoutFile() !std.Io.File {
 
 fn readStdin(buf: []u8) !usize {
     if (is_windows) {
-        const handle = std.os.windows.kernel32.GetStdHandle(std.os.windows.STD_INPUT_HANDLE) orelse return error.Unexpected;
+        const handle = @import("windows_compat").GetStdHandle(@import("windows_compat").STD_INPUT_HANDLE) orelse return error.Unexpected;
         var bytes_read: u32 = 0;
-        const success = std.os.windows.kernel32.ReadFile(handle, buf.ptr, @intCast(buf.len), &bytes_read, null);
+        const success = @import("windows_compat").ReadFile(handle, buf.ptr, @intCast(buf.len), &bytes_read, null);
         if (success == 0) return error.Unexpected;
         return @intCast(bytes_read);
     } else {

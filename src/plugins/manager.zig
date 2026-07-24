@@ -40,7 +40,7 @@ pub const PluginManager = struct {
                 }) catch "[Plugin Manager] Warning: Shutdown failed\n";
 
                 if (builtin.os.tag == .windows) {
-                    const stderr_handle = std.os.windows.kernel32.GetStdHandle(std.os.windows.STD_ERROR_HANDLE) orelse continue;
+                    const stderr_handle = @import("windows_compat").GetStdHandle(@import("windows_compat").STD_ERROR_HANDLE) orelse continue;
                     const stderr_file = std.Io.File{ .handle = stderr_handle, .flags = .{ .nonblocking = false } };
                     stderr_file.writeStreamingAll(std.Options.debug_io, msg) catch {};
                 } else {

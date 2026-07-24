@@ -225,9 +225,9 @@ const KeyResult = struct {
 
 fn readStdin(buf: []u8) !usize {
     if (builtin.os.tag == .windows) {
-        const handle = std.os.windows.kernel32.GetStdHandle(std.os.windows.STD_INPUT_HANDLE) orelse return error.Unexpected;
+        const handle = @import("windows_compat").GetStdHandle(@import("windows_compat").STD_INPUT_HANDLE) orelse return error.Unexpected;
         var bytes_read: u32 = 0;
-        const success = std.os.windows.kernel32.ReadFile(handle, buf.ptr, @intCast(buf.len), &bytes_read, null);
+        const success = @import("windows_compat").ReadFile(handle, buf.ptr, @intCast(buf.len), &bytes_read, null);
         if (success == 0) return error.Unexpected;
         return @intCast(bytes_read);
     } else {
@@ -317,9 +317,9 @@ fn readKey() !KeyResult {
 
 fn getTerminalSize() struct { rows: u16, cols: u16 } {
     if (builtin.os.tag == .windows) {
-        var info: std.os.windows.CONSOLE_SCREEN_BUFFER_INFO = undefined;
-        const handle = std.os.windows.kernel32.GetStdHandle(std.os.windows.STD_OUTPUT_HANDLE) orelse return .{ .rows = 24, .cols = 80 };
-        if (std.os.windows.kernel32.GetConsoleScreenBufferInfo(handle, &info) != 0) {
+        var info: @import("windows_compat").CONSOLE_SCREEN_BUFFER_INFO = undefined;
+        const handle = @import("windows_compat").GetStdHandle(@import("windows_compat").STD_OUTPUT_HANDLE) orelse return .{ .rows = 24, .cols = 80 };
+        if (@import("windows_compat").GetConsoleScreenBufferInfo(handle, &info) != 0) {
             return .{
                 .rows = @intCast(info.srWindow.Bottom - info.srWindow.Top + 1),
                 .cols = @intCast(info.srWindow.Right - info.srWindow.Left + 1),

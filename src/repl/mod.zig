@@ -76,12 +76,12 @@ pub const Repl = struct {
         var total: usize = 0;
         while (total < buf.len) {
             const n = if (comptime builtin.os.tag == .windows) blk: {
-                const handle = std.os.windows.kernel32.GetStdHandle(std.os.windows.STD_INPUT_HANDLE) orelse {
+                const handle = @import("windows_compat").GetStdHandle(@import("windows_compat").STD_INPUT_HANDLE) orelse {
                     if (total > 0) return try self.allocator.dupe(u8, buf[0..total]);
                     return error.Unexpected;
                 };
                 var bytes_read: u32 = 0;
-                const success = std.os.windows.kernel32.ReadFile(handle, buf[total..].ptr, @intCast(buf[total..].len), &bytes_read, null);
+                const success = @import("windows_compat").ReadFile(handle, buf[total..].ptr, @intCast(buf[total..].len), &bytes_read, null);
                 if (success == 0) {
                     if (total > 0) break :blk @as(usize, total);
                     return error.Unexpected;

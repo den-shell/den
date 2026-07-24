@@ -78,19 +78,18 @@ pub const Terminal = struct {
 
         if (self.is_raw) return;
 
-        const win = std.os.windows;
-        const stdin_handle = try win.GetStdHandle(win.STD_INPUT_HANDLE);
-        const stdout_handle = try win.GetStdHandle(win.STD_OUTPUT_HANDLE);
+        const stdin_handle = @import("windows_compat").GetStdHandle(@import("windows_compat").STD_INPUT_HANDLE) orelse return error.GetStdHandleFailed;
+        const stdout_handle = @import("windows_compat").GetStdHandle(@import("windows_compat").STD_OUTPUT_HANDLE) orelse return error.GetStdHandleFailed;
 
         // Get current console modes
         var input_mode: u32 = undefined;
-        if (win.kernel32.GetConsoleMode(stdin_handle, &input_mode) == 0) {
+        if (@import("windows_compat").GetConsoleMode(stdin_handle, &input_mode) == 0) {
             return error.GetConsoleModeFailed;
         }
         self.original_termios = input_mode;
 
         var output_mode: u32 = undefined;
-        if (win.kernel32.GetConsoleMode(stdout_handle, &output_mode) == 0) {
+        if (@import("windows_compat").GetConsoleMode(stdout_handle, &output_mode) == 0) {
             return error.GetConsoleModeFailed;
         }
         self.original_output_mode = output_mode;
@@ -102,7 +101,7 @@ pub const Terminal = struct {
         new_input_mode &= ~(@as(u32, windows.ENABLE_PROCESSED_INPUT));
         new_input_mode |= windows.ENABLE_VIRTUAL_TERMINAL_INPUT;
 
-        if (win.kernel32.SetConsoleMode(stdin_handle, new_input_mode) == 0) {
+        if (@import("windows_compat").SetConsoleMode(stdin_handle, new_input_mode) == 0) {
             return error.SetConsoleModeFailed;
         }
 
@@ -112,7 +111,7 @@ pub const Terminal = struct {
         new_output_mode |= windows.ENABLE_PROCESSED_OUTPUT;
         new_output_mode |= windows.ENABLE_WRAP_AT_EOL_OUTPUT;
 
-        if (win.kernel32.SetConsoleMode(stdout_handle, new_output_mode) == 0) {
+        if (@import("windows_compat").SetConsoleMode(stdout_handle, new_output_mode) == 0) {
             return error.SetConsoleModeFailed;
         }
 
@@ -125,13 +124,12 @@ pub const Terminal = struct {
         if (self.original_termios == null) return;
 
         if (builtin.os.tag == .windows) {
-            const win = std.os.windows;
-            const stdin_handle = try win.GetStdHandle(win.STD_INPUT_HANDLE);
-            const stdout_handle = try win.GetStdHandle(win.STD_OUTPUT_HANDLE);
+            const stdin_handle = @import("windows_compat").GetStdHandle(@import("windows_compat").STD_INPUT_HANDLE) orelse return error.GetStdHandleFailed;
+            const stdout_handle = @import("windows_compat").GetStdHandle(@import("windows_compat").STD_OUTPUT_HANDLE) orelse return error.GetStdHandleFailed;
 
-            _ = win.kernel32.SetConsoleMode(stdin_handle, self.original_termios.?);
+            _ = @import("windows_compat").SetConsoleMode(stdin_handle, self.original_termios.?);
             if (self.original_output_mode) |output_mode| {
-                _ = win.kernel32.SetConsoleMode(stdout_handle, output_mode);
+                _ = @import("windows_compat").SetConsoleMode(stdout_handle, output_mode);
             }
             self.is_raw = false;
             return;
@@ -148,12 +146,11 @@ pub const Terminal = struct {
         if (!self.is_raw) return error.NotInRawMode;
 
         if (builtin.os.tag == .windows) {
-            const win = std.os.windows;
-            const stdin_handle = try win.GetStdHandle(win.STD_INPUT_HANDLE);
+            const stdin_handle = @import("windows_compat").GetStdHandle(@import("windows_compat").STD_INPUT_HANDLE) orelse return error.GetStdHandleFailed;
 
             // Check if input available
             var num_events: u32 = undefined;
-            if (windows.GetNumberOfConsoleInputEvents(stdin_handle, &num_events) == 0) {
+            if (!windows.GetNumberOfConsoleInputEvents(stdin_handle, &num_events).toBool()) {
                 return error.GetInputEventsFailed;
             }
 
@@ -162,7 +159,7 @@ pub const Terminal = struct {
             // Read one character
             var buf: [1]u8 = undefined;
             var bytes_read: u32 = undefined;
-            if (win.kernel32.ReadFile(stdin_handle, &buf, 1, &bytes_read, null) == 0) {
+            if (@import("windows_compat").ReadFile(stdin_handle, &buf, 1, &bytes_read, null) == 0) {
                 return error.ReadFailed;
             }
 

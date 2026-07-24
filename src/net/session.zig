@@ -12,6 +12,7 @@
 //! untrusted network.
 
 const std = @import("std");
+const builtin = @import("builtin");
 const networking = @import("../executor/networking.zig");
 
 pub const default_host = "127.0.0.1";
@@ -51,6 +52,10 @@ pub fn isLoopback(ip: [4]u8) bool {
 
 /// Create, bind, and listen on a TCP socket. Returns the listening fd.
 pub fn bindListen(ip: [4]u8, port: u16) !std.posix.socket_t {
+    if (comptime builtin.os.tag == .windows) {
+        return error.UnsupportedPlatform;
+    }
+
     const sock = std.c.socket(std.c.AF.INET, std.c.SOCK.STREAM, 0);
     if (sock < 0) return error.SocketCreateFailed;
     errdefer _ = std.c.close(sock);
@@ -78,6 +83,10 @@ pub fn bindListen(ip: [4]u8, port: u16) !std.posix.socket_t {
 
 /// Accept a single incoming connection. Returns the connected fd.
 pub fn acceptConn(listener: std.posix.socket_t) !std.posix.socket_t {
+    if (comptime builtin.os.tag == .windows) {
+        return error.UnsupportedPlatform;
+    }
+
     const conn = std.c.accept(listener, null, null);
     if (conn < 0) return error.AcceptFailed;
     return conn;
@@ -86,6 +95,10 @@ pub fn acceptConn(listener: std.posix.socket_t) !std.posix.socket_t {
 /// Connect the local terminal to a remote session: pump stdin -> socket and
 /// socket -> stdout until either side closes.
 pub fn runClient(host: []const u8, port: u16) !void {
+    if (comptime builtin.os.tag == .windows) {
+        return error.UnsupportedPlatform;
+    }
+
     const sock = networking.connectToAddress(host, port, true) orelse return error.ConnectionFailed;
     defer _ = std.c.close(sock);
 

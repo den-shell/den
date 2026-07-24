@@ -123,7 +123,10 @@ pub const Logger = struct {
         // Add timestamp if enabled
         if (self.config.show_timestamp) {
             const now = compat.Instant.now() catch std.mem.zeroes(compat.Instant);
-            const timestamp: i64 = now.timestamp.sec;
+            const timestamp: i64 = if (comptime builtin.os.tag == .windows)
+                @intCast(now.timestamp / 10_000_000)
+            else
+                now.timestamp.sec;
             const seconds = @mod(timestamp, 86400);
             const hours = @divTrunc(seconds, 3600);
             const minutes = @divTrunc(@mod(seconds, 3600), 60);
@@ -180,7 +183,7 @@ pub const Logger = struct {
             file.writeStreamingAll(std.Options.debug_io, output) catch {};
         } else {
             const stderr = std.Io.File{ .handle = if (builtin.os.tag == .windows)
-                (std.os.windows.kernel32.GetStdHandle(std.os.windows.STD_ERROR_HANDLE) orelse return)
+                (@import("windows_compat").GetStdHandle(@import("windows_compat").STD_ERROR_HANDLE) orelse return)
             else
                 std.posix.STDERR_FILENO, .flags = .{ .nonblocking = false } };
             stderr.writeStreamingAll(std.Options.debug_io, output) catch {};

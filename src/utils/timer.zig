@@ -263,7 +263,7 @@ pub const Profiler = struct {
 /// Helper to write to stderr
 fn writeStderr(msg: []const u8) void {
     const stderr = std.Io.File{ .handle = if (builtin.os.tag == .windows)
-        (std.os.windows.kernel32.GetStdHandle(std.os.windows.STD_ERROR_HANDLE) orelse return)
+        (@import("windows_compat").GetStdHandle(@import("windows_compat").STD_ERROR_HANDLE) orelse return)
     else
         std.posix.STDERR_FILENO, .flags = .{ .nonblocking = false } };
     stderr.writeStreamingAll(std.Options.debug_io, msg) catch {};

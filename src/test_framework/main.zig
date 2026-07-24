@@ -73,7 +73,7 @@ fn parseArgs(allocator: std.mem.Allocator, init_args: std.process.Args) !struct 
 
 fn printHelp() !void {
     const stdout_file = if (builtin.os.tag == .windows) blk: {
-        const handle = std.os.windows.kernel32.GetStdHandle(std.os.windows.STD_OUTPUT_HANDLE) orelse return error.StdoutUnavailable;
+        const handle = @import("windows_compat").GetStdHandle(@import("windows_compat").STD_OUTPUT_HANDLE) orelse return error.StdoutUnavailable;
         break :blk std.Io.File{ .handle = handle, .flags = .{ .nonblocking = false } };
     } else std.Io.File{ .handle = std.posix.STDOUT_FILENO, .flags = .{ .nonblocking = false } };
     var buffer: [4096]u8 = undefined;

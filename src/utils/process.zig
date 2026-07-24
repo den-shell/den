@@ -123,7 +123,7 @@ fn createPipeWindows() !Pipe {
     var read_handle: std.os.windows.HANDLE = undefined;
     var write_handle: std.os.windows.HANDLE = undefined;
 
-    const result = std.os.windows.kernel32.CreatePipe(
+    const result = @import("windows_compat").CreatePipe(
         &read_handle,
         &write_handle,
         &sa,
@@ -158,10 +158,10 @@ fn duplicateHandlePosix(fd: std.posix.fd_t) !std.posix.fd_t {
 }
 
 fn duplicateHandleWindows(handle: std.os.windows.HANDLE) !std.os.windows.HANDLE {
-    const current_process = std.os.windows.kernel32.GetCurrentProcess();
+    const current_process = @import("windows_compat").GetCurrentProcess();
     var new_handle: std.os.windows.HANDLE = undefined;
 
-    const result = std.os.windows.kernel32.DuplicateHandle(
+    const result = @import("windows_compat").DuplicateHandle(
         current_process,
         handle,
         current_process,
@@ -218,7 +218,7 @@ pub fn closeHandle(handle: FileHandle) void {
 /// Get standard input handle
 pub fn getStdin() FileHandle {
     if (builtin.os.tag == .windows) {
-        return std.os.windows.kernel32.GetStdHandle(std.os.windows.STD_INPUT_HANDLE) orelse std.os.windows.INVALID_HANDLE_VALUE;
+        return @import("windows_compat").GetStdHandle(@import("windows_compat").STD_INPUT_HANDLE) orelse std.os.windows.INVALID_HANDLE_VALUE;
     } else {
         return std.posix.STDIN_FILENO;
     }
@@ -227,7 +227,7 @@ pub fn getStdin() FileHandle {
 /// Get standard output handle
 pub fn getStdout() FileHandle {
     if (builtin.os.tag == .windows) {
-        return std.os.windows.kernel32.GetStdHandle(std.os.windows.STD_OUTPUT_HANDLE) orelse std.os.windows.INVALID_HANDLE_VALUE;
+        return @import("windows_compat").GetStdHandle(@import("windows_compat").STD_OUTPUT_HANDLE) orelse std.os.windows.INVALID_HANDLE_VALUE;
     } else {
         return std.posix.STDOUT_FILENO;
     }
@@ -236,7 +236,7 @@ pub fn getStdout() FileHandle {
 /// Get standard error handle
 pub fn getStderr() FileHandle {
     if (builtin.os.tag == .windows) {
-        return std.os.windows.kernel32.GetStdHandle(std.os.windows.STD_ERROR_HANDLE) orelse std.os.windows.INVALID_HANDLE_VALUE;
+        return @import("windows_compat").GetStdHandle(@import("windows_compat").STD_ERROR_HANDLE) orelse std.os.windows.INVALID_HANDLE_VALUE;
     } else {
         return std.posix.STDERR_FILENO;
     }
@@ -314,11 +314,11 @@ fn waitProcessPosix(pid: std.posix.pid_t, options: WaitOptions) !WaitResult {
 }
 
 fn waitProcessWindows(handle: std.os.windows.HANDLE, options: WaitOptions) !WaitResult {
-    const timeout: std.os.windows.DWORD = if (options.no_hang) 0 else std.os.windows.INFINITE;
+    const timeout: std.os.windows.DWORD = if (options.no_hang) 0 else std.math.maxInt(std.os.windows.DWORD);
 
-    const wait_result = std.os.windows.kernel32.WaitForSingleObject(handle, timeout);
+    const wait_result = @import("windows_compat").WaitForSingleObject(handle, timeout);
 
-    if (wait_result == std.os.windows.WAIT_TIMEOUT) {
+    if (wait_result == @import("windows_compat").WAIT_TIMEOUT) {
         return WaitResult{
             .pid = handle,
             .status = .{ .code = 0 },
@@ -326,9 +326,9 @@ fn waitProcessWindows(handle: std.os.windows.HANDLE, options: WaitOptions) !Wait
         };
     }
 
-    if (wait_result == std.os.windows.WAIT_OBJECT_0) {
+    if (wait_result == @import("windows_compat").WAIT_OBJECT_0) {
         var exit_code: std.os.windows.DWORD = undefined;
-        if (std.os.windows.kernel32.GetExitCodeProcess(handle, &exit_code) != 0) {
+        if (@import("windows_compat").GetExitCodeProcess(handle, &exit_code) != 0) {
             return WaitResult{
                 .pid = handle,
                 .status = .{ .code = @intCast(exit_code) },
@@ -355,7 +355,7 @@ fn killProcessPosix(pid: std.posix.pid_t, signal: u8) !void {
 
 fn killProcessWindows(handle: std.os.windows.HANDLE) !void {
     // On Windows, we can only terminate (equivalent to SIGKILL)
-    if (std.os.windows.kernel32.TerminateProcess(handle, 1) == 0) {
+    if (@import("windows_compat").TerminateProcess(handle, 1) == 0) {
         return error.TerminateProcessFailed;
     }
 }
@@ -458,7 +458,7 @@ pub fn isProcessRunning(pid: ProcessId) bool {
 /// Get current process ID
 pub fn getCurrentProcessId() ProcessId {
     if (builtin.os.tag == .windows) {
-        return std.os.windows.kernel32.GetCurrentProcess();
+        return @import("windows_compat").GetCurrentProcess();
     } else {
         return std.c.getpid();
     }

@@ -8,7 +8,7 @@ const DenConfig = types.DenConfig;
 fn readFileChunk(file: std.Io.File, buf: []u8) !usize {
     if (builtin.os.tag == .windows) {
         var bytes_read: u32 = 0;
-        const success = std.os.windows.kernel32.ReadFile(file.handle, buf.ptr, @intCast(buf.len), &bytes_read, null);
+        const success = @import("windows_compat").ReadFile(file.handle, buf.ptr, @intCast(buf.len), &bytes_read, null);
         if (success == 0) return error.ReadFailed;
         return bytes_read;
     } else {
@@ -421,7 +421,7 @@ pub const ValidationResult = struct {
     /// Print to stderr with color auto-detection
     pub fn printToStderr(self: *const ValidationResult) void {
         const stderr_file = if (builtin.os.tag == .windows)
-            std.Io.File{ .handle = std.os.windows.kernel32.GetStdHandle(std.os.windows.STD_ERROR_HANDLE) orelse return, .flags = .{ .nonblocking = false } }
+            std.Io.File{ .handle = @import("windows_compat").GetStdHandle(@import("windows_compat").STD_ERROR_HANDLE) orelse return, .flags = .{ .nonblocking = false } }
         else
             std.Io.File{ .handle = std.posix.STDERR_FILENO, .flags = .{ .nonblocking = false } };
         // Check if stderr is a TTY for color support

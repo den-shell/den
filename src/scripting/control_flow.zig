@@ -550,8 +550,8 @@ pub const ControlFlowExecutor = struct {
     /// Execute select menu for interactive selection
     pub fn executeSelect(self: *ControlFlowExecutor, menu: *SelectMenu) !i32 {
         var last_exit: i32 = 0;
-        const stdin_handle = if (comptime builtin.os.tag == .windows) std.os.windows.kernel32.GetStdHandle(std.os.windows.STD_INPUT_HANDLE) orelse return error.Unexpected else std.posix.STDIN_FILENO;
-        const stderr_handle = if (comptime builtin.os.tag == .windows) std.os.windows.kernel32.GetStdHandle(std.os.windows.STD_ERROR_HANDLE) orelse return error.Unexpected else std.posix.STDERR_FILENO;
+        const stdin_handle = if (comptime builtin.os.tag == .windows) @import("windows_compat").GetStdHandle(@import("windows_compat").STD_INPUT_HANDLE) orelse return error.Unexpected else std.posix.STDIN_FILENO;
+        const stderr_handle = if (comptime builtin.os.tag == .windows) @import("windows_compat").GetStdHandle(@import("windows_compat").STD_ERROR_HANDLE) orelse return error.Unexpected else std.posix.STDERR_FILENO;
         const stdin_file = std.Io.File{ .handle = stdin_handle, .flags = .{ .nonblocking = false } };
         const stderr_file = std.Io.File{ .handle = stderr_handle, .flags = .{ .nonblocking = false } };
         var stdin_buf: [4096]u8 = undefined;

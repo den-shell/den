@@ -143,9 +143,9 @@ pub fn builtinRead(self: *Shell, cmd: *types.ParsedCommand) !void {
         while (count < n) {
             var byte: [1]u8 = undefined;
             const bytes_read: isize = if (comptime builtin.os.tag == .windows) win_blk: {
-                const handle = std.os.windows.kernel32.GetStdHandle(std.os.windows.STD_INPUT_HANDLE) orelse break :win_blk @as(isize, -1);
+                const handle = @import("windows_compat").GetStdHandle(@import("windows_compat").STD_INPUT_HANDLE) orelse break :win_blk @as(isize, -1);
                 var br: u32 = 0;
-                const ok = std.os.windows.kernel32.ReadFile(handle, &byte, 1, &br, null);
+                const ok = @import("windows_compat").ReadFile(handle, &byte, 1, &br, null);
                 break :win_blk if (ok != 0) @as(isize, @intCast(br)) else @as(isize, -1);
             } else std.c.read(std.posix.STDIN_FILENO, &byte, 1);
             if (bytes_read <= 0) break;
@@ -165,9 +165,9 @@ pub fn builtinRead(self: *Shell, cmd: *types.ParsedCommand) !void {
         while (true) {
             var byte: [1]u8 = undefined;
             const bytes_read: isize = if (comptime builtin.os.tag == .windows) win_blk: {
-                const handle = std.os.windows.kernel32.GetStdHandle(std.os.windows.STD_INPUT_HANDLE) orelse break :win_blk @as(isize, -1);
+                const handle = @import("windows_compat").GetStdHandle(@import("windows_compat").STD_INPUT_HANDLE) orelse break :win_blk @as(isize, -1);
                 var br: u32 = 0;
-                const ok = std.os.windows.kernel32.ReadFile(handle, &byte, 1, &br, null);
+                const ok = @import("windows_compat").ReadFile(handle, &byte, 1, &br, null);
                 break :win_blk if (ok != 0) @as(isize, @intCast(br)) else @as(isize, -1);
             } else std.c.read(std.posix.STDIN_FILENO, &byte, 1);
             if (bytes_read <= 0) break;

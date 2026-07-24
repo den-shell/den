@@ -459,7 +459,7 @@ pub const PluginRegistry = struct {
                         // than panic via unreachable — this path is already
                         // handling a plugin error and shouldn't cascade to a crash).
                         const maybe_stderr: ?std.Io.File = if (builtin.os.tag == .windows) blk: {
-                            const h = std.os.windows.kernel32.GetStdHandle(std.os.windows.STD_ERROR_HANDLE) orelse break :blk null;
+                            const h = @import("windows_compat").GetStdHandle(@import("windows_compat").STD_ERROR_HANDLE) orelse break :blk null;
                             break :blk std.Io.File{ .handle = h, .flags = .{ .nonblocking = false } };
                         } else std.Io.File{ .handle = std.posix.STDERR_FILENO, .flags = .{ .nonblocking = false } };
                         if (maybe_stderr) |stderr_file| {
@@ -495,7 +495,7 @@ pub const PluginRegistry = struct {
                         // than panic via unreachable — this path is already
                         // handling a plugin error and shouldn't cascade to a crash).
                         const maybe_stderr: ?std.Io.File = if (builtin.os.tag == .windows) blk: {
-                            const h = std.os.windows.kernel32.GetStdHandle(std.os.windows.STD_ERROR_HANDLE) orelse break :blk null;
+                            const h = @import("windows_compat").GetStdHandle(@import("windows_compat").STD_ERROR_HANDLE) orelse break :blk null;
                             break :blk std.Io.File{ .handle = h, .flags = .{ .nonblocking = false } };
                         } else std.Io.File{ .handle = std.posix.STDERR_FILENO, .flags = .{ .nonblocking = false } };
                         if (maybe_stderr) |stderr_file| {

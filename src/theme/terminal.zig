@@ -71,7 +71,7 @@ pub const TerminalSize = struct {
 pub fn isTTY() bool {
     if (comptime @import("builtin").os.tag == .windows) {
         const win = std.os.windows;
-        const handle = win.kernel32.GetStdHandle(win.STD_OUTPUT_HANDLE) orelse return false;
+        const handle = @import("windows_compat").GetStdHandle(@import("windows_compat").STD_OUTPUT_HANDLE) orelse return false;
         var mode: win.DWORD = 0;
         return win.kernel32.GetConsoleMode(handle, &mode) != 0;
     } else {

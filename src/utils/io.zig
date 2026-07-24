@@ -36,7 +36,7 @@ pub fn cwdMakePath(sub_path: []const u8) std.Io.Dir.CreateDirPathError!void {
 pub fn rawWrite(fd: if (builtin.os.tag == .windows) std.os.windows.HANDLE else posix.fd_t, bytes: []const u8) void {
     if (builtin.os.tag == .windows) {
         var written: u32 = 0;
-        _ = std.os.windows.kernel32.WriteFile(fd, bytes.ptr, @intCast(bytes.len), &written, null);
+        _ = @import("windows_compat").WriteFile(fd, bytes.ptr, @intCast(bytes.len), &written, null);
     } else if (builtin.link_libc) {
         _ = std.c.write(fd, bytes.ptr, bytes.len);
     } else {
@@ -138,7 +138,7 @@ pub const BufferedStdinReader = struct {
 
     fn readStdinRaw(buffer: []u8) !usize {
         if (builtin.os.tag == .windows) {
-            const handle = std.os.windows.kernel32.GetStdHandle(std.os.windows.STD_INPUT_HANDLE) orelse return error.NoStdIn;
+            const handle = @import("windows_compat").GetStdHandle(@import("windows_compat").STD_INPUT_HANDLE) orelse return error.NoStdIn;
             const stdin = std.Io.File{ .handle = handle, .flags = .{ .nonblocking = false } };
             return stdin.readStreaming(std.Options.debug_io, &.{buffer}) catch |err| {
                 if (err == error.EndOfStream) return 0;
@@ -167,11 +167,7 @@ pub fn getBufferedStdin() *BufferedStdinReader {
 pub const IO = struct {
     /// Write string to stdout (cross-platform)
     pub fn print(comptime fmt: []const u8, args: anytype) !void {
-        // Use File API directly to write to stdout
-        const stdout_file = std.Io.File{ .handle = if (builtin.os.tag == .windows)
-            std.os.windows.GetStdHandle(std.os.windows.STD_OUTPUT_HANDLE) catch return
-        else
-            posix.STDOUT_FILENO, .flags = .{ .nonblocking = false } };
+        const stdout_file = std.Io.File.stdout();
 
         // Format the string
         var buf: [4096]u8 = undefined;
@@ -181,11 +177,7 @@ pub const IO = struct {
 
     /// Write string to stderr (cross-platform)
     pub fn eprint(comptime fmt: []const u8, args: anytype) !void {
-        // Use File API directly to write to stderr
-        const stderr_file = std.Io.File{ .handle = if (builtin.os.tag == .windows)
-            std.os.windows.GetStdHandle(std.os.windows.STD_ERROR_HANDLE) catch return
-        else
-            posix.STDERR_FILENO, .flags = .{ .nonblocking = false } };
+        const stderr_file = std.Io.File.stderr();
 
         // Format the string
         var buf: [4096]u8 = undefined;
@@ -202,7 +194,7 @@ pub const IO = struct {
 
         if (builtin.os.tag == .windows) {
             // Use Windows stdin handle with read loop (similar to POSIX path)
-            const handle = std.os.windows.kernel32.GetStdHandle(std.os.windows.STD_INPUT_HANDLE) orelse return error.NoStdIn;
+            const handle = @import("windows_compat").GetStdHandle(@import("windows_compat").STD_INPUT_HANDLE) orelse return error.NoStdIn;
             const stdin = std.Io.File{ .handle = handle, .flags = .{ .nonblocking = false } };
 
             while (pos < buffer.len) {
@@ -267,7 +259,7 @@ pub const IO = struct {
     /// Read exactly N bytes from stdin
     pub fn readBytes(buffer: []u8) !usize {
         if (builtin.os.tag == .windows) {
-            const stdin_file = std.Io.File{ .handle = std.os.windows.GetStdHandle(std.os.windows.STD_INPUT_HANDLE) catch return error.StdinUnavailable, .flags = .{ .nonblocking = false } };
+            const stdin_file = std.Io.File.stdin();
             const reader = stdin_file.reader(std.Options.debug_io);
             return try reader.read(buffer);
         }
@@ -276,10 +268,7 @@ pub const IO = struct {
 
     /// Write bytes to stdout
     pub fn writeBytes(bytes: []const u8) !void {
-        const stdout_file = std.Io.File{ .handle = if (builtin.os.tag == .windows)
-            std.os.windows.GetStdHandle(std.os.windows.STD_OUTPUT_HANDLE) catch return
-        else
-            posix.STDOUT_FILENO, .flags = .{ .nonblocking = false } };
+        const stdout_file = std.Io.File.stdout();
         try stdout_file.writeStreamingAll(std.Options.debug_io, bytes);
     }
 
@@ -362,7 +351,7 @@ pub const BufferedStdoutWriter = struct {
         if (self.pos == 0) return;
 
         const stdout = std.Io.File{ .handle = if (builtin.os.tag == .windows)
-            (std.os.windows.kernel32.GetStdHandle(std.os.windows.STD_OUTPUT_HANDLE) orelse return)
+            (@import("windows_compat").GetStdHandle(@import("windows_compat").STD_OUTPUT_HANDLE) orelse return)
         else
             posix.STDOUT_FILENO, .flags = .{ .nonblocking = false } };
         try stdout.writeStreamingAll(std.Options.debug_io, self.buffer[0..self.pos]);

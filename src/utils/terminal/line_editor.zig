@@ -2133,7 +2133,7 @@ pub const LineEditor = struct {
         _ = self;
 
         if (builtin.os.tag == .windows) {
-            const handle = std.os.windows.kernel32.GetStdHandle(std.os.windows.STD_OUTPUT_HANDLE) orelse return error.NoStdOut;
+            const handle = @import("windows_compat").GetStdHandle(@import("windows_compat").STD_OUTPUT_HANDLE) orelse return error.NoStdOut;
             const stdout = std.Io.File{ .handle = handle, .flags = .{ .nonblocking = false } };
             try stdout.writeStreamingAll(std.Options.debug_io, bytes);
         } else {

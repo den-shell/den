@@ -386,8 +386,8 @@ pub fn executeSelectLoop(self: *Shell, input: []const u8) !void {
         var input_buf: [1024]u8 = undefined;
         const bytes_read = if (comptime @import("builtin").os.tag == .windows) blk: {
             var n: u32 = 0;
-            const handle = std.os.windows.kernel32.GetStdHandle(std.os.windows.STD_INPUT_HANDLE) orelse break :blk @as(usize, 0);
-            const success = std.os.windows.kernel32.ReadFile(handle, &input_buf, @intCast(input_buf.len), &n, null);
+            const handle = @import("windows_compat").GetStdHandle(@import("windows_compat").STD_INPUT_HANDLE) orelse break :blk @as(usize, 0);
+            const success = @import("windows_compat").ReadFile(handle, &input_buf, @intCast(input_buf.len), &n, null);
             break :blk if (success == 0) @as(usize, 0) else @as(usize, n);
         } else std.posix.read(std.posix.STDIN_FILENO, &input_buf) catch |err| {
             if (err == error.WouldBlock) continue;

@@ -37,8 +37,14 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
     });
+    const windows_compat_module = b.createModule(.{
+        .root_source_file = b.path("src/utils/windows_compat.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
     compat_module.link_libc = true;
     den_module.addImport("compat", compat_module);
+    den_module.addImport("windows_compat", windows_compat_module);
 
     // Den shell executable
     const exe = b.addExecutable(.{
@@ -57,7 +63,14 @@ pub fn build(b: *std.Build) void {
         exe.linkage = .dynamic;
         if (link_libc) den_module.link_libc = true;
     }
-    b.installArtifact(exe);
+    const install_den = b.addInstallArtifact(exe, .{});
+    b.getInstallStep().dependOn(&install_den.step);
+
+    // Build only the distributable shell for a single `-Dtarget`. The default
+    // install step also includes developer tools, examples, and benchmarks,
+    // which are not release artifacts and needlessly break cross-compilation.
+    const release_target_step = b.step("release-target", "Build one release binary for -Dtarget");
+    release_target_step.dependOn(&install_den.step);
 
     // Cross-compilation targets for release builds
     const release_step = b.step("release", "Build release binaries for all platforms");
@@ -101,6 +114,20 @@ pub fn build(b: *std.Build) void {
             .optimize = .ReleaseSmall,
             .strip = true, // distributed binaries: smallest + stripped (~1.3MB)
         });
+        const release_compat_module = b.createModule(.{
+            .root_source_file = b.path("src/utils/compat.zig"),
+            .target = release_target,
+            .optimize = .ReleaseSmall,
+        });
+        const release_windows_compat_module = b.createModule(.{
+            .root_source_file = b.path("src/utils/windows_compat.zig"),
+            .target = release_target,
+            .optimize = .ReleaseSmall,
+        });
+        release_compat_module.link_libc = true;
+        release_module.addImport("compat", release_compat_module);
+        release_module.addImport("windows_compat", release_windows_compat_module);
+
         const release_exe = b.addExecutable(.{
             .name = "den",
             .root_module = release_module,

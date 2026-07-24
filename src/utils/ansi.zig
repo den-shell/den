@@ -451,11 +451,10 @@ fn getTerminalSizeUnix() !TerminalSize {
 
 /// Get terminal size on Windows
 fn getTerminalSizeWindows() !TerminalSize {
-    const win = std.os.windows;
-    const handle = try win.GetStdHandle(win.STD_OUTPUT_HANDLE);
+    const handle = @import("windows_compat").GetStdHandle(@import("windows_compat").STD_OUTPUT_HANDLE) orelse return error.GetStdHandleFailed;
 
-    var info: win.CONSOLE_SCREEN_BUFFER_INFO = undefined;
-    if (win.kernel32.GetConsoleScreenBufferInfo(handle, &info) == 0) {
+    var info: @import("windows_compat").CONSOLE_SCREEN_BUFFER_INFO = undefined;
+    if (@import("windows_compat").GetConsoleScreenBufferInfo(handle, &info) == 0) {
         return error.GetConsoleInfoFailed;
     }
 
@@ -472,9 +471,9 @@ fn getTerminalSizeWindows() !TerminalSize {
 pub fn isTerminal() bool {
     if (builtin.os.tag == .windows) {
         const win = std.os.windows;
-        const handle = win.kernel32.GetStdHandle(win.STD_OUTPUT_HANDLE) orelse return false;
+        const handle = @import("windows_compat").GetStdHandle(@import("windows_compat").STD_OUTPUT_HANDLE) orelse return false;
         var mode: win.DWORD = 0;
-        return win.kernel32.GetConsoleMode(handle, &mode) != 0;
+        return @import("windows_compat").GetConsoleMode(handle, &mode) != 0;
     } else {
         return (std.Io.File{ .handle = std.posix.STDOUT_FILENO, .flags = .{ .nonblocking = false } }).isTty(std.Options.debug_io) catch false;
     }
@@ -484,19 +483,13 @@ pub fn isTerminal() bool {
 pub const Output = struct {
     /// Write to stdout
     pub fn write(bytes: []const u8) !void {
-        const stdout = std.Io.File{ .handle = if (builtin.os.tag == .windows)
-            (try std.os.windows.GetStdHandle(std.os.windows.STD_OUTPUT_HANDLE))
-        else
-            std.posix.STDOUT_FILENO, .flags = .{ .nonblocking = false } };
+        const stdout = std.Io.File.stdout();
         try stdout.writeStreamingAll(std.Options.debug_io, bytes);
     }
 
     /// Write to stderr
     pub fn writeErr(bytes: []const u8) !void {
-        const stderr = std.Io.File{ .handle = if (builtin.os.tag == .windows)
-            (try std.os.windows.GetStdHandle(std.os.windows.STD_ERROR_HANDLE))
-        else
-            std.posix.STDERR_FILENO, .flags = .{ .nonblocking = false } };
+        const stderr = std.Io.File.stderr();
         try stderr.writeStreamingAll(std.Options.debug_io, bytes);
     }
 
@@ -544,9 +537,9 @@ pub const RawMode = struct {
         const win = std.os.windows;
 
         // Setup input mode
-        const stdin_handle = try win.GetStdHandle(win.STD_INPUT_HANDLE);
+        const stdin_handle = @import("windows_compat").GetStdHandle(@import("windows_compat").STD_INPUT_HANDLE) orelse return error.GetStdHandleFailed;
         var input_mode: win.DWORD = 0;
-        if (win.kernel32.GetConsoleMode(stdin_handle, &input_mode) == 0) {
+        if (@import("windows_compat").GetConsoleMode(stdin_handle, &input_mode) == 0) {
             return error.GetConsoleModeFailed;
         }
         self.original_termios = input_mode;
@@ -558,14 +551,14 @@ pub const RawMode = struct {
         new_input_mode &= ~@as(win.DWORD, 0x0001); // ENABLE_PROCESSED_INPUT
         new_input_mode |= 0x0200; // ENABLE_VIRTUAL_TERMINAL_INPUT
 
-        if (win.kernel32.SetConsoleMode(stdin_handle, new_input_mode) == 0) {
+        if (@import("windows_compat").SetConsoleMode(stdin_handle, new_input_mode) == 0) {
             return error.SetConsoleModeFailed;
         }
 
         // Setup output mode for ANSI support
-        const stdout_handle = try win.GetStdHandle(win.STD_OUTPUT_HANDLE);
+        const stdout_handle = @import("windows_compat").GetStdHandle(@import("windows_compat").STD_OUTPUT_HANDLE) orelse return error.GetStdHandleFailed;
         var output_mode: win.DWORD = 0;
-        if (win.kernel32.GetConsoleMode(stdout_handle, &output_mode) == 0) {
+        if (@import("windows_compat").GetConsoleMode(stdout_handle, &output_mode) == 0) {
             return error.GetConsoleModeFailed;
         }
         self.original_output_mode = output_mode;
@@ -574,24 +567,22 @@ pub const RawMode = struct {
         var new_output_mode = output_mode;
         new_output_mode |= 0x0004; // ENABLE_VIRTUAL_TERMINAL_PROCESSING
 
-        if (win.kernel32.SetConsoleMode(stdout_handle, new_output_mode) == 0) {
+        if (@import("windows_compat").SetConsoleMode(stdout_handle, new_output_mode) == 0) {
             return error.SetConsoleModeFailed;
         }
     }
 
     fn disableWindows(self: *RawMode) !void {
-        const win = std.os.windows;
-
-        const stdin_handle = try win.GetStdHandle(win.STD_INPUT_HANDLE);
+        const stdin_handle = @import("windows_compat").GetStdHandle(@import("windows_compat").STD_INPUT_HANDLE) orelse return error.GetStdHandleFailed;
         if (self.original_termios) |mode| {
-            if (win.kernel32.SetConsoleMode(stdin_handle, mode) == 0) {
+            if (@import("windows_compat").SetConsoleMode(stdin_handle, mode) == 0) {
                 return error.SetConsoleModeFailed;
             }
         }
 
-        const stdout_handle = try win.GetStdHandle(win.STD_OUTPUT_HANDLE);
+        const stdout_handle = @import("windows_compat").GetStdHandle(@import("windows_compat").STD_OUTPUT_HANDLE) orelse return error.GetStdHandleFailed;
         if (self.original_output_mode) |mode| {
-            if (win.kernel32.SetConsoleMode(stdout_handle, mode) == 0) {
+            if (@import("windows_compat").SetConsoleMode(stdout_handle, mode) == 0) {
                 return error.SetConsoleModeFailed;
             }
         }

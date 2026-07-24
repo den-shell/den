@@ -285,7 +285,7 @@ pub const Executor = struct {
 
         // Initialize argv lists
         for (0..commands.len) |i| {
-            argv_lists[i] = .{};
+            argv_lists[i] = .empty;
         }
         defer {
             for (0..commands.len) |i| {

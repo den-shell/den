@@ -130,21 +130,7 @@ pub fn grep(allocator: std.mem.Allocator, command: *types.ParsedCommand) !i32 {
         defer if (owned_buf) |b| allocator.free(b);
 
         const content: []const u8 = if (std.mem.eql(u8, file_path, "-")) blk: {
-            // Read from stdin
-            const max_stdin: usize = 10 * 1024 * 1024;
-            var stdin_buf: std.ArrayList(u8) = .empty;
-            errdefer stdin_buf.deinit(allocator);
-            var read_buf: [4096]u8 = undefined;
-            while (true) {
-                const n = std.posix.read(std.posix.STDIN_FILENO, &read_buf) catch break;
-                if (n == 0) break;
-                stdin_buf.appendSlice(allocator, read_buf[0..n]) catch break;
-                if (stdin_buf.items.len >= max_stdin) break;
-            }
-            owned_buf = stdin_buf.toOwnedSlice(allocator) catch {
-                stdin_buf.deinit(allocator);
-                continue;
-            };
+            owned_buf = common.readAllStdin(allocator) catch continue;
             break :blk owned_buf.?;
         } else blk: {
             const file = std.Io.Dir.cwd().openFile(std.Options.debug_io, file_path, .{}) catch |err| {
@@ -824,10 +810,7 @@ pub fn ls(allocator: std.mem.Allocator, command: *types.ParsedCommand) !i32 {
 
     // Match `ls --color=auto`: only colorize when stdout is a terminal, and
     // fall back to one-entry-per-line output when piped/redirected (like bash).
-    const stdout_is_tty = (std.Io.File{
-        .handle = std.posix.STDOUT_FILENO,
-        .flags = .{ .nonblocking = false },
-    }).isTty(std.Options.debug_io) catch false;
+    const stdout_is_tty = std.Io.File.stdout().isTty(std.Options.debug_io) catch false;
     if (!stdout_is_tty) one_per_line = true;
     const use_color = switch (color_mode) {
         .auto => stdout_is_tty,

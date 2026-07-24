@@ -10,9 +10,9 @@ const is_windows = builtin.os.tag == .windows;
 
 fn readStdinByte(buf: []u8) !usize {
     if (is_windows) {
-        const handle = std.os.windows.kernel32.GetStdHandle(std.os.windows.STD_INPUT_HANDLE) orelse return error.Unexpected;
+        const handle = @import("windows_compat").GetStdHandle(@import("windows_compat").STD_INPUT_HANDLE) orelse return error.Unexpected;
         var bytes_read: u32 = 0;
-        const success = std.os.windows.kernel32.ReadFile(handle, buf.ptr, @intCast(buf.len), &bytes_read, null);
+        const success = @import("windows_compat").ReadFile(handle, buf.ptr, @intCast(buf.len), &bytes_read, null);
         if (success == 0) return error.Unexpected;
         return @intCast(bytes_read);
     } else {

@@ -62,25 +62,35 @@ fn windowsCtrlHandler(ctrl_type: u32) callconv(std.builtin.CallingConvention.win
         .interrupt => {
             // Store interrupt signal (use a sentinel value distinct from POSIX)
             signal_received.store(1, .release);
-            return std.os.windows.TRUE; // Handled
+            return .TRUE; // Handled
         },
         .terminate => {
             // Store terminate signal
             signal_received.store(2, .release);
-            return std.os.windows.TRUE; // Handled
+            return .TRUE; // Handled
         },
         .none, .winch => {
-            return std.os.windows.FALSE; // Not handled
+            return .FALSE; // Not handled
         },
     }
+}
+
+fn setConsoleCtrlHandler(add: bool) bool {
+    const windows = std.os.windows;
+    const setHandler = struct {
+        extern "kernel32" fn SetConsoleCtrlHandler(
+            handler: ?*const fn (u32) callconv(std.builtin.CallingConvention.winapi) windows.BOOL,
+            add_handler: windows.BOOL,
+        ) callconv(std.builtin.CallingConvention.winapi) windows.BOOL;
+    }.SetConsoleCtrlHandler;
+    return setHandler(&windowsCtrlHandler, windows.BOOL.fromBool(add)).toBool();
 }
 
 /// Install signal handlers
 pub fn installHandlers() !void {
     if (builtin.os.tag == .windows) {
         // Windows: use SetConsoleCtrlHandler for Ctrl+C and close events
-        const kernel32 = std.os.windows.kernel32;
-        if (kernel32.SetConsoleCtrlHandler(@ptrCast(&windowsCtrlHandler), std.os.windows.TRUE) == 0) {
+        if (!setConsoleCtrlHandler(true)) {
             return error.SetConsoleCtrlHandlerFailed;
         }
         return;
@@ -155,11 +165,10 @@ pub fn checkWindowSizeChanged() bool {
 pub fn getWindowSize() !WindowSize {
     if (builtin.os.tag == .windows) {
         // Windows implementation
-        const windows = std.os.windows;
-        const handle = try windows.GetStdHandle(windows.STD_OUTPUT_HANDLE);
+        const handle = @import("windows_compat").GetStdHandle(@import("windows_compat").STD_OUTPUT_HANDLE) orelse return error.GetStdHandleFailed;
 
-        var info: windows.CONSOLE_SCREEN_BUFFER_INFO = undefined;
-        if (windows.kernel32.GetConsoleScreenBufferInfo(handle, &info) == 0) {
+        var info: @import("windows_compat").CONSOLE_SCREEN_BUFFER_INFO = undefined;
+        if (@import("windows_compat").GetConsoleScreenBufferInfo(handle, &info) == 0) {
             return error.GetConsoleFailed;
         }
 
@@ -197,8 +206,7 @@ pub fn getWindowSize() !WindowSize {
 pub fn resetHandlers() !void {
     if (builtin.os.tag == .windows) {
         // Windows: remove our console control handler
-        const kernel32 = std.os.windows.kernel32;
-        _ = kernel32.SetConsoleCtrlHandler(@ptrCast(&windowsCtrlHandler), std.os.windows.FALSE);
+        _ = setConsoleCtrlHandler(false);
         return;
     }
 

@@ -17,15 +17,15 @@ pub const c_exec = if (builtin.os.tag == .windows) struct {
 
 /// Read all available data from stdin into a heap-allocated string.
 /// Caller owns the returned slice and must free it with `allocator.free()`.
-pub fn readAllStdin(allocator: std.mem.Allocator) ![]const u8 {
+pub fn readAllStdin(allocator: std.mem.Allocator) ![]u8 {
     var result = std.ArrayList(u8).empty;
     errdefer result.deinit(allocator);
     var buf: [4096]u8 = undefined;
     if (builtin.os.tag == .windows) {
-        const stdin_handle = std.os.windows.kernel32.GetStdHandle(std.os.windows.STD_INPUT_HANDLE) orelse return error.Unexpected;
+        const stdin_handle = @import("windows_compat").GetStdHandle(@import("windows_compat").STD_INPUT_HANDLE) orelse return error.Unexpected;
         while (true) {
             var bytes_read: u32 = 0;
-            const success = std.os.windows.kernel32.ReadFile(stdin_handle, &buf, @intCast(buf.len), &bytes_read, null);
+            const success = @import("windows_compat").ReadFile(stdin_handle, &buf, @intCast(buf.len), &bytes_read, null);
             if (success == 0 or bytes_read == 0) break;
             try result.appendSlice(allocator, buf[0..bytes_read]);
         }

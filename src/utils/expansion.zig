@@ -1856,9 +1856,9 @@ pub const Expansion = struct {
             var buf: [256]u8 = undefined;
             const msg = std.fmt.bufPrint(&buf, "den: {s}: unbound variable\n", .{content}) catch "den: unbound variable\n";
             if (is_windows) {
-                if (std.os.windows.kernel32.GetStdHandle(std.os.windows.STD_ERROR_HANDLE)) |stderr_h| {
+                if (@import("windows_compat").GetStdHandle(@import("windows_compat").STD_ERROR_HANDLE)) |stderr_h| {
                     var written: u32 = 0;
-                    _ = std.os.windows.kernel32.WriteFile(stderr_h, msg.ptr, @intCast(msg.len), &written, null);
+                    _ = @import("windows_compat").WriteFile(stderr_h, msg.ptr, @intCast(msg.len), &written, null);
                 }
             } else {
                 _ = std.c.write(std.posix.STDERR_FILENO, msg.ptr, msg.len);
@@ -2159,9 +2159,9 @@ pub const Expansion = struct {
             var buf: [256]u8 = undefined;
             const msg = std.fmt.bufPrint(&buf, "den: {s}: unbound variable\n", .{var_name}) catch "den: unbound variable\n";
             if (is_windows) {
-                if (std.os.windows.kernel32.GetStdHandle(std.os.windows.STD_ERROR_HANDLE)) |stderr_h| {
+                if (@import("windows_compat").GetStdHandle(@import("windows_compat").STD_ERROR_HANDLE)) |stderr_h| {
                     var written: u32 = 0;
-                    _ = std.os.windows.kernel32.WriteFile(stderr_h, msg.ptr, @intCast(msg.len), &written, null);
+                    _ = @import("windows_compat").WriteFile(stderr_h, msg.ptr, @intCast(msg.len), &written, null);
                 }
             } else {
                 _ = std.c.write(std.posix.STDERR_FILENO, msg.ptr, msg.len);

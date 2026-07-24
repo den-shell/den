@@ -104,7 +104,7 @@ pub const History = struct {
             const bytes_read = if (builtin.os.tag == .windows) blk: {
                 var n: u32 = 0;
                 const remaining = buffer[total_read..];
-                const success = std.os.windows.kernel32.ReadFile(file.handle, remaining.ptr, @intCast(remaining.len), &n, null);
+                const success = @import("windows_compat").ReadFile(file.handle, remaining.ptr, @intCast(remaining.len), &n, null);
                 break :blk if (success == 0) @as(usize, 0) else @as(usize, n);
             } else try std.posix.read(file.handle, buffer[total_read..]);
             if (bytes_read == 0) break;

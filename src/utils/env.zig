@@ -12,7 +12,7 @@ const WindowsEnvCache = struct {
     };
 
     entries: [CACHE_SIZE]?Entry = @splat(null),
-    allocator: std.heap.GeneralPurposeAllocator(.{}) = .{},
+    allocator: std.mem.Allocator = std.heap.c_allocator,
     next_slot: usize = 0,
 
     fn get(self: *WindowsEnvCache, key: []const u8) ?[]const u8 {
@@ -32,16 +32,16 @@ const WindowsEnvCache = struct {
         key_buf[key.len] = 0;
         const raw_value = std.c.getenv(key_buf[0..key.len :0]) orelse return null;
         const raw_span = std.mem.span(@as([*:0]const u8, @ptrCast(raw_value)));
-        const value = self.allocator.allocator().dupe(u8, raw_span) catch return null;
-        const key_copy = self.allocator.allocator().dupe(u8, key) catch {
-            self.allocator.allocator().free(value);
+        const value = self.allocator.dupe(u8, raw_span) catch return null;
+        const key_copy = self.allocator.dupe(u8, key) catch {
+            self.allocator.free(value);
             return null;
         };
 
         // Free old entry if slot is occupied
         if (self.entries[self.next_slot]) |old_entry| {
-            self.allocator.allocator().free(old_entry.key);
-            self.allocator.allocator().free(old_entry.value);
+            self.allocator.free(old_entry.key);
+            self.allocator.free(old_entry.value);
         }
 
         // Store in cache

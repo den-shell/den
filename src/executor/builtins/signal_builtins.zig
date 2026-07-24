@@ -155,7 +155,7 @@ pub fn kill(_: std.mem.Allocator, command: *types.ParsedCommand) !i32 {
             // Open process with TERMINATE permission
             const handle = OpenProcess(
                 PROCESS_TERMINATE,
-                std.os.windows.FALSE,
+                .FALSE,
                 pid,
             );
             if (handle == null) {
@@ -165,7 +165,7 @@ pub fn kill(_: std.mem.Allocator, command: *types.ParsedCommand) !i32 {
             defer std.os.windows.CloseHandle(handle.?);
 
             // Terminate the process
-            if (std.os.windows.kernel32.TerminateProcess(handle.?, 1) == 0) {
+            if (@import("windows_compat").TerminateProcess(handle.?, 1) == 0) {
                 try IO.eprint("den: kill: ({d}): cannot terminate process\n", .{pid});
                 return 1;
             }

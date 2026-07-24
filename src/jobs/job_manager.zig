@@ -167,7 +167,7 @@ pub const JobManager = struct {
             for (self.jobs) |maybe_job| {
                 if (maybe_job) |job| {
                     // On Windows, just terminate via the handle directly
-                    _ = std.os.windows.kernel32.TerminateProcess(job.pid, 1);
+                    _ = @import("windows_compat").TerminateProcess(job.pid, 1);
                 }
             }
             return;

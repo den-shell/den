@@ -98,7 +98,8 @@ fn evaluateTestArgs(args: []const []const u8) !i32 {
             return if (stat.kind == .sym_link) 0 else 1;
         } else if (std.mem.eql(u8, op, "-t")) {
             // -t FD: true if file descriptor FD is open and refers to a terminal.
-            const fd = std.fmt.parseInt(std.posix.fd_t, arg, 10) catch return 1;
+            if (comptime builtin.os.tag == .windows) return 1;
+            const fd = std.fmt.parseInt(i32, arg, 10) catch return 1;
             const is_tty = (std.Io.File{ .handle = fd, .flags = .{ .nonblocking = false } }).isTty(std.Options.debug_io) catch false;
             return if (is_tty) 0 else 1;
         }

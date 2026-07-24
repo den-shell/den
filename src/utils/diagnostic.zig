@@ -170,7 +170,7 @@ pub const Diagnostic = struct {
         defer arena.deinit();
         const rendered = self.render(arena.allocator()) catch return;
         const stderr_file = std.Io.File{ .handle = if (builtin.os.tag == .windows)
-            (std.os.windows.kernel32.GetStdHandle(std.os.windows.STD_ERROR_HANDLE) orelse return)
+            (@import("windows_compat").GetStdHandle(@import("windows_compat").STD_ERROR_HANDLE) orelse return)
         else
             posix.STDERR_FILENO, .flags = .{ .nonblocking = false } };
         stderr_file.writeStreamingAll(std.Options.debug_io, rendered) catch {};

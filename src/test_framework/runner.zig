@@ -7,7 +7,7 @@ const types = @import("types.zig");
 fn readHandle(handle: anytype, buf: []u8) !usize {
     if (builtin.os.tag == .windows) {
         var bytes_read: u32 = 0;
-        const success = std.os.windows.kernel32.ReadFile(handle, buf.ptr, @intCast(buf.len), &bytes_read, null);
+        const success = @import("windows_compat").ReadFile(handle, buf.ptr, @intCast(buf.len), &bytes_read, null);
         if (success == 0) return error.ReadFailed;
         return bytes_read;
     } else {

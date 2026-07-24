@@ -140,7 +140,7 @@ pub const LeakDetector = struct {
     pub fn printLeakReport(self: *LeakDetector) void {
         const report = self.checkLeaks();
         const stderr = (std.Io.File{ .handle = if (builtin.os.tag == .windows)
-            (std.os.windows.kernel32.GetStdHandle(std.os.windows.STD_ERROR_HANDLE) orelse return)
+            (@import("windows_compat").GetStdHandle(@import("windows_compat").STD_ERROR_HANDLE) orelse return)
         else
             std.posix.STDERR_FILENO, .flags = .{ .nonblocking = false } }).writer(std.Options.debug_io);
 

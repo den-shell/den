@@ -7,6 +7,7 @@
 //! and option-handling code paths.
 
 const std = @import("std");
+const builtin = @import("builtin");
 const PromptContext = @import("../prompt/types.zig").PromptContext;
 
 // ---------------------------------------------------------------------------
@@ -95,6 +96,11 @@ fn kindOf(io: std.Io, dir: std.Io.Dir, path: []const u8, follow: bool) std.Io.Fi
 
 fn hasMode(io: std.Io, dir: std.Io.Dir, path: []const u8, bits: std.posix.mode_t) bool {
     const st = dir.statFile(io, path, .{}) catch return false;
+    if (comptime builtin.os.tag == .windows) {
+        if (bits == 0o444) return true;
+        if (bits == 0o222) return (@intFromEnum(st.permissions) & 1) == 0;
+        return false;
+    }
     return (st.permissions.toMode() & bits) != 0;
 }
 

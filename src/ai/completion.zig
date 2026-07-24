@@ -10,6 +10,7 @@
 //! or errors when offline or unconfigured.
 
 const std = @import("std");
+const builtin = @import("builtin");
 const spawn = @import("../utils/spawn.zig");
 const AiConfig = @import("../types/config.zig").AiConfig;
 
@@ -131,7 +132,11 @@ pub fn suggest(
 
     // Write the body to a temp file so it survives argv length limits and
     // avoids quoting issues.
-    const tmp_path = try std.fmt.allocPrint(allocator, "/tmp/den-ai-{d}.json", .{std.c.getpid()});
+    const process_id = if (comptime builtin.os.tag == .windows)
+        std.os.windows.GetCurrentProcessId()
+    else
+        std.c.getpid();
+    const tmp_path = try std.fmt.allocPrint(allocator, "/tmp/den-ai-{d}.json", .{process_id});
     defer allocator.free(tmp_path);
     writeFile(tmp_path, body) catch return null;
     defer deleteFile(tmp_path);

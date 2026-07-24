@@ -330,6 +330,11 @@ pub fn execute(cli_args: CliArgs) !void {
 
 /// Start a distributed shell-session server. Forks a Den shell per connection.
 fn runSessionServer(allocator: std.mem.Allocator, args: []const []const u8, config_path: ?[]const u8, norc: bool) !void {
+    if (comptime builtin.os.tag == .windows) {
+        try IO.eprint("den: --serve is not supported on Windows\n", .{});
+        return;
+    }
+
     const spec = if (args.len > 0) args[0] else "";
     const addr = net_session.parseAddress(spec) orelse {
         try IO.eprint("den: --serve: invalid address '{s}' (expected host:port)\n", .{spec});
