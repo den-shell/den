@@ -8,6 +8,7 @@ const IO = @import("utils/io.zig").IO;
 const LspServer = @import("lsp/server.zig").LspServer;
 const net_session = @import("net/session.zig");
 const build_options = @import("build_options");
+const upgrade = @import("upgrade.zig");
 
 /// Den Shell CLI
 /// Provides command-line interface and subcommand handling
@@ -23,6 +24,7 @@ pub const Command = enum {
     setup, // Install wrapper script
     set_shell, // Set as default shell
     uninstall, // Remove wrapper
+    upgrade, // Install the latest GitHub release
     version, // Show version
     help, // Show help
     script, // Execute script file (implicit)
@@ -230,6 +232,16 @@ pub fn parseArgs(allocator: std.mem.Allocator, process_args: std.process.Args) !
             .restricted = restricted_from_argv0,
             ._owned_argv = remaining_argv,
         };
+    } else if (std.mem.eql(u8, first_arg, "upgrade")) {
+        return CliArgs{
+            .command = .upgrade,
+            .args = sub_args,
+            .allocator = allocator,
+            .config_path = config_path,
+            .norc = norc,
+            .restricted = restricted_from_argv0,
+            ._owned_argv = remaining_argv,
+        };
     } else if (std.mem.eql(u8, first_arg, "version") or std.mem.eql(u8, first_arg, "--version") or std.mem.eql(u8, first_arg, "-v")) {
         return CliArgs{
             .command = .version,
@@ -319,6 +331,7 @@ pub fn execute(cli_args: CliArgs) !void {
         .setup => try setup(cli_args.allocator),
         .set_shell => try setShell(cli_args.allocator),
         .uninstall => try uninstall(cli_args.allocator),
+        .upgrade => try upgrade.run(cli_args.allocator, cli_args.args, VERSION),
         .version => try showVersion(),
         .help => try showHelp(),
         .script => try runScript(cli_args.allocator, cli_args.args, effective_config_path, cli_args.norc, cli_args.restricted),
@@ -697,6 +710,7 @@ fn showHelp() !void {
         \\  den setup                 Install wrapper script
         \\  den set-shell             Set as default shell
         \\  den uninstall             Remove wrapper
+        \\  den upgrade               Install the latest GitHub release
         \\  den version               Show version
         \\  den help                  Show this help
         \\  den <script>              Execute script file
@@ -720,6 +734,7 @@ fn showHelp() !void {
         \\  den exec echo "Hello, World!"            # Execute command
         \\  den script.sh                            # Run script file
         \\  den setup                                # Install Den
+        \\  den upgrade                              # Upgrade to the latest release
         \\  den --config ~/custom.jsonc              # Use custom config
         \\  den completion bash > /etc/bash_completion.d/den   # Install Bash completion
         \\

@@ -27,7 +27,7 @@ pub const ShellCompletion = struct {
         \\    _init_completion || return
         \\
         \\    # Subcommands for 'den' itself
-        \\    local subcommands="shell exec complete dev-setup setup set-shell uninstall version help"
+        \\    local subcommands="shell exec complete completion dev-setup setup set-shell uninstall upgrade version help"
         \\
         \\    # If we're completing the first argument (subcommand)
         \\    if [ "$cword" -eq 1 ]; then
@@ -95,6 +95,7 @@ pub const ShellCompletion = struct {
         \\        'setup:Install wrapper script'
         \\        'set-shell:Set Den as default shell'
         \\        'uninstall:Remove wrapper'
+        \\        'upgrade:Install the latest GitHub release'
         \\        'version:Show version'
         \\        'help:Show help message'
         \\    )
@@ -162,6 +163,7 @@ pub const ShellCompletion = struct {
         \\complete -c den -n "__fish_use_subcommand" -a "setup" -d "Install wrapper script"
         \\complete -c den -n "__fish_use_subcommand" -a "set-shell" -d "Set Den as default shell"
         \\complete -c den -n "__fish_use_subcommand" -a "uninstall" -d "Remove wrapper"
+        \\complete -c den -n "__fish_use_subcommand" -a "upgrade" -d "Install the latest GitHub release"
         \\complete -c den -n "__fish_use_subcommand" -a "version" -d "Show version"
         \\complete -c den -n "__fish_use_subcommand" -a "help" -d "Show help message"
         \\
