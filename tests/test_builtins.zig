@@ -658,18 +658,58 @@ test "builtin seq: attached -s separator and plain range" {
     try test_utils.TestAssert.expectContains(plain.stdout, "3");
 }
 
-test "builtin ls: unsupported flag falls back without erroring" {
+test "builtin ls: default command resolves to Den implementation" {
     const allocator = std.testing.allocator;
 
     var fixture = try test_utils.DenShellFixture.init(allocator);
     defer fixture.deinit();
 
-    const result = try fixture.execDirect("ls --color=never /");
+    const result = try fixture.execDirect("type ls");
     defer allocator.free(result.stdout);
     defer allocator.free(result.stderr);
 
     try test_utils.TestAssert.expectEqual(@as(u8, 0), result.exit_code);
+    try test_utils.TestAssert.expectContains(result.stdout, "shell builtin");
+}
+
+test "builtin ls: color option stays on the native path" {
+    const allocator = std.testing.allocator;
+
+    var fixture = try test_utils.DenShellFixture.init(allocator);
+    defer fixture.deinit();
+
+    const result = try fixture.exec("builtin ls --color=never");
+    defer allocator.free(result.stdout);
+    defer allocator.free(result.stderr);
+
+    try test_utils.TestAssert.expectEqual(@as(u8, 0), result.exit_code);
+    try test_utils.TestAssert.expectTrue(std.mem.indexOf(u8, result.stdout, "\x1b[") == null);
     try test_utils.TestAssert.expectTrue(std.mem.indexOf(u8, result.stderr, "invalid option") == null);
+}
+
+test "builtin ls: lists directories larger than 512 entries" {
+    const allocator = std.testing.allocator;
+
+    var fixture = try test_utils.DenShellFixture.init(allocator);
+    defer fixture.deinit();
+
+    var dir = try std.Io.Dir.cwd().openDir(std.testing.io, fixture.getTempPath(), .{});
+    defer dir.close(std.testing.io);
+
+    for (0..600) |i| {
+        const name = try std.fmt.allocPrint(allocator, "entry-{d}", .{i});
+        defer allocator.free(name);
+        const file = try dir.createFile(std.testing.io, name, .{});
+        file.close(std.testing.io);
+    }
+
+    const result = try fixture.exec("builtin ls --color=never");
+    defer allocator.free(result.stdout);
+    defer allocator.free(result.stderr);
+
+    try test_utils.TestAssert.expectEqual(@as(u8, 0), result.exit_code);
+    try test_utils.TestAssert.expectEqual(@as(usize, 600), std.mem.count(u8, result.stdout, "\n"));
+    try test_utils.TestAssert.expectTrue(std.mem.indexOf(u8, result.stderr, "truncated") == null);
 }
 
 // ----------------------------------------------------------------------------
