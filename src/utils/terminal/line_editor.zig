@@ -103,6 +103,36 @@ fn longestCommonCompletionPrefix(completions: []const []const u8) []const u8 {
     return first[0..common_len];
 }
 
+fn shellWordStart(input: []const u8, cursor: usize) usize {
+    const end = @min(cursor, input.len);
+    var word_start: usize = 0;
+    var quote: ?u8 = null;
+    var escaped = false;
+
+    for (input[0..end], 0..) |c, i| {
+        if (escaped) {
+            escaped = false;
+            continue;
+        }
+        if (c == '\\' and quote != '\'') {
+            escaped = true;
+            continue;
+        }
+        if (quote) |q| {
+            if (c == q) quote = null;
+            continue;
+        }
+        if (c == '\'' or c == '"') {
+            quote = c;
+            continue;
+        }
+        if (c == ' ' or c == '\t' or c == '|' or c == '&' or c == ';' or c == '(' or c == ')') {
+            word_start = i + 1;
+        }
+    }
+    return word_start;
+}
+
 fn replaceBufferRange(
     buffer: []u8,
     length: *usize,
@@ -141,6 +171,7 @@ pub const LineEditor = struct {
     history_count: ?*usize = null,
     history_index: ?usize = null,
     saved_line: ?[]const u8 = null, // Save current line when browsing history
+    saved_history_cursor: usize = 0,
     history_search_query: ?[]const u8 = null, // Original input used to filter history by prefix
     completion_fn: ?CompletionFn = null, // Callback for tab completion
     // Completion cycling state
@@ -1061,6 +1092,7 @@ pub const LineEditor = struct {
             self.allocator.free(saved);
             self.saved_line = null;
         }
+        self.saved_history_cursor = 0;
     }
 
     /// Start one history-navigation session. `history_index == count` is the
@@ -1077,10 +1109,12 @@ pub const LineEditor = struct {
         errdefer {
             self.allocator.free(self.saved_line.?);
             self.saved_line = null;
+            self.saved_history_cursor = 0;
         }
 
-        if (self.length > 0) {
-            self.history_search_query = try self.allocator.dupe(u8, self.buffer[0..self.length]);
+        self.saved_history_cursor = self.cursor;
+        if (self.cursor > 0) {
+            self.history_search_query = try self.allocator.dupe(u8, self.buffer[0..self.cursor]);
         }
         self.history_index = count;
     }
@@ -1664,10 +1698,16 @@ pub const LineEditor = struct {
 
     /// Total display columns of buffer[from..to].
     fn displayWidth(self: *LineEditor, from: usize, to: usize) usize {
+        return textDisplayWidth(self.buffer[from..to]);
+    }
+
+    fn textDisplayWidth(text: []const u8) usize {
         var cols: usize = 0;
-        var p = from;
-        while (p < to) : (p += utf8SeqLen(self.buffer[p])) {
-            cols += self.widthAt(p);
+        var p: usize = 0;
+        while (p < text.len) {
+            const len = @min(utf8SeqLen(text[p]), text.len - p);
+            cols += codepointWidth(decodeCodepoint(text[p .. p + len], len));
+            p += len;
         }
         return cols;
     }
@@ -2174,7 +2214,7 @@ pub const LineEditor = struct {
         // Moving newer past the newest match restores the exact original line,
         // including an empty line, and ends the navigation session.
         if (self.saved_line) |saved| {
-            try self.replaceLine(saved);
+            try self.replaceLineAtCursor(saved, self.saved_history_cursor);
         } else {
             try self.replaceLine("");
         }
@@ -2182,13 +2222,17 @@ pub const LineEditor = struct {
     }
 
     fn replaceLine(self: *LineEditor, text: []const u8) !void {
+        try self.replaceLineAtCursor(text, text.len);
+    }
+
+    fn replaceLineAtCursor(self: *LineEditor, text: []const u8, cursor: usize) !void {
         // Swap in the new buffer, then do a full wrap-/multi-line-aware repaint.
         // (The old manual "home + clear-to-EOL + write" overwrote the prompt's
         // last line — dropping the prompt symbol — and couldn't handle a prompt
         // that spans rows.)
         self.length = @min(text.len, self.buffer.len);
         @memcpy(self.buffer[0..self.length], text[0..self.length]);
-        self.cursor = self.length;
+        self.cursor = @min(cursor, self.length);
         try self.redrawLine();
     }
 
@@ -2498,20 +2542,19 @@ pub const LineEditor = struct {
     /// The column-major grid dimensions the completion list is rendered with.
     /// Display, highlight, and arrow-key navigation all derive layout from this so
     /// they stay in sync (idx = col * rows + row).
-    fn completionGrid(self: *LineEditor) struct { rows: usize, cols: usize } {
-        const completions = self.completion_list orelse return .{ .rows = 0, .cols = 0 };
-        if (completions.len == 0) return .{ .rows = 0, .cols = 0 };
-        var max_len: usize = 0;
+    fn completionGrid(self: *LineEditor) struct { rows: usize, cols: usize, col_width: usize } {
+        const completions = self.completion_list orelse return .{ .rows = 0, .cols = 0, .col_width = 1 };
+        if (completions.len == 0) return .{ .rows = 0, .cols = 0, .col_width = 1 };
+        var max_width: usize = 0;
         for (completions) |c| {
-            const marked = c.len > 0 and (c[0] == '\x02' or c[0] == '\x03');
-            const t = if (marked) c[1..] else c;
-            if (t.len > max_len) max_len = t.len;
+            const width = textDisplayWidth(completionText(c));
+            if (width > max_width) max_width = width;
         }
-        const term_width = if (signals.getWindowSize()) |ws| ws.cols else |_| 80;
-        const col_width = max_len + 2;
+        const term_width = if (signals.getWindowSize()) |ws| (if (ws.cols == 0) 80 else ws.cols) else |_| 80;
+        const col_width = max_width + 2;
         const num_cols = @max(1, term_width / col_width);
         const num_rows = (completions.len + num_cols - 1) / num_cols;
-        return .{ .rows = num_rows, .cols = num_cols };
+        return .{ .rows = num_rows, .cols = num_cols, .col_width = col_width };
     }
 
     fn displayCompletionList(self: *LineEditor) !void {
@@ -2523,23 +2566,10 @@ pub const LineEditor = struct {
         try self.writeBytes("\x1b[s");
         try self.writeBytes("\r\n");
 
-        // Find the longest completion
-        var max_len: usize = 0;
-        for (completions) |completion| {
-            const is_script = completion.len > 0 and (completion[0] == '\x02' or completion[0] == '\x03');
-            const display_text = if (is_script) completion[1..] else completion;
-            if (display_text.len > max_len) {
-                max_len = display_text.len;
-            }
-        }
-
-        // Get terminal width
-        const term_width = if (signals.getWindowSize()) |ws| ws.cols else |_| 80;
-
-        // Calculate column layout
-        const col_width = max_len + 2;
-        const num_cols = @max(1, term_width / col_width);
-        const num_rows = (completions.len + num_cols - 1) / num_cols;
+        const grid = self.completionGrid();
+        const col_width = grid.col_width;
+        const num_cols = grid.cols;
+        const num_rows = grid.rows;
 
         // Print in column-major order
         var row: usize = 0;
@@ -2575,7 +2605,7 @@ pub const LineEditor = struct {
 
                 // Add padding
                 if (col < num_cols - 1 and idx < completions.len - 1) {
-                    const padding = col_width - display_text.len;
+                    const padding = col_width - textDisplayWidth(display_text);
                     var p: usize = 0;
                     while (p < padding) : (p += 1) {
                         try self.writeBytes(" ");
@@ -2600,19 +2630,10 @@ pub const LineEditor = struct {
         try self.writeBytes("\x1b[s");
         try self.writeBytes("\r\n");
 
-        var max_len: usize = 0;
-        for (completions) |completion| {
-            const is_script = completion.len > 0 and (completion[0] == '\x02' or completion[0] == '\x03');
-            const display_text = if (is_script) completion[1..] else completion;
-            if (display_text.len > max_len) {
-                max_len = display_text.len;
-            }
-        }
-
-        const term_width = if (signals.getWindowSize()) |ws| ws.cols else |_| 80;
-        const col_width = max_len + 2;
-        const num_cols = @max(1, term_width / col_width);
-        const num_rows = (completions.len + num_cols - 1) / num_cols;
+        const grid = self.completionGrid();
+        const col_width = grid.col_width;
+        const num_cols = grid.cols;
+        const num_rows = grid.rows;
 
         var row: usize = 0;
         while (row < num_rows) : (row += 1) {
@@ -2645,7 +2666,7 @@ pub const LineEditor = struct {
                 }
 
                 if (col < num_cols - 1 and idx < completions.len - 1) {
-                    const padding = col_width - display_text.len;
+                    const padding = col_width - textDisplayWidth(display_text);
                     var p: usize = 0;
                     while (p < padding) : (p += 1) {
                         try self.writeBytes(" ");
@@ -2665,17 +2686,8 @@ pub const LineEditor = struct {
     fn clearCompletionDisplay(self: *LineEditor) !void {
         const completions = self.completion_list orelse return;
 
-        // Calculate actual display rows (same logic as displayCompletionList)
-        var max_len: usize = 0;
-        for (completions) |completion| {
-            const has_marker = completion.len > 0 and (completion[0] == '\x02' or completion[0] == '\x03');
-            const display_text = if (has_marker) completion[1..] else completion;
-            if (display_text.len > max_len) max_len = display_text.len;
-        }
-        const term_width = if (signals.getWindowSize()) |ws| ws.cols else |_| 80;
-        const col_width = @max(max_len + 2, 1);
-        const num_cols = @max(1, term_width / col_width);
-        const num_rows = (completions.len + num_cols - 1) / num_cols;
+        _ = completions;
+        const num_rows = self.completionGrid().rows;
 
         try self.writeBytes("\x1b[s");
 
@@ -2917,17 +2929,7 @@ pub const LineEditor = struct {
 
     /// Find the start of the current word (for completion)
     fn findWordStart(self: *LineEditor) usize {
-        if (self.cursor == 0) return 0;
-
-        var pos = self.cursor;
-        while (pos > 0) {
-            pos -= 1;
-            const c = self.buffer[pos];
-            if (c == ' ' or c == '\t' or c == '|' or c == '&' or c == ';' or c == '(' or c == ')') {
-                return pos + 1;
-            }
-        }
-        return 0;
+        return shellWordStart(self.buffer[0..self.length], self.cursor);
     }
 
     /// Search history for a suggestion matching current input
@@ -3240,6 +3242,21 @@ test "history search session saves empty input once and resets cleanly" {
     try std.testing.expectEqual(@as(?[]const u8, null), editor.saved_line);
 }
 
+test "history search uses text before cursor and restores the draft cursor" {
+    var editor = LineEditor.init(std.testing.allocator, "");
+    defer editor.deinit();
+
+    const draft = "git status --short";
+    @memcpy(editor.buffer[0..draft.len], draft);
+    editor.length = draft.len;
+    editor.cursor = "git".len;
+
+    try editor.beginHistorySearch(4);
+    try std.testing.expectEqualStrings(draft, editor.saved_line.?);
+    try std.testing.expectEqualStrings("git", editor.history_search_query.?);
+    try std.testing.expectEqual(@as(usize, 3), editor.saved_history_cursor);
+}
+
 test "completion replacement does not duplicate nested path prefixes" {
     var scratch: [64]u8 = undefined;
 
@@ -3270,6 +3287,19 @@ test "completion chooser extends the common nested path prefix" {
 
     const marked = [_][]const u8{ "\x02status", "\x02stash" };
     try std.testing.expectEqualStrings("sta", longestCommonCompletionPrefix(&marked));
+}
+
+test "completion word start respects escaped spaces and quotes" {
+    try std.testing.expectEqual(@as(usize, 3), shellWordStart("cd my\\ dir/pa", "cd my\\ dir/pa".len));
+    try std.testing.expectEqual(@as(usize, 3), shellWordStart("cd \"my dir/pa", "cd \"my dir/pa".len));
+    try std.testing.expectEqual(@as(usize, 16), shellWordStart("printf 'a b' && my", "printf 'a b' && my".len));
+}
+
+test "completion grid width uses terminal columns for Unicode" {
+    try std.testing.expectEqual(@as(usize, 3), LineEditor.textDisplayWidth("abc"));
+    try std.testing.expectEqual(@as(usize, 2), LineEditor.textDisplayWidth("界"));
+    try std.testing.expectEqual(@as(usize, 1), LineEditor.textDisplayWidth("e\u{301}"));
+    try std.testing.expectEqual(@as(usize, 2), LineEditor.textDisplayWidth("🚀"));
 }
 
 test "completion word replacement preserves text after cursor" {
