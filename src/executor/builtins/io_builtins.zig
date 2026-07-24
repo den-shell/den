@@ -584,8 +584,11 @@ fn printfUint(num: u64, width: usize, zero_pad: bool, left_justify: bool, base: 
 // ============================================================================
 
 test "printfInt formatting" {
-    // Just verify the function compiles and doesn't crash with edge cases
-    // These write to stdout which we can't capture easily, but we verify no panic
+    var output_buffer: [128]u8 = undefined;
+    var output = std.Io.Writer.fixed(&output_buffer);
+    IO.setTestStdout(&output);
+    defer IO.setTestStdout(null);
+
     try printfInt(0, 0, false, false, 0, null);
     try printfInt(-42, 0, false, false, 0, null);
     try printfInt(999999, 10, true, false, 0, null);
@@ -593,15 +596,27 @@ test "printfInt formatting" {
     try printfInt(5, 0, false, false, '+', null);
     try printfInt(7, 6, true, false, '+', null);
     try printfInt(7, 5, false, false, 0, 3);
+    try std.testing.expectEqualStrings(
+        "0-4200009999995    +5+00007  007",
+        output.buffered(),
+    );
 }
 
 test "printfUint formatting" {
-    // Verify no panics with edge cases
+    var output_buffer: [128]u8 = undefined;
+    var output = std.Io.Writer.fixed(&output_buffer);
+    IO.setTestStdout(&output);
+    defer IO.setTestStdout(null);
+
     try printfUint(0, 0, false, false, 10, false);
     try printfUint(255, 0, false, false, 16, false);
     try printfUint(255, 0, false, false, 16, true);
     try printfUint(8, 0, false, false, 8, false);
     try printfUint(42, 10, true, false, 10, false);
+    try std.testing.expectEqualStrings(
+        "0ffFF100000000042",
+        output.buffered(),
+    );
 }
 
 fn printfFloat(num: f64, width: usize, precision: usize, left_justify: bool, sign_prefix: u8) !void {

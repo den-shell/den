@@ -2,6 +2,11 @@ const std = @import("std");
 const posix = std.posix;
 const builtin = @import("builtin");
 
+// Zig's build test runner uses stdout as its control channel. Tests that need
+// to exercise user-facing output install a fixed writer here so they can assert
+// on bytes without corrupting that protocol.
+var test_stdout_writer: ?*std.Io.Writer = null;
+
 // ============================================================================
 // Zig 0.16 IO compatibility
 // ============================================================================
@@ -165,8 +170,21 @@ pub fn getBufferedStdin() *BufferedStdinReader {
 
 /// I/O utilities for Zig 0.15
 pub const IO = struct {
+    pub fn setTestStdout(writer: ?*std.Io.Writer) void {
+        if (comptime builtin.is_test) {
+            test_stdout_writer = writer;
+        }
+    }
+
     /// Write string to stdout (cross-platform)
     pub fn print(comptime fmt: []const u8, args: anytype) !void {
+        if (comptime builtin.is_test) {
+            if (test_stdout_writer) |writer| {
+                try writer.print(fmt, args);
+                return;
+            }
+        }
+
         const stdout_file = std.Io.File.stdout();
 
         // Format the string
@@ -379,16 +397,12 @@ pub fn getBufferedStdout() *BufferedStdoutWriter {
 // Tests
 // ============================================================================
 
-test "IO.print" {
-    try IO.print("test: {s}\n", .{"hello"});
-}
-
 test "BufferedStdoutWriter basic" {
     var writer = BufferedStdoutWriter{};
     try writer.write("hello");
     try std.testing.expectEqualStrings("hello", writer.getBuffer());
-    try writer.write(" world");
-    try std.testing.expectEqualStrings("hello world", writer.getBuffer());
+    try writer.print(" {s} {d}", .{ "world", 42 });
+    try std.testing.expectEqualStrings("hello world 42", writer.getBuffer());
 }
 
 test "BufferedStdinReader struct" {
