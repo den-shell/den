@@ -6,13 +6,18 @@ on:
   pull_request:
     branches: [main, develop]
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 env:
-  ZIG_VERSION: '0.17.0-dev.607+456b2ec07'
+  ZIG_VERSION: '0.17.0-dev.956+2dca73595'
 
 jobs:
   test:
     name: Run Tests
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
     strategy:
       fail-fast: false
       matrix:
@@ -46,27 +51,31 @@ jobs:
 
       - name: Run all tests
         run: zig build test
-        continue-on-error: true
 
       - name: Run tokenizer tests
         run: zig build test-tokenizer
-        continue-on-error: true
 
       - name: Run parser tests
         run: zig build test-parser
-        continue-on-error: true
 
       - name: Run expander tests
         run: zig build test-expansion
-        continue-on-error: true
 
       - name: Run new-feature subsystem tests (zsh/AI/sessions/wasm)
         run: zig build test-features
-        continue-on-error: true
 
       - name: Test shell startup
         run: |
-          echo "exit" | timeout 5 ./zig-out/bin/den || true
+          python3 - <<'PY'
+          import subprocess
+
+          subprocess.run(
+              ["./zig-out/bin/den", "--norc"],
+              input=b"exit\n",
+              timeout=5,
+              check=True,
+          )
+          PY
 
       - name: Test basic commands
         run: |
@@ -103,6 +112,7 @@ jobs:
   build-release:
     name: Build Release
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
     needs: [test, lint]
     strategy:
       matrix:

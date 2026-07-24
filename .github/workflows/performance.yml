@@ -6,8 +6,12 @@ on:
   pull_request:
     branches: [main]
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 env:
-  ZIG_VERSION: '0.17.0-dev.607+456b2ec07'
+  ZIG_VERSION: '0.17.0-dev.956+2dca73595'
   # Performance budgets
   MAX_STARTUP_MS: 10
   MAX_IDLE_MEMORY_MB: 5
@@ -17,6 +21,7 @@ jobs:
   benchmark:
     name: Performance Benchmarks
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
     strategy:
       fail-fast: false
       matrix:
