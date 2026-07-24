@@ -37,7 +37,7 @@ alias bid="bun i -D"
 # JS/TS Stacks
 alias b="bun"
 alias bc="bun commit"
-alias br="bun release"
+alias br="bun run release"
 alias bd="bun run dev"
 alias bdc="bun buddy dev:components"
 alias bb="bun run build"
