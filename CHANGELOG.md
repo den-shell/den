@@ -1,5 +1,37 @@
 # Changelog
 
+[Compare changes](https://github.com/den-shell/den/compare/v0.2.0...v0.2.1)
+
+## 🚀 Features
+
+- **cli**: add verified self-upgrades ([d081712](https://github.com/den-shell/den/commit/d081712)) _(by Chris <chrisbreuer93@gmail.com>)_
+
+## 🐛 Bug Fixes
+
+- **release**: derive binary version from manifest ([eb413cb](https://github.com/den-shell/den/commit/eb413cb)) _(by Chris <chrisbreuer93@gmail.com>)_
+- **editor**: extend quoted completion prefixes ([0cc68b0](https://github.com/den-shell/den/commit/0cc68b0)) _(by Chris <chrisbreuer93@gmail.com>)_
+- **editor**: preserve shell-aware navigation state ([596d811](https://github.com/den-shell/den/commit/596d811)) _(by Chris <chrisbreuer93@gmail.com>)_
+- **completion**: support escaped directory paths ([11f2229](https://github.com/den-shell/den/commit/11f2229)) _(by Chris <chrisbreuer93@gmail.com>)_
+- **completion**: respect shell command context ([87e0824](https://github.com/den-shell/den/commit/87e0824)) _(by Chris <chrisbreuer93@gmail.com>)_
+- **completion**: honor case sensitivity ([13a4110](https://github.com/den-shell/den/commit/13a4110)) _(by Chris <chrisbreuer93@gmail.com>)_
+- **editor**: refine completion selection ([48b12e5](https://github.com/den-shell/den/commit/48b12e5)) _(by Chris <chrisbreuer93@gmail.com>)_
+- **completion**: normalize nested directory candidates ([b1979ac](https://github.com/den-shell/den/commit/b1979ac)) _(by Chris <chrisbreuer93@gmail.com>)_
+- **history**: stabilize prefix navigation ([0996687](https://github.com/den-shell/den/commit/0996687)) _(by Chris <chrisbreuer93@gmail.com>)_
+- **ci**: replace assets when updating releases ([83bbd2a](https://github.com/den-shell/den/commit/83bbd2a)) _(by Chris <chrisbreuer93@gmail.com>)_
+- **release**: use maintained scoped tooling ([8e161af](https://github.com/den-shell/den/commit/8e161af)) _(by Chris <chrisbreuer93@gmail.com>)_
+
+## 📚 Documentation
+
+- **install**: document verified upgrades ([1b1a581](https://github.com/den-shell/den/commit/1b1a581)) _(by Chris <chrisbreuer93@gmail.com>)_
+
+## 🧹 Chores
+
+- release v0.2.1 ([64bf262](https://github.com/den-shell/den/commit/64bf262)) _(by Chris <chrisbreuer93@gmail.com>)_
+
+## Contributors
+
+- _Chris <chrisbreuer93@gmail.com>_
+
 [Compare changes](https://github.com/den-shell/den/compare/v0.1.0...v0.2.0)
 
 ## 🚀 Features
