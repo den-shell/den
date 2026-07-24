@@ -87,6 +87,46 @@ fn completionText(candidate: []const u8) []const u8 {
         candidate;
 }
 
+fn normalizedShellWord(word: []const u8, scratch: []u8) ?[]const u8 {
+    if (word.len > scratch.len) return null;
+
+    var out: usize = 0;
+    var quote: ?u8 = null;
+    var escaped = false;
+    for (word) |c| {
+        if (escaped) {
+            scratch[out] = c;
+            out += 1;
+            escaped = false;
+            continue;
+        }
+        if (c == '\\' and quote != '\'') {
+            escaped = true;
+            continue;
+        }
+        if (quote) |q| {
+            if (c == q) {
+                quote = null;
+            } else {
+                scratch[out] = c;
+                out += 1;
+            }
+            continue;
+        }
+        if (c == '\'' or c == '"') {
+            quote = c;
+            continue;
+        }
+        scratch[out] = c;
+        out += 1;
+    }
+    if (escaped) {
+        scratch[out] = '\\';
+        out += 1;
+    }
+    return scratch[0..out];
+}
+
 fn longestCommonCompletionPrefix(completions: []const []const u8) []const u8 {
     if (completions.len == 0) return "";
 
@@ -2473,7 +2513,13 @@ pub const LineEditor = struct {
                 // `my/path-b/` immediately fill `my/path-` while still offering
                 // both selectable destinations.
                 const common_prefix = longestCommonCompletionPrefix(self.completion_list.?);
-                if (common_prefix.len > typed_word.len and std.mem.startsWith(u8, common_prefix, typed_word)) {
+                var typed_normalized_buf: [4096]u8 = undefined;
+                var common_normalized_buf: [4096]u8 = undefined;
+                const typed_normalized = normalizedShellWord(typed_word, &typed_normalized_buf) orelse typed_word;
+                const common_normalized = normalizedShellWord(common_prefix, &common_normalized_buf) orelse common_prefix;
+                if (common_normalized.len > typed_normalized.len and
+                    std.mem.startsWith(u8, common_normalized, typed_normalized))
+                {
                     if (!try self.replaceCompletionWord(word_start, common_prefix)) {
                         try self.writeBytes("\x07");
                     }
@@ -3287,6 +3333,12 @@ test "completion chooser extends the common nested path prefix" {
 
     const marked = [_][]const u8{ "\x02status", "\x02stash" };
     try std.testing.expectEqualStrings("sta", longestCommonCompletionPrefix(&marked));
+
+    var typed_buf: [64]u8 = undefined;
+    var common_buf: [64]u8 = undefined;
+    const typed = normalizedShellWord("\"my dir/pa", &typed_buf).?;
+    const common = normalizedShellWord("my\\ dir/path-", &common_buf).?;
+    try std.testing.expect(std.mem.startsWith(u8, common, typed));
 }
 
 test "completion word start respects escaped spaces and quotes" {
