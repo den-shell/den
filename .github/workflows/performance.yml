@@ -55,18 +55,37 @@ jobs:
       - name: Measure startup time
         id: startup
         run: |
-          # Run 10 iterations and average
-          total=0
-          for i in {1..10}; do
-            start=$(date +%s%N)
-            ./zig-out/bin/den -c "exit" 2>/dev/null
-            end=$(date +%s%N)
-            elapsed=$((($end - $start) / 1000000))
-            total=$(($total + $elapsed))
-          done
-          avg=$(($total / 10))
-          echo "startup_ms=$avg" >> $GITHUB_OUTPUT
-          echo "Average startup time: ${avg}ms"
+          python3 - <<'PY'
+          import math
+          import os
+          import subprocess
+          import time
+
+          command = ["./zig-out/bin/den", "-c", "exit"]
+          for _ in range(3):
+              subprocess.run(
+                  command,
+                  stdout=subprocess.DEVNULL,
+                  stderr=subprocess.DEVNULL,
+                  check=True,
+              )
+
+          samples = []
+          for _ in range(10):
+              started = time.perf_counter_ns()
+              subprocess.run(
+                  command,
+                  stdout=subprocess.DEVNULL,
+                  stderr=subprocess.DEVNULL,
+                  check=True,
+              )
+              samples.append(time.perf_counter_ns() - started)
+
+          average_ms = math.ceil(sum(samples) / len(samples) / 1_000_000)
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
+              output.write(f"startup_ms={average_ms}\n")
+          print(f"Average startup time: {average_ms}ms")
+          PY
 
       - name: Check startup time budget
         run: |
@@ -79,22 +98,41 @@ jobs:
       - name: Measure idle memory
         id: memory
         run: |
-          # Start shell and measure RSS after settling
-          ./zig-out/bin/den -c "sleep 0.1" &
-          PID=$!
-          sleep 0.2
-          if [ -f /proc/$PID/status ]; then
-            # Linux
-            rss=$(grep VmRSS /proc/$PID/status | awk '{print $2}')
-            rss_mb=$((rss / 1024))
-          else
-            # macOS
-            rss_kb=$(ps -o rss= -p $PID 2>/dev/null || echo "0")
-            rss_mb=$((rss_kb / 1024))
-          fi
-          wait $PID 2>/dev/null || true
-          echo "memory_mb=$rss_mb" >> $GITHUB_OUTPUT
-          echo "Idle memory: ${rss_mb}MB"
+          python3 - <<'PY'
+          import math
+          import os
+          import pathlib
+          import subprocess
+          import time
+
+          process = subprocess.Popen(
+              ["./zig-out/bin/den", "--norc"],
+              stdin=subprocess.PIPE,
+              stdout=subprocess.DEVNULL,
+              stderr=subprocess.DEVNULL,
+          )
+          try:
+              time.sleep(0.2)
+              status = pathlib.Path(f"/proc/{process.pid}/status")
+              if status.exists():
+                  rss_line = next(
+                      line for line in status.read_text().splitlines()
+                      if line.startswith("VmRSS:")
+                  )
+                  rss_kb = int(rss_line.split()[1])
+              else:
+                  rss_kb = int(subprocess.check_output(
+                      ["ps", "-o", "rss=", "-p", str(process.pid)],
+                      text=True,
+                  ).strip())
+          finally:
+              process.communicate(b"exit\n", timeout=5)
+
+          rss_mb = math.ceil(rss_kb / 1024)
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
+              output.write(f"memory_mb={rss_mb}\n")
+          print(f"Idle memory: {rss_mb}MB")
+          PY
 
       - name: Check memory budget
         run: |
@@ -107,18 +145,28 @@ jobs:
       - name: Measure command execution time
         id: exec
         run: |
-          # Measure simple command execution
-          total=0
-          for i in {1..100}; do
-            start=$(date +%s%N)
-            ./zig-out/bin/den -c "true" 2>/dev/null
-            end=$(date +%s%N)
-            elapsed=$((($end - $start) / 1000000))
-            total=$(($total + $elapsed))
-          done
-          avg=$(($total / 100))
-          echo "exec_ms=$avg" >> $GITHUB_OUTPUT
-          echo "Average command execution: ${avg}ms"
+          python3 - <<'PY'
+          import math
+          import os
+          import subprocess
+          import time
+
+          samples = []
+          for _ in range(100):
+              started = time.perf_counter_ns()
+              subprocess.run(
+                  ["./zig-out/bin/den", "-c", "true"],
+                  stdout=subprocess.DEVNULL,
+                  stderr=subprocess.DEVNULL,
+                  check=True,
+              )
+              samples.append(time.perf_counter_ns() - started)
+
+          average_ms = math.ceil(sum(samples) / len(samples) / 1_000_000)
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
+              output.write(f"exec_ms={average_ms}\n")
+          print(f"Average command execution: {average_ms}ms")
+          PY
 
       - name: Check execution time budget
         run: |
