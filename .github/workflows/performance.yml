@@ -14,7 +14,6 @@ env:
   ZIG_VERSION: '0.17.0-dev.956+2dca73595'
   # Performance budgets
   MAX_STARTUP_MS: 10
-  MAX_IDLE_MEMORY_MB: 5
   MAX_COMMAND_EXEC_MS: 15
 
 jobs:
@@ -22,10 +21,17 @@ jobs:
     name: Performance Benchmarks
     runs-on: ${{ matrix.os }}
     timeout-minutes: 20
+    env:
+      MAX_IDLE_MEMORY_KB: ${{ matrix.max_idle_memory_kb }}
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest]
+        include:
+          # Linux RSS includes more dynamic-loader overhead on hosted runners.
+          - os: ubuntu-latest
+            max_idle_memory_kb: 6656
+          - os: macos-latest
+            max_idle_memory_kb: 5120
 
     steps:
       - name: Checkout code
@@ -99,7 +105,6 @@ jobs:
         id: memory
         run: |
           python3 - <<'PY'
-          import math
           import os
           import pathlib
           import subprocess
@@ -111,36 +116,45 @@ jobs:
               stdout=subprocess.DEVNULL,
               stderr=subprocess.DEVNULL,
           )
-          try:
-              time.sleep(0.2)
-              status = pathlib.Path(f"/proc/{process.pid}/status")
+
+          def read_rss_kb(pid):
+              status = pathlib.Path(f"/proc/{pid}/status")
               if status.exists():
                   rss_line = next(
                       line for line in status.read_text().splitlines()
                       if line.startswith("VmRSS:")
                   )
-                  rss_kb = int(rss_line.split()[1])
-              else:
-                  rss_kb = int(subprocess.check_output(
-                      ["ps", "-o", "rss=", "-p", str(process.pid)],
-                      text=True,
-                  ).strip())
+                  return int(rss_line.split()[1])
+              return int(subprocess.check_output(
+                  ["ps", "-o", "rss=", "-p", str(pid)],
+                  text=True,
+              ).strip())
+
+          try:
+              samples = []
+              for _ in range(5):
+                  time.sleep(0.05)
+                  if process.poll() is not None:
+                      raise RuntimeError("Den exited before idle memory could be measured")
+                  samples.append(read_rss_kb(process.pid))
+              rss_kb = max(samples)
           finally:
               process.communicate(b"exit\n", timeout=5)
+          if process.returncode != 0:
+              raise subprocess.CalledProcessError(process.returncode, process.args)
 
-          rss_mb = math.ceil(rss_kb / 1024)
           with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
-              output.write(f"memory_mb={rss_mb}\n")
-          print(f"Idle memory: {rss_mb}MB")
+              output.write(f"memory_kb={rss_kb}\n")
+          print(f"Idle memory: {rss_kb / 1024:.2f}MiB ({rss_kb}KiB)")
           PY
 
       - name: Check memory budget
         run: |
-          if [ ${{ steps.memory.outputs.memory_mb }} -gt ${{ env.MAX_IDLE_MEMORY_MB }} ]; then
-            echo "::error::Idle memory ${{ steps.memory.outputs.memory_mb }}MB exceeds budget of ${{ env.MAX_IDLE_MEMORY_MB }}MB"
+          if [ ${{ steps.memory.outputs.memory_kb }} -gt ${{ env.MAX_IDLE_MEMORY_KB }} ]; then
+            echo "::error::Idle memory ${{ steps.memory.outputs.memory_kb }}KiB exceeds budget of ${{ env.MAX_IDLE_MEMORY_KB }}KiB"
             exit 1
           fi
-          echo "✓ Idle memory ${{ steps.memory.outputs.memory_mb }}MB is within budget"
+          echo "✓ Idle memory ${{ steps.memory.outputs.memory_kb }}KiB is within budget"
 
       - name: Measure command execution time
         id: exec
@@ -188,7 +202,7 @@ jobs:
         run: |
           echo "=== Performance Summary ==="
           echo "Startup time: ${{ steps.startup.outputs.startup_ms }}ms (budget: ${{ env.MAX_STARTUP_MS }}ms)"
-          echo "Idle memory: ${{ steps.memory.outputs.memory_mb }}MB (budget: ${{ env.MAX_IDLE_MEMORY_MB }}MB)"
+          echo "Idle memory: ${{ steps.memory.outputs.memory_kb }}KiB (budget: ${{ env.MAX_IDLE_MEMORY_KB }}KiB)"
           echo "Command exec: ${{ steps.exec.outputs.exec_ms }}ms (budget: ${{ env.MAX_COMMAND_EXEC_MS }}ms)"
           echo "Binary size: ${{ steps.size.outputs.size_mb }}MB"
 
