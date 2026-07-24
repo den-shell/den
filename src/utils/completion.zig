@@ -150,13 +150,24 @@ pub const CompletionCache = struct {
 pub const Completion = struct {
     allocator: std.mem.Allocator,
     cache: ?*CompletionCache,
+    case_sensitive: bool,
 
     pub fn init(allocator: std.mem.Allocator) Completion {
-        return .{ .allocator = allocator, .cache = null };
+        return .{ .allocator = allocator, .cache = null, .case_sensitive = true };
     }
 
     pub fn initWithCache(allocator: std.mem.Allocator, cache: *CompletionCache) Completion {
-        return .{ .allocator = allocator, .cache = cache };
+        return .{ .allocator = allocator, .cache = cache, .case_sensitive = true };
+    }
+
+    pub fn setCaseSensitive(self: *Completion, case_sensitive: bool) void {
+        self.case_sensitive = case_sensitive;
+    }
+
+    fn prefixMatches(self: *const Completion, text: []const u8, prefix: []const u8) bool {
+        if (prefix.len > text.len) return false;
+        if (self.case_sensitive) return std.mem.startsWith(u8, text, prefix);
+        return std.ascii.eqlIgnoreCase(text[0..prefix.len], prefix);
     }
 
     /// Context struct for sorting by fuzzy score
@@ -235,7 +246,7 @@ pub const Completion = struct {
         // Check cache first
         const cache_key = blk: {
             var key_buf: [512]u8 = undefined;
-            break :blk try std.fmt.bufPrint(&key_buf, "cmd:{s}", .{prefix});
+            break :blk try std.fmt.bufPrint(&key_buf, "cmd:{d}:{s}", .{ @intFromBool(self.case_sensitive), prefix });
         };
 
         if (self.cache) |cache| {
@@ -268,7 +279,7 @@ pub const Completion = struct {
             var iter = dir.iterate();
             while (iter.next(std.Options.debug_io) catch continue) |entry| {
                 // Check if file starts with prefix
-                if (entry.kind == .file and std.mem.startsWith(u8, entry.name, prefix)) {
+                if (entry.kind == .file and self.prefixMatches(entry.name, prefix)) {
                     // Check if executable
                     const stat = dir.statFile(std.Options.debug_io, entry.name, .{}) catch continue;
                     const is_executable = if (is_windows) true else (stat.permissions.toMode() & 0o111) != 0;
@@ -364,7 +375,7 @@ pub const Completion = struct {
             // Skip hidden files unless explicitly requested
             if (!show_hidden and entry.name.len > 0 and entry.name[0] == '.') continue;
 
-            if (std.mem.startsWith(u8, entry.name, file_prefix)) {
+            if (self.prefixMatches(entry.name, file_prefix)) {
                 if (match_count >= matches_buffer.len) break;
 
                 // Every candidate is the complete shell word, even when the
@@ -438,7 +449,7 @@ pub const Completion = struct {
             // Skip hidden files unless explicitly requested
             if (!show_hidden and entry.name.len > 0 and entry.name[0] == '.') continue;
 
-            if (std.mem.startsWith(u8, entry.name, file_prefix)) {
+            if (self.prefixMatches(entry.name, file_prefix)) {
                 if (match_count >= matches_buffer.len) break;
 
                 const completion_text = blk: {
@@ -511,7 +522,7 @@ pub const Completion = struct {
             // Skip hidden files unless explicitly requested
             if (!show_hidden and entry.name.len > 0 and entry.name[0] == '.') continue;
 
-            if (std.mem.startsWith(u8, entry.name, file_prefix)) {
+            if (self.prefixMatches(entry.name, file_prefix)) {
                 if (match_count >= matches_buffer.len) break;
 
                 // Build full path
@@ -676,7 +687,7 @@ pub const Completion = struct {
             }
             if (segment[0] != '.' and entry.name.len > 0 and entry.name[0] == '.') continue;
 
-            if (std.mem.startsWith(u8, entry.name, segment)) {
+            if (self.prefixMatches(entry.name, segment)) {
                 if (match_count >= matches.len) break;
                 matches[match_count] = entry.name;
                 match_count += 1;
@@ -789,7 +800,7 @@ pub const Completion = struct {
                 if (!is_normal_user) continue;
 
                 // Check if username matches prefix
-                if (std.mem.startsWith(u8, username, username_prefix)) {
+                if (self.prefixMatches(username, username_prefix)) {
                     if (match_count >= matches_buffer.len) break;
 
                     // Check for duplicates
@@ -829,7 +840,7 @@ pub const Completion = struct {
         // Get current username from environment
         const username = env_utils.getEnv("USER") orelse env_utils.getEnv("USERNAME") orelse return &[_][]const u8{};
 
-        if (std.mem.startsWith(u8, username, prefix)) {
+        if (self.prefixMatches(username, prefix)) {
             var name_buf: [256]u8 = undefined;
             const with_tilde = try std.fmt.bufPrint(&name_buf, "~{s}", .{username});
 
@@ -926,7 +937,7 @@ pub const Completion = struct {
             // Skip hidden files unless segment starts with '.'
             if (segment[0] != '.' and entry.name.len > 0 and entry.name[0] == '.') continue;
 
-            if (std.mem.startsWith(u8, entry.name, segment)) {
+            if (self.prefixMatches(entry.name, segment)) {
                 if (match_count >= matches_buffer.len) {
                     // Too many matches, ambiguous
                     return null;
@@ -1143,6 +1154,53 @@ test "completeDirectory returns complete nested path candidates" {
         }
         try std.testing.expectEqual(@as(usize, 1), results.len);
         try std.testing.expectEqualStrings("my/other/", results[0]);
+    }
+}
+
+test "completeDirectory honors case sensitivity setting" {
+    const allocator = std.testing.allocator;
+    var comp = Completion.init(allocator);
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.createDirPath(std.Options.debug_io, "MixedCase");
+
+    var cwd_buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
+    const orig_len = try std.Io.Dir.cwd().realPathFile(std.Options.debug_io, ".", &cwd_buf);
+    const orig = try allocator.dupe(u8, cwd_buf[0..orig_len]);
+    defer allocator.free(orig);
+    var tmp_buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
+    const tmp_len = try tmp.dir.realPathFile(std.Options.debug_io, ".", &tmp_buf);
+    {
+        var chdir_buf: [std.fs.max_path_bytes]u8 = undefined;
+        @memcpy(chdir_buf[0..tmp_len], tmp_buf[0..tmp_len]);
+        chdir_buf[tmp_len] = 0;
+        if (std.c.chdir(chdir_buf[0..tmp_len :0]) != 0) return error.ChdirFailed;
+    }
+    defer {
+        var chdir_buf: [std.fs.max_path_bytes]u8 = undefined;
+        @memcpy(chdir_buf[0..orig.len], orig);
+        chdir_buf[orig.len] = 0;
+        _ = std.c.chdir(chdir_buf[0..orig.len :0]);
+    }
+
+    {
+        const results = try comp.completeDirectory("mixed");
+        defer {
+            for (results) |result| allocator.free(result);
+            allocator.free(results);
+        }
+        try std.testing.expectEqual(@as(usize, 0), results.len);
+    }
+
+    comp.setCaseSensitive(false);
+    {
+        const results = try comp.completeDirectory("mixed");
+        defer {
+            for (results) |result| allocator.free(result);
+            allocator.free(results);
+        }
+        try std.testing.expectEqual(@as(usize, 1), results.len);
+        try std.testing.expectEqualStrings("MixedCase/", results[0]);
     }
 }
 
