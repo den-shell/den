@@ -485,17 +485,66 @@ pub const Completion = struct {
     /// Return the owned path prefix used for filesystem lookup while preserving
     /// explicit relative syntax that must remain in the inserted shell word.
     fn completionPathPrefix(self: *Completion, prefix: []const u8) ![]const u8 {
-        const expanded = try self.expandMidWordPath(prefix) orelse
-            return try self.allocator.dupe(u8, prefix);
+        const normalized = try self.normalizeShellPathPrefix(prefix);
+        defer self.allocator.free(normalized);
+
+        const expanded = try self.expandMidWordPath(normalized) orelse
+            return try self.allocator.dupe(u8, normalized);
 
         const drops_explicit_relative =
-            (std.mem.startsWith(u8, prefix, "./") and !std.mem.startsWith(u8, expanded, "./")) or
-            (std.mem.startsWith(u8, prefix, "../") and !std.mem.startsWith(u8, expanded, "../"));
+            (std.mem.startsWith(u8, normalized, "./") and !std.mem.startsWith(u8, expanded, "./")) or
+            (std.mem.startsWith(u8, normalized, "../") and !std.mem.startsWith(u8, expanded, "../"));
         if (drops_explicit_relative) {
             self.allocator.free(expanded);
-            return try self.allocator.dupe(u8, prefix);
+            return try self.allocator.dupe(u8, normalized);
         }
         return expanded;
+    }
+
+    /// Convert the shell spelling of one path word into the filesystem spelling
+    /// used for lookup. Completion results are escaped again on output, so this
+    /// supports both `my\ dir/pa` and `"my dir/pa` without retaining a partial
+    /// quote in the replacement.
+    fn normalizeShellPathPrefix(self: *Completion, prefix: []const u8) ![]const u8 {
+        const normalized = try self.allocator.alloc(u8, prefix.len);
+        errdefer self.allocator.free(normalized);
+
+        var out: usize = 0;
+        var quote: ?u8 = null;
+        var escaped = false;
+        for (prefix) |c| {
+            if (escaped) {
+                normalized[out] = c;
+                out += 1;
+                escaped = false;
+                continue;
+            }
+            if (c == '\\' and quote != '\'') {
+                escaped = true;
+                continue;
+            }
+            if (quote) |q| {
+                if (c == q) {
+                    quote = null;
+                } else {
+                    normalized[out] = c;
+                    out += 1;
+                }
+                continue;
+            }
+            if (c == '\'' or c == '"') {
+                quote = c;
+                continue;
+            }
+            normalized[out] = c;
+            out += 1;
+        }
+        if (escaped) {
+            normalized[out] = '\\';
+            out += 1;
+        }
+
+        return try self.allocator.realloc(normalized, out);
     }
 
     /// Regular file completion (without mid-word expansion)
@@ -1090,6 +1139,8 @@ test "completeDirectory returns complete nested path candidates" {
     try tmp.dir.createDirPath(std.Options.debug_io, "my/path-alpha");
     try tmp.dir.createDirPath(std.Options.debug_io, "my/path-beta");
     try tmp.dir.createDirPath(std.Options.debug_io, "my/other");
+    try tmp.dir.createDirPath(std.Options.debug_io, "my dir/path-alpha");
+    try tmp.dir.createDirPath(std.Options.debug_io, "my dir/path-beta");
     const file = try tmp.dir.createFile(std.Options.debug_io, "my/path-file", .{});
     file.close(std.Options.debug_io);
 
@@ -1154,6 +1205,26 @@ test "completeDirectory returns complete nested path candidates" {
         }
         try std.testing.expectEqual(@as(usize, 1), results.len);
         try std.testing.expectEqualStrings("my/other/", results[0]);
+    }
+    {
+        const results = try comp.completeDirectory("my\\ dir/pa");
+        defer {
+            for (results) |result| allocator.free(result);
+            allocator.free(results);
+        }
+        try std.testing.expectEqual(@as(usize, 2), results.len);
+        try std.testing.expectEqualStrings("my\\ dir/path-alpha/", results[0]);
+        try std.testing.expectEqualStrings("my\\ dir/path-beta/", results[1]);
+    }
+    {
+        const results = try comp.completeDirectory("\"my dir/pa");
+        defer {
+            for (results) |result| allocator.free(result);
+            allocator.free(results);
+        }
+        try std.testing.expectEqual(@as(usize, 2), results.len);
+        try std.testing.expectEqualStrings("my\\ dir/path-alpha/", results[0]);
+        try std.testing.expectEqualStrings("my\\ dir/path-beta/", results[1]);
     }
 }
 
