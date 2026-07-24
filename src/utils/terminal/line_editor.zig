@@ -65,6 +65,69 @@ fn findNextHistoryMatch(
     return null;
 }
 
+fn completionReplacement(path_prefix: []const u8, candidate: []const u8, scratch: []u8) ?[]const u8 {
+    if (path_prefix.len == 0 or std.mem.startsWith(u8, candidate, path_prefix)) return candidate;
+
+    // Older/custom completion callbacks may return a basename for `dir/<Tab>`.
+    // Preserve compatibility with those while treating candidates containing
+    // an internal slash as complete words (the native completion contract).
+    const without_trailing_slash = std.mem.trimEnd(u8, candidate, "/");
+    if (std.mem.indexOfScalar(u8, without_trailing_slash, '/') != null) return candidate;
+    if (path_prefix.len + candidate.len > scratch.len) return null;
+
+    @memcpy(scratch[0..path_prefix.len], path_prefix);
+    @memcpy(scratch[path_prefix.len .. path_prefix.len + candidate.len], candidate);
+    return scratch[0 .. path_prefix.len + candidate.len];
+}
+
+fn completionText(candidate: []const u8) []const u8 {
+    return if (candidate.len > 0 and (candidate[0] == '\x02' or candidate[0] == '\x03'))
+        candidate[1..]
+    else
+        candidate;
+}
+
+fn longestCommonCompletionPrefix(completions: []const []const u8) []const u8 {
+    if (completions.len == 0) return "";
+
+    const first = completionText(completions[0]);
+    var common_len = first.len;
+    for (completions[1..]) |candidate| {
+        const text = completionText(candidate);
+        common_len = @min(common_len, text.len);
+        var i: usize = 0;
+        while (i < common_len and first[i] == text[i]) : (i += 1) {}
+        common_len = i;
+        if (common_len == 0) break;
+    }
+    return first[0..common_len];
+}
+
+fn replaceBufferRange(
+    buffer: []u8,
+    length: *usize,
+    start: usize,
+    end: usize,
+    replacement: []const u8,
+) bool {
+    if (start > end or end > length.*) return false;
+
+    const old_range_len = end - start;
+    const tail_len = length.* - end;
+    const new_len = length.* - old_range_len + replacement.len;
+    if (new_len > buffer.len) return false;
+
+    const new_tail_start = start + replacement.len;
+    if (new_tail_start > end) {
+        std.mem.copyBackwards(u8, buffer[new_tail_start .. new_tail_start + tail_len], buffer[end .. end + tail_len]);
+    } else if (new_tail_start < end) {
+        std.mem.copyForwards(u8, buffer[new_tail_start .. new_tail_start + tail_len], buffer[end .. end + tail_len]);
+    }
+    @memcpy(buffer[start .. start + replacement.len], replacement);
+    length.* = new_len;
+    return true;
+}
+
 /// Line editor with history support
 pub const LineEditor = struct {
     allocator: std.mem.Allocator,
@@ -659,14 +722,14 @@ pub const LineEditor = struct {
                         continue;
                     }
 
-                    // If a completion grid is showing, Enter accepts the highlighted
-                    // entry and runs the line. applyCurrentCompletion is idempotent
-                    // (it replaces the same word span), so this works whether the
-                    // user cycled to a choice or just opened the grid. Then dismiss
-                    // the grid and fall through to submit the completed line.
+                    // If a completion grid is showing, Enter accepts the
+                    // highlighted entry and returns to editing. A second Enter
+                    // submits it; selecting a directory must never unexpectedly
+                    // execute `cd` just because the chooser was confirmed.
                     if (self.completion_list != null) {
                         try self.applyCurrentCompletion();
                         self.clearCompletionState();
+                        continue;
                     }
 
                     // Get current line content
@@ -2151,6 +2214,7 @@ pub const LineEditor = struct {
         const ScoredCompletion = struct {
             index: usize,
             score: u32,
+            text: []const u8,
         };
 
         var scored = try self.allocator.alloc(ScoredCompletion, completions.len);
@@ -2162,17 +2226,22 @@ pub const LineEditor = struct {
                 completion[1..]
             else
                 completion;
+            const without_trailing_slash = std.mem.trimEnd(u8, text, "/");
+            const match_text = std.fs.path.basename(without_trailing_slash);
 
             scored[i] = .{
                 .index = i,
-                .score = fuzzyMatchScore(pattern, text),
+                .score = fuzzyMatchScore(pattern, match_text),
+                .text = text,
             };
         }
 
-        // Sort by score (descending)
+        // Sort by score (descending), then lexically so equal-scoring directory
+        // choices never jump around between repeated completion sessions.
         std.mem.sort(ScoredCompletion, scored, {}, struct {
             fn lessThan(_: void, a: ScoredCompletion, b: ScoredCompletion) bool {
-                return a.score > b.score; // Higher scores first
+                if (a.score != b.score) return a.score > b.score;
+                return std.mem.lessThan(u8, a.text, b.text);
             }
         }.lessThan);
 
@@ -2303,77 +2372,26 @@ pub const LineEditor = struct {
             }
 
             if (completions.len == 1) {
-                // Single completion - replace the word with completion
+                // A completion candidate represents the whole active word.
+                // Replacing that range handles nested paths and also preserves
+                // any command text to the right of the cursor.
                 const completion = completions[0];
                 const typed_word = self.buffer[word_start..self.cursor];
 
                 // Strip marker if present (e.g., \x02 for scripts/commands)
-                const actual_completion = if (completion.len > 0 and (completion[0] == '\x02' or completion[0] == '\x03'))
-                    completion[1..]
+                const actual_completion = completionText(completion);
+
+                const path_prefix = if (std.mem.lastIndexOfScalar(u8, typed_word, '/')) |last_slash|
+                    typed_word[0 .. last_slash + 1]
                 else
-                    completion;
-
-                // Check if completion is a full path (contains /) and typed_word also contains /
-                const typed_ends_with_slash = typed_word.len > 0 and typed_word[typed_word.len - 1] == '/';
-                const is_path_expansion = std.mem.indexOfScalar(u8, actual_completion, '/') != null and
-                    std.mem.indexOfScalar(u8, typed_word, '/') != null and
-                    !typed_ends_with_slash;
-
-                if (is_path_expansion) {
-                    // Replace the entire typed word with the completion
-                    const text_after_cursor = self.buffer[self.cursor..self.length];
-                    var saved_after: [4096]u8 = undefined;
-                    const saved_len = text_after_cursor.len;
-                    if (saved_len > 0) {
-                        @memcpy(saved_after[0..saved_len], text_after_cursor);
-                    }
-
-                    // Replace buffer content from word_start
-                    const new_len = word_start + actual_completion.len + saved_len;
-                    if (new_len <= self.buffer.len) {
-                        @memcpy(self.buffer[word_start .. word_start + actual_completion.len], actual_completion);
-                        if (saved_len > 0) {
-                            @memcpy(self.buffer[word_start + actual_completion.len .. new_len], saved_after[0..saved_len]);
-                        }
-                        self.length = new_len;
-
-                        // Redraw from word_start
-                        while (self.cursor > word_start) {
-                            try self.writeBytes("\x1B[D");
-                            self.cursor -= 1;
-                        }
-
-                        // Write the new content from word_start onward
-                        const bytes_to_write = self.buffer[word_start..self.length];
-                        try self.writeBytes(bytes_to_write);
-                        try self.writeBytes("\x1B[K"); // Clear to end of line
-
-                        // Move cursor back
-                        const target_cursor = word_start + actual_completion.len;
-                        const chars_to_go_back = self.length - target_cursor;
-                        var i: usize = 0;
-                        while (i < chars_to_go_back) : (i += 1) {
-                            try self.writeBytes("\x1B[D");
-                        }
-                        self.cursor = target_cursor;
+                    "";
+                var replacement_buf: [4096]u8 = undefined;
+                if (completionReplacement(path_prefix, actual_completion, &replacement_buf)) |replacement| {
+                    if (!try self.replaceCompletionWord(word_start, replacement)) {
+                        try self.writeBytes("\x07");
                     }
                 } else {
-                    // Traditional completion: just append the suffix
-                    const typed_basename = blk: {
-                        if (std.mem.lastIndexOfScalar(u8, typed_word, '/')) |last_slash| {
-                            break :blk typed_word[last_slash + 1 ..];
-                        } else {
-                            break :blk typed_word;
-                        }
-                    };
-
-                    // Insert the rest of the completion
-                    if (actual_completion.len >= typed_basename.len) {
-                        const to_insert = actual_completion[typed_basename.len..];
-                        for (to_insert) |c| {
-                            try self.insertChar(c);
-                        }
-                    }
+                    try self.writeBytes("\x07");
                 }
 
                 // Clean up
@@ -2406,10 +2424,53 @@ pub const LineEditor = struct {
                 const stripped_word = if (path_prefix.len > 0) typed_word[path_prefix.len..] else typed_word;
                 try self.sortCompletionsByFuzzyScore(stripped_word);
 
+                // Extend to the unambiguous common prefix before presenting the
+                // chooser. For `cd my/pa`, candidates `my/path-a/` and
+                // `my/path-b/` immediately fill `my/path-` while still offering
+                // both selectable destinations.
+                const common_prefix = longestCommonCompletionPrefix(self.completion_list.?);
+                if (common_prefix.len > typed_word.len and std.mem.startsWith(u8, common_prefix, typed_word)) {
+                    if (!try self.replaceCompletionWord(word_start, common_prefix)) {
+                        try self.writeBytes("\x07");
+                    }
+                }
+
                 // Show the list
                 try self.displayCompletionList();
             }
         }
+    }
+
+    /// Replace the active word without disturbing text after the cursor. This is
+    /// shared by single-match completion and the interactive chooser.
+    fn replaceCompletionWord(self: *LineEditor, word_start: usize, replacement: []const u8) !bool {
+        const old_cursor = self.cursor;
+        const old_word_width = self.displayWidth(word_start, old_cursor);
+
+        if (!replaceBufferRange(&self.buffer, &self.length, word_start, old_cursor, replacement)) {
+            return false;
+        }
+        self.cursor = word_start + replacement.len;
+
+        // Keep the chooser rendered below the input line: repaint only the
+        // changed span and its preserved tail, then return to the new word end.
+        try self.writeBytes("\x1b[?25l");
+        if (old_word_width > 0) {
+            var move_buf: [32]u8 = undefined;
+            const move_back = try std.fmt.bufPrint(&move_buf, "\x1b[{d}D", .{old_word_width});
+            try self.writeBytes(move_back);
+        }
+        try self.writeBytes("\x1b[K");
+        try self.writeBytes(self.buffer[word_start..self.length]);
+
+        const tail_width = self.displayWidth(self.cursor, self.length);
+        if (tail_width > 0) {
+            var move_buf: [32]u8 = undefined;
+            const move_back = try std.fmt.bufPrint(&move_buf, "\x1b[{d}D", .{tail_width});
+            try self.writeBytes(move_back);
+        }
+        try self.writeBytes("\x1b[?25h");
+        return true;
     }
 
     /// Apply the current completion from the cycling list
@@ -2418,54 +2479,19 @@ pub const LineEditor = struct {
         const completion = completions[self.completion_index];
 
         // Strip marker if present
-        const actual_completion = if (completion.len > 0 and (completion[0] == '\x02' or completion[0] == '\x03'))
-            completion[1..]
-        else
-            completion;
+        const actual_completion = completionText(completion);
 
-        // Use the SAVED path prefix
+        // Use the saved path prefix only for compatibility with custom
+        // callbacks that return basenames. Native candidates are complete words.
         const path_prefix = self.completion_path_prefix orelse "";
-
-        // Calculate how far back we need to go
-        const old_word_len = self.cursor - self.completion_word_start;
-
-        // Hide cursor to prevent flicker
-        try self.writeBytes("\x1b[?25l");
-
-        // Move cursor back to word start position
-        if (old_word_len > 0) {
-            var buf: [32]u8 = undefined;
-            const move_back = try std.fmt.bufPrint(&buf, "\x1b[{d}D", .{old_word_len});
-            try self.writeBytes(move_back);
+        var replacement_buf: [4096]u8 = undefined;
+        const replacement = completionReplacement(path_prefix, actual_completion, &replacement_buf) orelse {
+            try self.writeBytes("\x07");
+            return;
+        };
+        if (!try self.replaceCompletionWord(self.completion_word_start, replacement)) {
+            try self.writeBytes("\x07");
         }
-
-        // Clear from current position to end of line
-        try self.writeBytes("\x1b[K");
-
-        // Update buffer
-        self.cursor = self.completion_word_start;
-        self.length = self.completion_word_start;
-
-        // Insert path prefix
-        for (path_prefix) |c| {
-            self.buffer[self.length] = c;
-            self.length += 1;
-        }
-
-        // Insert the actual completion
-        for (actual_completion) |c| {
-            self.buffer[self.length] = c;
-            self.length += 1;
-        }
-
-        self.cursor = self.length;
-
-        // Write the new text
-        try self.writeBytes(path_prefix);
-        try self.writeBytes(actual_completion);
-
-        // Show cursor again
-        try self.writeBytes("\x1b[?25h");
     }
 
     /// Display completion list
@@ -3212,4 +3238,66 @@ test "history search session saves empty input once and resets cleanly" {
     editor.clearHistorySearch();
     try std.testing.expectEqual(@as(?usize, null), editor.history_index);
     try std.testing.expectEqual(@as(?[]const u8, null), editor.saved_line);
+}
+
+test "completion replacement does not duplicate nested path prefixes" {
+    var scratch: [64]u8 = undefined;
+
+    try std.testing.expectEqualStrings(
+        "my/path-alpha/",
+        completionReplacement("my/", "my/path-alpha/", &scratch).?,
+    );
+    try std.testing.expectEqualStrings(
+        "my/path-alpha/",
+        completionReplacement("my/", "path-alpha/", &scratch).?,
+    );
+    try std.testing.expectEqualStrings(
+        "expanded/path-alpha/",
+        completionReplacement("my/", "expanded/path-alpha/", &scratch).?,
+    );
+}
+
+test "completion chooser extends the common nested path prefix" {
+    const candidates = [_][]const u8{
+        "my/path-alpha/",
+        "my/path-beta/",
+        "my/path-build/",
+    };
+    try std.testing.expectEqualStrings(
+        "my/path-",
+        longestCommonCompletionPrefix(&candidates),
+    );
+
+    const marked = [_][]const u8{ "\x02status", "\x02stash" };
+    try std.testing.expectEqualStrings("sta", longestCommonCompletionPrefix(&marked));
+}
+
+test "completion word replacement preserves text after cursor" {
+    var buffer: [64]u8 = undefined;
+    const original = "cd my/pa --verbose";
+    @memcpy(buffer[0..original.len], original);
+    var length = original.len;
+
+    const cursor = "cd my/pa".len;
+    try std.testing.expect(replaceBufferRange(&buffer, &length, "cd ".len, cursor, "my/path-alpha/"));
+    try std.testing.expectEqualStrings("cd my/path-alpha/ --verbose", buffer[0..length]);
+
+    try std.testing.expect(replaceBufferRange(
+        &buffer,
+        &length,
+        "cd ".len,
+        "cd my/path-alpha/".len,
+        "my/p/",
+    ));
+    try std.testing.expectEqualStrings("cd my/p/ --verbose", buffer[0..length]);
+}
+
+test "completion word replacement rejects overflow without mutation" {
+    var buffer: [8]u8 = undefined;
+    @memcpy(buffer[0..4], "cd x");
+    var length: usize = 4;
+
+    try std.testing.expect(!replaceBufferRange(&buffer, &length, 3, 4, "far-too-long"));
+    try std.testing.expectEqual(@as(usize, 4), length);
+    try std.testing.expectEqualStrings("cd x", buffer[0..length]);
 }
