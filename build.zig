@@ -1,5 +1,13 @@
 const std = @import("std");
 
+const manifest = @embedFile("package.json");
+const version_prefix = "\"version\": \"";
+const version_start = (std.mem.indexOf(u8, manifest, version_prefix) orelse
+    @compileError("package.json is missing its version field")) + version_prefix.len;
+const version_end = std.mem.indexOfScalarPos(u8, manifest, version_start, '"') orelse
+    @compileError("package.json contains an unterminated version field");
+const package_version = manifest[version_start..version_end];
+
 /// Forward `zig build <step> -- <args>` to a Run step, across zig versions.
 /// Newer zig (>= ~0.17.0-dev.200) replaced the `b.args` field + `addArgs` with
 /// `Run.addPassthruArgs`; feature-detect so den builds on whatever toolchain is
@@ -22,6 +30,8 @@ pub fn build(b: *std.Build) void {
     // symbols for Debug. Override explicitly with -Dstrip=false.
     const strip = b.option(bool, "strip", "Strip debug symbols") orelse (optimize != .Debug);
     const link_libc = b.option(bool, "link-libc", "Link against libc") orelse true;
+    const build_options = b.addOptions();
+    build_options.addOption([]const u8, "version", package_version);
 
     // Create a module for our source with target
     const den_module = b.createModule(.{
@@ -45,6 +55,7 @@ pub fn build(b: *std.Build) void {
     compat_module.link_libc = true;
     den_module.addImport("compat", compat_module);
     den_module.addImport("windows_compat", windows_compat_module);
+    den_module.addOptions("build_options", build_options);
 
     // Den shell executable
     const exe = b.addExecutable(.{
@@ -127,6 +138,7 @@ pub fn build(b: *std.Build) void {
         release_compat_module.link_libc = true;
         release_module.addImport("compat", release_compat_module);
         release_module.addImport("windows_compat", release_windows_compat_module);
+        release_module.addOptions("build_options", build_options);
 
         const release_exe = b.addExecutable(.{
             .name = "den",
@@ -197,6 +209,7 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
     test_module.addImport("compat", compat_module);
+    test_module.addOptions("build_options", build_options);
     const unit_tests = b.addTest(.{
         .root_module = test_module,
     });
@@ -865,6 +878,9 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
     });
+    cli_module.addImport("compat", compat_module);
+    cli_module.addImport("windows_compat", windows_compat_module);
+    cli_module.addOptions("build_options", build_options);
 
     const cli_test_module = b.createModule(.{
         .root_source_file = b.path("tests/test_cli.zig"),

@@ -7,10 +7,11 @@ const env_utils = @import("utils/env.zig");
 const IO = @import("utils/io.zig").IO;
 const LspServer = @import("lsp/server.zig").LspServer;
 const net_session = @import("net/session.zig");
+const build_options = @import("build_options");
 
 /// Den Shell CLI
 /// Provides command-line interface and subcommand handling
-pub const VERSION = "0.1.0";
+pub const VERSION = build_options.version;
 
 pub const Command = enum {
     interactive, // Default: start interactive shell
