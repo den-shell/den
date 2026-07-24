@@ -19,17 +19,45 @@ jobs:
       matrix:
         include:
           - os: ubuntu-latest
-            target: x86_64-linux
+            target: x86_64-linux-musl
             artifact: den-linux-x64
+            binary: den
+            archive: tar.gz
           - os: ubuntu-latest
-            target: aarch64-linux
+            target: aarch64-linux-musl
             artifact: den-linux-arm64
+            binary: den
+            archive: tar.gz
           - os: macos-latest
             target: x86_64-macos
             artifact: den-darwin-x64
+            binary: den
+            archive: tar.gz
           - os: macos-latest
             target: aarch64-macos
             artifact: den-darwin-arm64
+            binary: den
+            archive: tar.gz
+          - os: ubuntu-latest
+            target: x86_64-windows
+            artifact: den-windows-x64
+            binary: den.exe
+            archive: zip
+          - os: ubuntu-latest
+            target: aarch64-windows
+            artifact: den-windows-arm64
+            binary: den.exe
+            archive: zip
+          - os: ubuntu-latest
+            target: x86_64-freebsd
+            artifact: den-freebsd-x64
+            binary: den
+            archive: tar.gz
+          - os: ubuntu-latest
+            target: aarch64-freebsd
+            artifact: den-freebsd-arm64
+            binary: den
+            archive: tar.gz
 
     steps:
       - name: Checkout code
@@ -52,20 +80,26 @@ jobs:
           echo "Building Den Shell v${{ steps.version.outputs.VERSION }} for ${{ matrix.target }}"
           zig build -Doptimize=ReleaseSmall -Dtarget=${{ matrix.target }}
 
-      - name: Create archive (Unix)
-        if: runner.os != 'Windows'
+      - name: Create archive
+        shell: bash
         run: |
           mkdir -p dist
-          cp zig-out/bin/den dist/
+          cp "zig-out/bin/${{ matrix.binary }}" dist/
           cd dist
-          tar -czvf ${{ matrix.artifact }}-${{ steps.version.outputs.VERSION }}.tar.gz den
-          shasum -a 256 ${{ matrix.artifact }}-${{ steps.version.outputs.VERSION }}.tar.gz > ${{ matrix.artifact }}-${{ steps.version.outputs.VERSION }}.tar.gz.sha256
+          if [[ "${{ matrix.archive }}" == "zip" ]]; then
+            zip "${{ matrix.artifact }}-${{ steps.version.outputs.VERSION }}.zip" "${{ matrix.binary }}"
+          else
+            tar -czf "${{ matrix.artifact }}-${{ steps.version.outputs.VERSION }}.tar.gz" "${{ matrix.binary }}"
+          fi
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.artifact }}
-          path: dist/*
+          path: |
+            dist/*.tar.gz
+            dist/*.zip
+          if-no-files-found: error
 
   release:
     name: Create GitHub Release
@@ -82,26 +116,15 @@ jobs:
           path: dist
           merge-multiple: true
 
-      - name: Extract version from tag
-        id: version
-        run: echo "VERSION=${GITHUB_REF#refs/tags/v}" >> $GITHUB_OUTPUT
-
-      - name: Create checksums file
-        run: |
-          cd dist
-          cat *.sha256 > checksums-${{ steps.version.outputs.VERSION }}.txt
-
-      - name: Create GitHub Release
-        uses: softprops/action-gh-release@v1
+      - name: Create GitHub Release with Pantry
+        uses: pantry-pm/pantry/packages/action@v0.10.48
         with:
-          tag_name: ${{ github.ref_name }}
-          name: Den Shell v${{ steps.version.outputs.VERSION }}
-          draft: false
-          prerelease: ${{ contains(github.ref_name, '-') }}
-          generate_release_notes: true
-          files: |
+          install: 'false'
+          release: 'true'
+          release-files: |
             dist/*.tar.gz
             dist/*.zip
-            dist/checksums-*.txt
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          release-changelog: CHANGELOG.md
+          release-checksums: sha256
+          release-prerelease: ${{ contains(github.ref_name, '-') }}
+          release-token: ${{ secrets.GITHUB_TOKEN }}
