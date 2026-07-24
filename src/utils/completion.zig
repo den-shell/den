@@ -179,8 +179,10 @@ pub const Completion = struct {
     fn fuzzyCompare(context: SortContext, a: []const u8, b: []const u8) bool {
         const score_a = cpu_opt.fuzzyScore(a, context.query);
         const score_b = cpu_opt.fuzzyScore(b, context.query);
-        // Higher score should come first
-        return score_a > score_b;
+        // Higher scores come first. Equal scores need a deterministic
+        // tiebreaker because directory iteration order differs by filesystem.
+        if (score_a != score_b) return score_a > score_b;
+        return std.mem.order(u8, a, b) == .lt;
     }
 
     /// Rank completions by fuzzy score against the query.
