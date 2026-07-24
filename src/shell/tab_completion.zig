@@ -21,6 +21,102 @@ pub fn getCompletionConfig() types.CompletionConfig {
     return g_completion_config;
 }
 
+const InputContext = struct {
+    segment: []const u8,
+    command: []const u8,
+    prefix: []const u8,
+    word_start: usize,
+    command_position: bool,
+};
+
+fn analyzeInput(input: []const u8) InputContext {
+    var segment_start: usize = 0;
+    var word_start: usize = 0;
+    var quote: ?u8 = null;
+    var escaped = false;
+
+    for (input, 0..) |c, i| {
+        if (escaped) {
+            escaped = false;
+            continue;
+        }
+        if (c == '\\' and quote != '\'') {
+            escaped = true;
+            continue;
+        }
+        if (quote) |q| {
+            if (c == q) quote = null;
+            continue;
+        }
+        if (c == '\'' or c == '"') {
+            quote = c;
+            continue;
+        }
+        if (c == '|' or c == '&' or c == ';') {
+            segment_start = i + 1;
+            word_start = i + 1;
+        } else if (c == ' ' or c == '\t') {
+            word_start = i + 1;
+        }
+    }
+
+    while (segment_start < input.len and
+        (input[segment_start] == ' ' or input[segment_start] == '\t'))
+    {
+        segment_start += 1;
+    }
+    word_start = @max(word_start, segment_start);
+
+    var command_end = segment_start;
+    quote = null;
+    escaped = false;
+    while (command_end < input.len) : (command_end += 1) {
+        const c = input[command_end];
+        if (escaped) {
+            escaped = false;
+            continue;
+        }
+        if (c == '\\' and quote != '\'') {
+            escaped = true;
+            continue;
+        }
+        if (quote) |q| {
+            if (c == q) quote = null;
+            continue;
+        }
+        if (c == '\'' or c == '"') {
+            quote = c;
+            continue;
+        }
+        if (c == ' ' or c == '\t' or c == '|' or c == '&' or c == ';') break;
+    }
+
+    return .{
+        .segment = input[segment_start..],
+        .command = input[segment_start..command_end],
+        .prefix = input[word_start..],
+        .word_start = word_start,
+        .command_position = word_start == segment_start,
+    };
+}
+
+fn configuredCompletions(allocator: std.mem.Allocator, results: [][]const u8) ![][]const u8 {
+    if (!g_completion_config_initialized or g_completion_config.max_suggestions == 0) return results;
+
+    const max = @as(usize, g_completion_config.max_suggestions);
+    if (results.len <= max) return results;
+
+    errdefer {
+        for (results) |result| allocator.free(result);
+        allocator.free(results);
+    }
+    const limited = try allocator.alloc([]const u8, max);
+    @memcpy(limited, results[0..max]);
+    for (results[max..]) |result| allocator.free(result);
+    allocator.free(results);
+    return limited;
+}
+
 /// Main tab completion function
 pub fn tabCompletionFn(input: []const u8, allocator: std.mem.Allocator) ![][]const u8 {
     // Check if completion is enabled via config
@@ -29,6 +125,9 @@ pub fn tabCompletionFn(input: []const u8, allocator: std.mem.Allocator) ![][]con
     }
 
     var completion = Completion.init(allocator);
+    if (g_completion_config_initialized) {
+        completion.setCaseSensitive(g_completion_config.case_sensitive);
+    }
     var ctx_completion = ContextCompletion.init(allocator);
 
     // If input is empty, show nothing
@@ -36,32 +135,21 @@ pub fn tabCompletionFn(input: []const u8, allocator: std.mem.Allocator) ![][]con
         return &[_][]const u8{};
     }
 
-    // Find the first word (command) and current word being completed
-    var first_word_end: usize = 0;
-    while (first_word_end < input.len) : (first_word_end += 1) {
-        const c = input[first_word_end];
-        if (c == ' ' or c == '\t') break;
-    }
+    const context = analyzeInput(input);
+    const prefix = context.prefix;
+    const command = context.command;
 
-    var word_start: usize = 0;
-    for (input, 0..) |c, i| {
-        if (c == ' ' or c == '\t' or c == '|' or c == '&' or c == ';') {
-            word_start = i + 1;
-        }
-    }
-    const prefix = input[word_start..];
-    const command = input[0..first_word_end];
-
-    // If first word, complete a command name — unless it's written as a path
+    // If this is the first word of the current pipeline/list segment, complete
+    // a command name — unless it's written as a path
     // (`./foo`, `../foo`, `/abs/foo`, `~/foo`, or any word containing '/'), in
     // which case complete it as a file like bash/zsh do for `./lan<TAB>`.
-    if (word_start == 0) {
+    if (context.command_position) {
         const looks_like_path = std.mem.indexOfScalar(u8, prefix, '/') != null or
             std.mem.startsWith(u8, prefix, "~");
         if (!looks_like_path) {
-            return completion.completeCommand(prefix);
+            return configuredCompletions(allocator, try completion.completeCommand(prefix));
         }
-        return completion.completeFile(prefix);
+        return configuredCompletions(allocator, try completion.completeFile(prefix));
     }
 
     // Check for environment variable completion ($...)
@@ -75,7 +163,7 @@ pub fn tabCompletionFn(input: []const u8, allocator: std.mem.Allocator) ![][]con
                 allocator.free(item.text);
             }
             allocator.free(items);
-            return results;
+            return configuredCompletions(allocator, results);
         }
         allocator.free(items);
     }
@@ -99,64 +187,48 @@ pub fn tabCompletionFn(input: []const u8, allocator: std.mem.Allocator) ![][]con
             // Success: free original items now that we own copies
             for (items) |item| allocator.free(item.text);
             allocator.free(items);
-            return results;
+            return configuredCompletions(allocator, results);
         }
         allocator.free(items);
     }
 
     // For cd command, only complete directories
     if (std.mem.eql(u8, command, "cd")) {
-        return completion.completeDirectory(prefix);
+        return configuredCompletions(allocator, try completion.completeDirectory(prefix));
     }
 
     // For git command, show branches, files, subcommands
     if (std.mem.eql(u8, command, "git")) {
-        return try completeGit(allocator, input, prefix);
+        return configuredCompletions(allocator, try completeGit(allocator, context.segment, prefix));
     }
 
     // For bun command, show scripts, commands, and files
     if (std.mem.eql(u8, command, "bun")) {
-        return try completeBun(allocator, prefix);
+        return configuredCompletions(allocator, try completeBun(allocator, prefix));
     }
 
     // For npm command, show scripts, commands, and files
     if (std.mem.eql(u8, command, "npm")) {
-        return try completeNpm(allocator, prefix);
+        return configuredCompletions(allocator, try completeNpm(allocator, prefix));
     }
 
     // For yarn command, show scripts, commands, and files
     if (std.mem.eql(u8, command, "yarn")) {
-        return try completeYarn(allocator, input, prefix);
+        return configuredCompletions(allocator, try completeYarn(allocator, context.segment, prefix));
     }
 
     // For pnpm command, show scripts, commands, and files
     if (std.mem.eql(u8, command, "pnpm")) {
-        return try completePnpm(allocator, input, prefix);
+        return configuredCompletions(allocator, try completePnpm(allocator, context.segment, prefix));
     }
 
     // For docker command, show containers, images, subcommands
     if (std.mem.eql(u8, command, "docker")) {
-        return try completeDocker(allocator, input, prefix);
+        return configuredCompletions(allocator, try completeDocker(allocator, context.segment, prefix));
     }
 
     // Otherwise, try file completion
-    const results = try completion.completeFile(prefix);
-
-    // Apply max_suggestions limit from config
-    if (g_completion_config_initialized and g_completion_config.max_suggestions > 0) {
-        const max = @as(usize, g_completion_config.max_suggestions);
-        if (results.len > max) {
-            // Free excess results
-            for (results[max..]) |r| {
-                allocator.free(r);
-            }
-            // Shrink the slice
-            const limited = allocator.realloc(results, max) catch results[0..max];
-            return limited;
-        }
-    }
-
-    return results;
+    return configuredCompletions(allocator, try completion.completeFile(prefix));
 }
 
 /// Get completions for git command (branches, files, subcommands)
@@ -810,4 +882,60 @@ fn getDockerImages(allocator: std.mem.Allocator, prefix: []const u8) ![][]const 
     }
 
     return try results.toOwnedSlice(allocator);
+}
+
+test "completion input context follows shell segments and quoting" {
+    {
+        const context = analyzeInput("   gi");
+        try std.testing.expectEqualStrings("gi", context.command);
+        try std.testing.expectEqualStrings("gi", context.prefix);
+        try std.testing.expect(context.command_position);
+    }
+    {
+        const context = analyzeInput("echo done &&  cd my/pa");
+        try std.testing.expectEqualStrings("cd my/pa", context.segment);
+        try std.testing.expectEqualStrings("cd", context.command);
+        try std.testing.expectEqualStrings("my/pa", context.prefix);
+        try std.testing.expect(!context.command_position);
+    }
+    {
+        const context = analyzeInput("printf 'a|b' | gr");
+        try std.testing.expectEqualStrings("gr", context.segment);
+        try std.testing.expectEqualStrings("gr", context.prefix);
+        try std.testing.expect(context.command_position);
+    }
+    {
+        const context = analyzeInput("cd my\\ dir/pa");
+        try std.testing.expectEqualStrings("my\\ dir/pa", context.prefix);
+    }
+    {
+        const context = analyzeInput("cd \"my dir/pa");
+        try std.testing.expectEqualStrings("\"my dir/pa", context.prefix);
+    }
+}
+
+test "completion suggestion limit owns a correctly sized result" {
+    const allocator = std.testing.allocator;
+    const previous_config = g_completion_config;
+    const previous_initialized = g_completion_config_initialized;
+    defer {
+        g_completion_config = previous_config;
+        g_completion_config_initialized = previous_initialized;
+    }
+    g_completion_config = .{ .max_suggestions = 2 };
+    g_completion_config_initialized = true;
+
+    const results = try allocator.alloc([]const u8, 3);
+    results[0] = try allocator.dupe(u8, "alpha");
+    results[1] = try allocator.dupe(u8, "beta");
+    results[2] = try allocator.dupe(u8, "gamma");
+
+    const limited = try configuredCompletions(allocator, results);
+    defer {
+        for (limited) |result| allocator.free(result);
+        allocator.free(limited);
+    }
+    try std.testing.expectEqual(@as(usize, 2), limited.len);
+    try std.testing.expectEqualStrings("alpha", limited[0]);
+    try std.testing.expectEqualStrings("beta", limited[1]);
 }

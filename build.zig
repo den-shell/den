@@ -679,6 +679,21 @@ pub fn build(b: *std.Build) void {
     const completion_unit_test_step = b.step("test-completion-unit", "Run completion engine unit tests");
     completion_unit_test_step.dependOn(&run_completion_unit_tests.step);
 
+    // Shell tab-completion routing tests (pipeline/list context and limits)
+    const tab_completion_test_module = b.createModule(.{
+        .root_source_file = b.path("src/test_tab_completion_root.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    tab_completion_test_module.addImport("compat", compat_module);
+    tab_completion_test_module.link_libc = true;
+    const tab_completion_tests = b.addTest(.{
+        .root_module = tab_completion_test_module,
+    });
+    const run_tab_completion_tests = b.addRunArtifact(tab_completion_tests);
+    const tab_completion_test_step = b.step("test-tab-completion", "Run shell tab-completion routing tests");
+    tab_completion_test_step.dependOn(&run_tab_completion_tests.step);
+
     // Spawn/capture-output unit tests
     const spawn_test_module = b.createModule(.{
         .root_source_file = b.path("src/utils/spawn.zig"),
@@ -917,6 +932,7 @@ pub fn build(b: *std.Build) void {
     all_tests_step.dependOn(&run_shell_options_tests.step);
     all_tests_step.dependOn(&run_history_expansion_tests.step);
     all_tests_step.dependOn(&run_context_completion_tests.step);
+    all_tests_step.dependOn(&run_tab_completion_tests.step);
     all_tests_step.dependOn(&run_process_tests.step);
     all_tests_step.dependOn(&run_parser_regression_tests.step);
     all_tests_step.dependOn(&run_fuzzing_tests.step);
