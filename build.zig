@@ -427,6 +427,7 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
     });
+    parser_test_module.link_libc = true;
 
     const parser_tests = b.addTest(.{
         .root_module = parser_test_module,
