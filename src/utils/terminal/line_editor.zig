@@ -2,7 +2,7 @@
 //!
 //! This module provides an interactive line editor with:
 //! - Vi and Emacs editing modes
-//! - History navigation with substring search
+//! - History navigation with prefix search
 //! - Reverse incremental search (Ctrl+R)
 //! - Tab completion with fuzzy matching
 //! - Visual selection mode
@@ -30,6 +30,41 @@ const SyntaxHighlighter = @import("../syntax_highlight.zig").SyntaxHighlighter;
 const cpu_opt = @import("../cpu_opt.zig");
 const signals = @import("../signals.zig");
 
+fn historyEntryMatches(entry: []const u8, query: ?[]const u8, current_line: []const u8) bool {
+    if (std.mem.eql(u8, entry, current_line)) return false;
+    return if (query) |prefix| std.mem.startsWith(u8, entry, prefix) else true;
+}
+
+fn findPreviousHistoryMatch(
+    history: []const ?[]const u8,
+    from: usize,
+    query: ?[]const u8,
+    current_line: []const u8,
+) ?usize {
+    var i = @min(from, history.len);
+    while (i > 0) {
+        i -= 1;
+        const entry = history[i] orelse continue;
+        if (historyEntryMatches(entry, query, current_line)) return i;
+    }
+    return null;
+}
+
+fn findNextHistoryMatch(
+    history: []const ?[]const u8,
+    from: usize,
+    query: ?[]const u8,
+    current_line: []const u8,
+) ?usize {
+    if (from >= history.len) return null;
+    var i = from + 1;
+    while (i < history.len) : (i += 1) {
+        const entry = history[i] orelse continue;
+        if (historyEntryMatches(entry, query, current_line)) return i;
+    }
+    return null;
+}
+
 /// Line editor with history support
 pub const LineEditor = struct {
     allocator: std.mem.Allocator,
@@ -43,7 +78,7 @@ pub const LineEditor = struct {
     history_count: ?*usize = null,
     history_index: ?usize = null,
     saved_line: ?[]const u8 = null, // Save current line when browsing history
-    history_search_query: ?[]const u8 = null, // Substring to filter history (for substring search)
+    history_search_query: ?[]const u8 = null, // Original input used to filter history by prefix
     completion_fn: ?CompletionFn = null, // Callback for tab completion
     // Completion cycling state
     completion_list: ?[][]const u8 = null,
@@ -522,11 +557,7 @@ pub const LineEditor = struct {
         else |_|
             80;
         self.rendered_cursor_row = self.promptLayout(init_cols).rows;
-        self.history_index = null;
-        if (self.saved_line) |saved| {
-            self.allocator.free(saved);
-            self.saved_line = null;
-        }
+        self.clearHistorySearch();
 
         var escape_buffer: [8]u8 = undefined;
         var escape_len: usize = 0;
@@ -967,6 +998,28 @@ pub const LineEditor = struct {
             self.allocator.free(saved);
             self.saved_line = null;
         }
+    }
+
+    /// Start one history-navigation session. `history_index == count` is the
+    /// explicit "original typed line" position, which also keeps a failed first
+    /// search from allocating the saved line and query again on every Up press.
+    fn beginHistorySearch(self: *LineEditor, count: usize) !void {
+        if (self.history_index != null) return;
+
+        // Defensive cleanup makes a new prompt independent from any prior
+        // navigation session, including one that found no matching entries.
+        self.clearHistorySearch();
+
+        self.saved_line = try self.allocator.dupe(u8, self.buffer[0..self.length]);
+        errdefer {
+            self.allocator.free(self.saved_line.?);
+            self.saved_line = null;
+        }
+
+        if (self.length > 0) {
+            self.history_search_query = try self.allocator.dupe(u8, self.buffer[0..self.length]);
+        }
+        self.history_index = count;
     }
 
     /// Start reverse search mode (Ctrl+R)
@@ -2026,47 +2079,19 @@ pub const LineEditor = struct {
     fn historyPrevious(self: *LineEditor) !void {
         const history = self.history orelse return;
         const count = self.history_count orelse return;
+        if (count.* == 0) return;
 
-        // If first time browsing history, set up search query and save line
-        if (self.history_index == null) {
-            if (self.length > 0) {
-                // Save current line
-                self.saved_line = try self.allocator.dupe(u8, self.buffer[0..self.length]);
-                // Set up substring search with current input
-                self.history_search_query = try self.allocator.dupe(u8, self.buffer[0..self.length]);
-            }
+        try self.beginHistorySearch(count.*);
+        self.clearSuggestion();
+
+        const current_index = self.history_index.?;
+        const current_line = self.buffer[0..self.length];
+        if (findPreviousHistoryMatch(history[0..count.*], current_index, self.history_search_query, current_line)) |i| {
+            try self.replaceLine(history[i].?);
+            self.history_index = i;
         }
 
-        const current_index = self.history_index orelse count.*;
-        const search_query = self.history_search_query;
-
-        // Search backward through history for matching entry
-        var i: usize = current_index;
-        while (i > 0) {
-            i -= 1;
-
-            if (history[i]) |entry| {
-                // If we have a search query, only match entries containing it
-                if (search_query) |query| {
-                    // Prefix match: typing part of a command and pressing Up/Down
-                    // cycles only through history entries that start with it
-                    // (zsh up-line-or-beginning-search / fish-style).
-                    if (std.mem.startsWith(u8, entry, query)) {
-                        // Found a match!
-                        try self.replaceLine(entry);
-                        self.history_index = i;
-                        return;
-                    }
-                } else {
-                    // No search query, show all history
-                    try self.replaceLine(entry);
-                    self.history_index = i;
-                    return;
-                }
-            }
-        }
-
-        // No more matches found (stay at current position)
+        // At the oldest distinct match, keep the line and search position stable.
     }
 
     fn historyNext(self: *LineEditor) !void {
@@ -2074,48 +2099,23 @@ pub const LineEditor = struct {
         const count = self.history_count orelse return;
 
         const current_index = self.history_index orelse return; // Not browsing history
-        const search_query = self.history_search_query;
+        self.clearSuggestion();
 
-        // Search forward through history for matching entry
-        var i: usize = current_index + 1;
-        while (i < count.*) : (i += 1) {
-            if (history[i]) |entry| {
-                // If we have a search query, only match entries containing it
-                if (search_query) |query| {
-                    // Prefix match: typing part of a command and pressing Up/Down
-                    // cycles only through history entries that start with it
-                    // (zsh up-line-or-beginning-search / fish-style).
-                    if (std.mem.startsWith(u8, entry, query)) {
-                        // Found a match!
-                        try self.replaceLine(entry);
-                        self.history_index = i;
-                        return;
-                    }
-                } else {
-                    // No search query, show all history
-                    try self.replaceLine(entry);
-                    self.history_index = i;
-                    return;
-                }
-            }
+        const current_line = self.buffer[0..self.length];
+        if (findNextHistoryMatch(history[0..count.*], current_index, self.history_search_query, current_line)) |i| {
+            try self.replaceLine(history[i].?);
+            self.history_index = i;
+            return;
         }
 
-        // Reached end of history, restore saved line or search query
+        // Moving newer past the newest match restores the exact original line,
+        // including an empty line, and ends the navigation session.
         if (self.saved_line) |saved| {
             try self.replaceLine(saved);
-            self.allocator.free(saved);
-            self.saved_line = null;
         } else {
             try self.replaceLine("");
         }
-
-        // Clear search state
-        if (self.history_search_query) |query| {
-            self.allocator.free(query);
-            self.history_search_query = null;
-        }
-
-        self.history_index = null;
+        self.clearHistorySearch();
     }
 
     fn replaceLine(self: *LineEditor, text: []const u8) !void {
@@ -3149,4 +3149,67 @@ test "isIncomplete: complete input" {
 test "isIncomplete: nested structures" {
     try std.testing.expect(LineEditor.isIncomplete("echo \"$(cmd"));
     try std.testing.expect(!LineEditor.isIncomplete("echo \"$(cmd)\""));
+}
+
+test "history prefix navigation visits distinct matches in both directions" {
+    const history = [_]?[]const u8{
+        "git status",
+        "echo unrelated",
+        "git log",
+        "git log",
+        "git diff",
+    };
+
+    const newest = findPreviousHistoryMatch(&history, history.len, "git", "git");
+    try std.testing.expectEqual(@as(?usize, 4), newest);
+
+    const older = findPreviousHistoryMatch(&history, newest.?, "git", history[newest.?].?);
+    try std.testing.expectEqual(@as(?usize, 3), older);
+
+    // The adjacent duplicate is skipped because another Up press must visibly
+    // advance through the matching commands.
+    const oldest = findPreviousHistoryMatch(&history, older.?, "git", history[older.?].?);
+    try std.testing.expectEqual(@as(?usize, 0), oldest);
+    try std.testing.expectEqual(@as(?usize, null), findPreviousHistoryMatch(&history, oldest.?, "git", history[oldest.?].?));
+
+    const newer = findNextHistoryMatch(&history, oldest.?, "git", history[oldest.?].?);
+    try std.testing.expectEqual(@as(?usize, 2), newer);
+    const newest_again = findNextHistoryMatch(&history, newer.?, "git", history[newer.?].?);
+    try std.testing.expectEqual(@as(?usize, 4), newest_again);
+}
+
+test "history navigation keeps prefix semantics and ignores holes" {
+    const history = [_]?[]const u8{
+        "cargo test",
+        null,
+        "git status",
+        "cargo build",
+    };
+
+    try std.testing.expectEqual(
+        @as(?usize, 3),
+        findPreviousHistoryMatch(&history, history.len, "cargo ", "cargo "),
+    );
+    try std.testing.expectEqual(
+        @as(?usize, null),
+        findPreviousHistoryMatch(&history, history.len, "arg", "arg"),
+    );
+}
+
+test "history search session saves empty input once and resets cleanly" {
+    var editor = LineEditor.init(std.testing.allocator, "");
+    defer editor.deinit();
+
+    try editor.beginHistorySearch(7);
+    const saved = editor.saved_line.?;
+    try std.testing.expectEqualStrings("", saved);
+    try std.testing.expectEqual(@as(?usize, 7), editor.history_index);
+    try std.testing.expectEqual(@as(?[]const u8, null), editor.history_search_query);
+
+    try editor.beginHistorySearch(7);
+    try std.testing.expect(saved.ptr == editor.saved_line.?.ptr);
+
+    editor.clearHistorySearch();
+    try std.testing.expectEqual(@as(?usize, null), editor.history_index);
+    try std.testing.expectEqual(@as(?[]const u8, null), editor.saved_line);
 }
