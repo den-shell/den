@@ -66,10 +66,16 @@ jobs:
           fetch-depth: 0
           submodules: recursive
 
+      # Our own toolchain, all the way down: pantry installs Zig from
+      # registry.pantry.dev, which mirrors the dev builds ziglang.org prunes.
+      # The version must stay fully qualified — pantry treats a bare `-dev`
+      # spec as a rolling channel and would resolve it to whatever master is
+      # that day, which is not something a release build may depend on.
       - name: Setup Zig
-        uses: mlugg/setup-zig@v2
+        uses: pantry-pm/pantry/packages/action@e2bc11fa83e4baff009dea2a12ef04ae6826976c # main
         with:
-          version: ${{ env.ZIG_VERSION }}
+          install: 'false'
+          packages: ziglang.org@${{ env.ZIG_VERSION }}
 
       - name: Extract version from tag
         id: version
@@ -109,6 +115,10 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v6
+        with:
+          # Full history and tags: the release notes are generated from the
+          # commit range between this tag and the previous one.
+          fetch-depth: 0
 
       - name: Download all artifacts
         uses: actions/download-artifact@v4
@@ -124,7 +134,31 @@ jobs:
           release-files: |
             dist/*.tar.gz
             dist/*.zip
-          release-changelog: CHANGELOG.md
+          # Generated from the tag's commit range at release time. The committed
+          # CHANGELOG.md is only rewritten by `bun run changelog:generate`, which
+          # the release scripts never call, so extracting from it published the
+          # previous version's notes — or, once the file had no section matching
+          # the new tag, nothing at all.
+          release-changelog: auto
           release-checksums: sha256
           release-prerelease: ${{ contains(github.ref_name, '-') }}
           release-token: ${{ secrets.GITHUB_TOKEN }}
+
+  publish:
+    name: Publish to Pantry Registry
+    needs: release
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+
+      # Reads build.zig.zon, tarballs the paths it declares, and uploads to
+      # registry.pantry.dev. The version comes from the manifest, which bumpx
+      # keeps in step with package.json on every `bun run release:*`.
+      - name: Publish with Pantry
+        uses: pantry-pm/pantry/packages/action@e2bc11fa83e4baff009dea2a12ef04ae6826976c # main
+        with:
+          install: 'false'
+          publish: zig
+          token: ${{ secrets.PANTRY_TOKEN }}
