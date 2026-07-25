@@ -1,5 +1,44 @@
 # Changelog
 
+[Compare changes](https://github.com/den-shell/den/compare/v0.2.1...v0.2.2)
+
+## 🚀 Features
+
+- **release**: run the whole release on our own tooling ([4c48ea7](https://github.com/den-shell/den/commit/4c48ea7)) _(by Chris <chrisbreuer93@gmail.com>)_
+- **completion**: rank command completions by recent use ([1478344](https://github.com/den-shell/den/commit/1478344)) _(by Chris <chrisbreuer93@gmail.com>)_
+
+## 🐛 Bug Fixes
+
+- **deps**: declare the Zig toolchain where pantry reads it ([d7c2d93](https://github.com/den-shell/den/commit/d7c2d93)) _(by Chris <chrisbreuer93@gmail.com>)_
+- **history**: honour history.ignore_space ([127d074](https://github.com/den-shell/den/commit/127d074)) _(by Chris <chrisbreuer93@gmail.com>)_
+- **completion**: offer symlinked executables ([fbd10af](https://github.com/den-shell/den/commit/fbd10af)) _(by Chris <chrisbreuer93@gmail.com>)_
+- **suggestions**: keep ghost text on one row and match case-insensitively ([bc82239](https://github.com/den-shell/den/commit/bc82239)) _(by Chris <chrisbreuer93@gmail.com>)_
+- **history**: stop shells from overwriting each other's history ([9376cfe](https://github.com/den-shell/den/commit/9376cfe)) _(by Chris <chrisbreuer93@gmail.com>)_
+- **history**: rank suggestions by most recent run ([a8329e7](https://github.com/den-shell/den/commit/a8329e7)) _(by Chris <chrisbreuer93@gmail.com>)_
+- **ci**: calibrate idle memory budgets ([2d42208](https://github.com/den-shell/den/commit/2d42208)) _(by Chris <chrisbreuer93@gmail.com>)_
+- **prompt**: handle hostname EOF safely ([95e1458](https://github.com/den-shell/den/commit/95e1458)) _(by Chris <chrisbreuer93@gmail.com>)_
+- **test**: link parser suite with libc ([b0bde95](https://github.com/den-shell/den/commit/b0bde95)) _(by Chris <chrisbreuer93@gmail.com>)_
+- **completion**: stabilize equally ranked matches ([41a306e](https://github.com/den-shell/den/commit/41a306e)) _(by Chris <chrisbreuer93@gmail.com>)_
+- **ci**: make performance probes portable ([9318565](https://github.com/den-shell/den/commit/9318565)) _(by Chris <chrisbreuer93@gmail.com>)_
+- **ci**: align workflows with release toolchain ([6107332](https://github.com/den-shell/den/commit/6107332)) _(by Chris <chrisbreuer93@gmail.com>)_
+- **test**: capture stdout in formatting cases ([75a0c00](https://github.com/den-shell/den/commit/75a0c00)) _(by Chris <chrisbreuer93@gmail.com>)_
+
+## 🧪 Tests
+
+- **terminal**: actually run the line editor's tests ([96cca46](https://github.com/den-shell/den/commit/96cca46)) _(by Chris <chrisbreuer93@gmail.com>)_
+
+## 🤖 Continuous Integration
+
+- install Zig with our own pantry action ([c4fa021](https://github.com/den-shell/den/commit/c4fa021)) _(by Chris <chrisbreuer93@gmail.com>)_
+
+## 🧹 Chores
+
+- release v0.2.2 ([279aa4e](https://github.com/den-shell/den/commit/279aa4e)) _(by Chris <chrisbreuer93@gmail.com>)_
+
+## Contributors
+
+- _Chris <chrisbreuer93@gmail.com>_
+
 [Compare changes](https://github.com/den-shell/den/compare/v0.2.0...v0.2.1)
 
 ## 🚀 Features
