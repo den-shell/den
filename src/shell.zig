@@ -1008,6 +1008,12 @@ pub const Shell = struct {
 
             defer self.allocator.free(line.?);
 
+            // Whether to keep this line out of history has to be decided before
+            // the line is trimmed: a leading space is the standard way to run
+            // something with a secret in it without recording it, and
+            // history.ignore_space defaults to on.
+            const keep_private = self.config.history.ignore_space and History.isPrivate(line.?);
+
             const trimmed = std.mem.trim(u8, line.?, &std.ascii.whitespace);
 
             if (trimmed.len == 0) continue;
@@ -1031,7 +1037,7 @@ pub const Shell = struct {
             const maybe_expanded = self.history_expander.expand(trimmed, &self.history, self.history_count) catch |err| {
                 IO.eprint("History expansion error: {}\n", .{err}) catch {};
                 // On error, continue with original command
-                try self.addToHistory(trimmed);
+                if (!keep_private) try self.addToHistory(trimmed);
                 try self.executeCommand(trimmed);
                 continue;
             };
@@ -1046,7 +1052,7 @@ pub const Shell = struct {
             }
 
             // Add to history (the expanded command)
-            try self.addToHistory(command);
+            if (!keep_private) try self.addToHistory(command);
 
             // Handle exit command
             if (std.mem.eql(u8, command, "exit")) {

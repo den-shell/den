@@ -162,6 +162,16 @@ pub const History = struct {
         };
     }
 
+    /// Whether a raw input line asks to be kept out of history by starting with
+    /// whitespace — the usual way to run a command with a secret in it.
+    ///
+    /// Takes the line *before* trimming, which is the whole point: once the
+    /// leading space is trimmed away the request is gone.
+    pub fn isPrivate(raw_line: []const u8) bool {
+        if (raw_line.len == 0) return false;
+        return raw_line[0] == ' ' or raw_line[0] == '\t';
+    }
+
     /// Load history from a file into the in-memory buffer with de-duplication.
     ///
     /// Recency is the whole point of this ordering: the inline autosuggestion and
@@ -700,6 +710,14 @@ test "load drops the partial first line of an oversized file" {
         const entry = history[i].?;
         try std.testing.expect(std.mem.startsWith(u8, entry, "echo "));
     }
+}
+
+test "isPrivate detects the leading-whitespace opt-out" {
+    try std.testing.expect(History.isPrivate(" echo secret"));
+    try std.testing.expect(History.isPrivate("\techo secret"));
+    try std.testing.expect(!History.isPrivate("echo public"));
+    try std.testing.expect(!History.isPrivate("echo trailing space "));
+    try std.testing.expect(!History.isPrivate(""));
 }
 
 test "compactFile keeps newest duplicates and drops corrupt lines" {
