@@ -79,6 +79,13 @@ fn readTail(allocator: std.mem.Allocator, file: std.Io.File, max_size: u64) ![]u
     return exact;
 }
 
+/// Build a sibling temp path for an atomic replace. The pid keeps two shells
+/// exiting at the same moment from fighting over the same scratch file.
+fn tempPath(buf: []u8, path: []const u8) ![]const u8 {
+    const pid = if (builtin.os.tag == .windows) 0 else std.c.getpid();
+    return std.fmt.bufPrint(buf, "{s}.tmp.{d}", .{ path, pid });
+}
+
 /// History utilities extracted from the shell core.
 ///
 /// This module centralizes history storage, persistence, and builtin
@@ -220,7 +227,35 @@ pub const History = struct {
     }
 
     /// Save the entire history buffer to the history file.
+    ///
+    /// Written to a sibling temp file and renamed into place: a half-written
+    /// history file is worse than a stale one, and an in-place truncate races
+    /// every other shell appending to the same path.
     pub fn save(history: []?[]const u8, history_file_path: []const u8) !void {
+        var tmp_buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
+        const tmp_path = tempPath(&tmp_buf, history_file_path) catch {
+            // Path too long to build a temp name — fall back to writing in place.
+            return saveInPlace(history, history_file_path);
+        };
+
+        {
+            const file = try std.Io.Dir.cwd().createFile(std.Options.debug_io, tmp_path, .{});
+            defer file.close(std.Options.debug_io);
+            errdefer std.Io.Dir.cwd().deleteFile(std.Options.debug_io, tmp_path) catch {};
+
+            for (history) |maybe_entry| {
+                if (maybe_entry) |entry| {
+                    try file.writeStreamingAll(std.Options.debug_io, entry);
+                    try file.writeStreamingAll(std.Options.debug_io, "\n");
+                }
+            }
+        }
+
+        errdefer std.Io.Dir.cwd().deleteFile(std.Options.debug_io, tmp_path) catch {};
+        try std.Io.Dir.cwd().rename(tmp_path, std.Io.Dir.cwd(), history_file_path, std.Options.debug_io);
+    }
+
+    fn saveInPlace(history: []?[]const u8, history_file_path: []const u8) !void {
         const file = try std.Io.Dir.cwd().createFile(std.Options.debug_io, history_file_path, .{});
         defer file.close(std.Options.debug_io);
 
@@ -232,10 +267,39 @@ pub const History = struct {
         }
     }
 
-    /// Append a single command to the history file. Creates the file if it
-    /// doesn't exist. Uses O_APPEND semantics to avoid races on seek.
+    /// Append a single command to the history file, creating it if needed.
+    ///
+    /// Opened O_APPEND and written with a single writev so that shells running
+    /// side by side can't overwrite each other's commands or split one command
+    /// across two lines. The previous open+lseek+two-writes sequence could do
+    /// both, and writing at a stale offset into a file another shell had just
+    /// truncated is what left runs of NUL bytes in the file.
     pub fn appendToFile(history_file_path: []const u8, command: []const u8) !void {
-        // Try opening existing file first; if it doesn't exist, create it.
+        if (builtin.os.tag != .windows) {
+            var path_buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
+            if (history_file_path.len >= path_buf.len) return error.NameTooLong;
+            @memcpy(path_buf[0..history_file_path.len], history_file_path);
+            path_buf[history_file_path.len] = 0;
+            const path_z: [*:0]const u8 = @ptrCast(&path_buf);
+
+            const fd = std.c.open(
+                path_z,
+                .{ .ACCMODE = .WRONLY, .CREAT = true, .APPEND = true },
+                @as(std.c.mode_t, 0o600),
+            );
+            if (fd < 0) return error.OpenFailed;
+            defer _ = std.c.close(fd);
+
+            var iov = [_]std.posix.iovec_const{
+                .{ .base = command.ptr, .len = command.len },
+                .{ .base = "\n", .len = 1 },
+            };
+            const want: isize = @intCast(command.len + 1);
+            if (std.c.writev(fd, &iov, 2) != want) return error.WriteFailed;
+            return;
+        }
+
+        // Windows: no O_APPEND equivalent here, so keep the seek-to-end path.
         const file = std.Io.Dir.cwd().openFile(
             std.Options.debug_io,
             history_file_path,
@@ -250,16 +314,53 @@ pub const History = struct {
         };
         defer file.close(std.Options.debug_io);
 
-        // Seek to end of file. On failure (e.g., pipe, non-seekable), surface
-        // an error rather than silently writing at the wrong offset.
-        if (builtin.os.tag != .windows) {
-            const seek_result = std.c.lseek(file.handle, 0, std.c.SEEK.END);
-            if (seek_result < 0) return error.SeekFailed;
-        }
-
         // Append the command
         try file.writeStreamingAll(std.Options.debug_io, command);
         try file.writeStreamingAll(std.Options.debug_io, "\n");
+    }
+
+    /// Rewrite the history file from its own contents: newest occurrence of each
+    /// command wins, capped at `max_entries`, written atomically.
+    ///
+    /// Deliberately does *not* dump the calling shell's in-memory buffer. Every
+    /// command is already appended as it runs, so a shell that has been open for
+    /// hours holds a stale snapshot; writing that back on exit silently deleted
+    /// everything the user's other shells had run in the meantime.
+    pub fn compactFile(
+        allocator: std.mem.Allocator,
+        history_file_path: []const u8,
+        max_entries: usize,
+    ) !void {
+        if (max_entries == 0) return;
+
+        const entries = try allocator.alloc(?[]const u8, max_entries);
+        defer allocator.free(entries);
+        @memset(entries, null);
+        var count: usize = 0;
+        defer {
+            var i: usize = 0;
+            while (i < count) : (i += 1) {
+                if (entries[i]) |entry| allocator.free(entry);
+            }
+        }
+
+        try load(allocator, entries, &count, history_file_path);
+        if (count == 0) return;
+        try save(entries[0..count], history_file_path);
+    }
+
+    /// Whether the file has grown enough to be worth compacting. Rewriting on
+    /// every exit is pure churn (and a chance to lose data) when it's already
+    /// close to the size the shell keeps in memory.
+    pub fn needsCompaction(history_file_path: []const u8, max_entries: usize) bool {
+        const file = std.Io.Dir.cwd().openFile(std.Options.debug_io, history_file_path, .{}) catch return false;
+        defer file.close(std.Options.debug_io);
+        const size = (file.stat(std.Options.debug_io) catch return false).size;
+
+        // ~40 bytes is a generous average command length; compact once the file
+        // holds roughly twice what the shell can keep in memory.
+        const budget: u64 = @as(u64, max_entries) * 40 * 2;
+        return size > budget;
     }
 
     /// Print history in the same format as the builtin `history` command.
@@ -599,6 +700,68 @@ test "load drops the partial first line of an oversized file" {
         const entry = history[i].?;
         try std.testing.expect(std.mem.startsWith(u8, entry, "echo "));
     }
+}
+
+test "compactFile keeps newest duplicates and drops corrupt lines" {
+    const allocator = std.testing.allocator;
+    const tmp_name = "den_test_history_compact.tmp";
+    defer std.Io.Dir.cwd().deleteFile(std.Options.debug_io, tmp_name) catch {};
+
+    {
+        const file = try std.Io.Dir.cwd().createFile(std.Options.debug_io, tmp_name, .{});
+        defer file.close(std.Options.debug_io);
+        try file.writeStreamingAll(std.Options.debug_io, "ls\n\x00\x00\x00\nls\necho hi\nls\n");
+    }
+
+    try History.compactFile(allocator, tmp_name, 100);
+
+    const file = try std.Io.Dir.cwd().openFile(std.Options.debug_io, tmp_name, .{});
+    defer file.close(std.Options.debug_io);
+    var buf: [256]u8 = undefined;
+    const n = try file.readStreaming(std.Options.debug_io, &.{&buf});
+    try std.testing.expectEqualStrings("echo hi\nls\n", buf[0..n]);
+}
+
+test "compactFile does not roll back commands appended by another shell" {
+    const allocator = std.testing.allocator;
+    const tmp_name = "den_test_history_concurrent.tmp";
+    defer std.Io.Dir.cwd().deleteFile(std.Options.debug_io, tmp_name) catch {};
+
+    // A shell that started long ago holds this snapshot.
+    var stale: [8]?[]const u8 = @splat(null);
+    var stale_count: usize = 0;
+    defer freeEntries(allocator, &stale);
+    try History.add(allocator, &stale, &stale_count, tmp_name, "echo old");
+
+    // Meanwhile another shell records a command.
+    try History.appendToFile(tmp_name, "echo from other shell");
+
+    // The long-lived shell exits.
+    try History.compactFile(allocator, tmp_name, 100);
+
+    var reloaded: [8]?[]const u8 = @splat(null);
+    var reloaded_count: usize = 0;
+    defer freeEntries(allocator, &reloaded);
+    try History.load(allocator, &reloaded, &reloaded_count, tmp_name);
+
+    try std.testing.expectEqual(@as(usize, 2), reloaded_count);
+    try std.testing.expectEqualStrings("echo old", reloaded[0].?);
+    try std.testing.expectEqualStrings("echo from other shell", reloaded[1].?);
+}
+
+test "appendToFile writes each command as one whole line" {
+    const tmp_name = "den_test_history_atomic.tmp";
+    std.Io.Dir.cwd().deleteFile(std.Options.debug_io, tmp_name) catch {};
+    defer std.Io.Dir.cwd().deleteFile(std.Options.debug_io, tmp_name) catch {};
+
+    try History.appendToFile(tmp_name, "echo one");
+    try History.appendToFile(tmp_name, "echo two");
+
+    const file = try std.Io.Dir.cwd().openFile(std.Options.debug_io, tmp_name, .{});
+    defer file.close(std.Options.debug_io);
+    var buf: [256]u8 = undefined;
+    const n = try file.readStreaming(std.Options.debug_io, &.{&buf});
+    try std.testing.expectEqualStrings("echo one\necho two\n", buf[0..n]);
 }
 
 test "fastExactSearch finds exact match" {

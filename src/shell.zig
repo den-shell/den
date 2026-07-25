@@ -4114,9 +4114,15 @@ pub const Shell = struct {
         }
     }
 
-    /// Save history to file
+    /// Tidy the history file on exit.
+    ///
+    /// Commands are appended as they run, so there is nothing to flush here —
+    /// this only compacts the file once it has grown well past what the shell
+    /// keeps in memory, and it compacts from the file's own contents so a
+    /// long-lived shell can't roll back what other shells appended.
     fn saveHistory(self: *Shell) !void {
-        try History.save(self.history[0..self.history_max], self.history_file_path);
+        if (!History.needsCompaction(self.history_file_path, self.history_max)) return;
+        try History.compactFile(self.allocator, self.history_file_path, self.history_max);
     }
 
     /// Append a single command to history file (incremental append)
