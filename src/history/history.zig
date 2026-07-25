@@ -4,6 +4,81 @@ const IO = @import("../utils/io.zig").IO;
 const types = @import("../types/mod.zig");
 const cpu_opt = @import("../utils/cpu_opt.zig");
 
+/// Most bytes of the history file read at startup. Only the tail is read: the
+/// newest commands are the ones worth keeping when a file outgrows this.
+const MAX_READ_SIZE: u64 = 1024 * 1024;
+
+/// Trim a raw history line and reject the ones that aren't usable commands.
+///
+/// A crashed or concurrently-truncated write can leave a run of NUL bytes in the
+/// file; those survive `std.mem.trim` (NUL is not ASCII whitespace) and would
+/// otherwise be loaded as a giant unusable "command".
+fn sanitizeEntry(line: []const u8) ?[]const u8 {
+    const trimmed = std.mem.trim(u8, line, &std.ascii.whitespace);
+    if (trimmed.len == 0) return null;
+    for (trimmed) |c| {
+        if (c < 0x20 and c != '\t') return null; // NUL padding or binary junk
+    }
+    return trimmed;
+}
+
+/// Read up to `max_size` bytes from the end of `file`, returning whole lines.
+/// A partial first line (from landing mid-command) is dropped. Caller owns the
+/// returned slice.
+fn readTail(allocator: std.mem.Allocator, file: std.Io.File, max_size: u64) ![]u8 {
+    const file_size = (try file.stat(std.Options.debug_io)).size;
+    if (file_size == 0) return allocator.alloc(u8, 0);
+
+    const start_offset: u64 = if (file_size > max_size) file_size - max_size else 0;
+    if (start_offset > 0) {
+        if (builtin.os.tag == .windows) {
+            // No seek helper on the Windows path; read and discard the head.
+            var discard: [4096]u8 = undefined;
+            var skipped: u64 = 0;
+            while (skipped < start_offset) {
+                const want: usize = @intCast(@min(discard.len, start_offset - skipped));
+                var n: u32 = 0;
+                const ok = @import("windows_compat").ReadFile(file.handle, &discard, @intCast(want), &n, null);
+                if (ok == 0 or n == 0) break;
+                skipped += n;
+            }
+        } else if (std.c.lseek(file.handle, @intCast(start_offset), std.c.SEEK.SET) < 0) {
+            return error.SeekFailed;
+        }
+    }
+
+    const read_size: usize = @intCast(file_size - start_offset);
+    const buffer = try allocator.alloc(u8, read_size);
+    errdefer allocator.free(buffer);
+
+    var total_read: usize = 0;
+    while (total_read < read_size) {
+        const bytes_read = if (builtin.os.tag == .windows) blk: {
+            var n: u32 = 0;
+            const remaining = buffer[total_read..];
+            const success = @import("windows_compat").ReadFile(file.handle, remaining.ptr, @intCast(remaining.len), &n, null);
+            break :blk if (success == 0) @as(usize, 0) else @as(usize, n);
+        } else try std.posix.read(file.handle, buffer[total_read..]);
+        if (bytes_read == 0) break;
+        total_read += bytes_read;
+    }
+
+    // Starting mid-file almost certainly split a command in half; drop it.
+    var content: []u8 = buffer[0..total_read];
+    if (start_offset > 0) {
+        content = if (std.mem.indexOfScalar(u8, content, '\n')) |nl|
+            content[nl + 1 ..]
+        else
+            content[0..0];
+    }
+    if (content.len == buffer.len) return buffer;
+
+    // Hand back an exactly-sized allocation so the caller's free() matches.
+    const exact = try allocator.dupe(u8, content);
+    allocator.free(buffer);
+    return exact;
+}
+
 /// History utilities extracted from the shell core.
 ///
 /// This module centralizes history storage, persistence, and builtin
@@ -81,6 +156,13 @@ pub const History = struct {
     }
 
     /// Load history from a file into the in-memory buffer with de-duplication.
+    ///
+    /// Recency is the whole point of this ordering: the inline autosuggestion and
+    /// Up-arrow both walk the buffer backwards, so an entry's slot has to reflect
+    /// the *last* time it ran, not the first. De-duplication therefore keeps the
+    /// newest occurrence of a repeated command and the buffer is filled from the
+    /// end of the file backwards, so an oversized file drops its oldest entries
+    /// rather than its newest.
     pub fn load(
         allocator: std.mem.Allocator,
         history: []?[]const u8,
@@ -93,27 +175,15 @@ pub const History = struct {
         };
         defer file.close(std.Options.debug_io);
 
-        // Read entire file
-        const max_size = 1024 * 1024; // 1MB max
-        const file_size = (try file.stat(std.Options.debug_io)).size;
-        const read_size: usize = @min(file_size, max_size);
-        const buffer = try allocator.alloc(u8, read_size);
-        defer allocator.free(buffer);
-        var total_read: usize = 0;
-        while (total_read < read_size) {
-            const bytes_read = if (builtin.os.tag == .windows) blk: {
-                var n: u32 = 0;
-                const remaining = buffer[total_read..];
-                const success = @import("windows_compat").ReadFile(file.handle, remaining.ptr, @intCast(remaining.len), &n, null);
-                break :blk if (success == 0) @as(usize, 0) else @as(usize, n);
-            } else try std.posix.read(file.handle, buffer[total_read..]);
-            if (bytes_read == 0) break;
-            total_read += bytes_read;
-        }
-        const content = buffer[0..total_read];
+        if (history_count.* >= history.len) return; // No room for anything
 
-        // Split by newlines and add to history (with de-duplication).
-        // Uses a StringHashMap for O(1) dedup instead of O(n) linear scan.
+        const buffer = try readTail(allocator, file, MAX_READ_SIZE);
+        defer allocator.free(buffer);
+        const content = buffer;
+
+        // De-duplicate newest-first so a repeated command lands at the position of
+        // its most recent run. Uses a StringHashMap for O(1) dedup instead of an
+        // O(n) linear scan.
         var seen = std.StringHashMap(void).init(allocator);
         defer seen.deinit();
         // Pre-populate with any existing entries so cross-load dedup works
@@ -124,19 +194,28 @@ pub const History = struct {
             }
         }
 
-        var iter = std.mem.splitScalar(u8, content, '\n');
-        while (iter.next()) |line| {
-            const trimmed = std.mem.trim(u8, line, &std.ascii.whitespace);
-            if (trimmed.len > 0 and history_count.* < history.len) {
-                // O(1) dedup check
-                if (seen.contains(trimmed)) continue;
+        // Collect the entries to keep, newest first, stopping once the buffer's
+        // remaining capacity is full. Keys borrow `buffer`, which outlives `seen`.
+        const capacity = history.len - history_count.*;
+        var newest_first = std.array_list.Managed([]const u8).init(allocator);
+        defer newest_first.deinit();
 
-                const cmd_copy = try allocator.dupe(u8, trimmed);
-                history[history_count.*] = cmd_copy;
-                history_count.* += 1;
-                // Track by the stored (owned) slice so the key remains valid
-                try seen.put(cmd_copy, {});
-            }
+        var iter = std.mem.splitBackwardsScalar(u8, content, '\n');
+        while (iter.next()) |line| {
+            if (newest_first.items.len >= capacity) break;
+            const entry = sanitizeEntry(line) orelse continue;
+            if (seen.contains(entry)) continue;
+            try seen.put(entry, {});
+            try newest_first.append(entry);
+        }
+
+        // Write them back out oldest-first so the buffer stays chronological.
+        var idx = newest_first.items.len;
+        while (idx > 0) {
+            idx -= 1;
+            const cmd_copy = try allocator.dupe(u8, newest_first.items[idx]);
+            history[history_count.*] = cmd_copy;
+            history_count.* += 1;
         }
     }
 
@@ -402,6 +481,124 @@ test "appendToFile appends to existing file" {
     const n = try file.readStreaming(std.Options.debug_io, &.{&buf});
     const content = buf[0..n];
     try std.testing.expectEqualStrings("first\nsecond\n", content);
+}
+
+fn freeEntries(allocator: std.mem.Allocator, history: []?[]const u8) void {
+    for (history) |maybe| if (maybe) |entry| allocator.free(entry);
+}
+
+/// Load a literal history file body and return the in-memory buffer.
+fn loadFixture(
+    allocator: std.mem.Allocator,
+    tmp_name: []const u8,
+    body: []const u8,
+    history: []?[]const u8,
+    history_count: *usize,
+) !void {
+    {
+        const file = try std.Io.Dir.cwd().createFile(std.Options.debug_io, tmp_name, .{});
+        defer file.close(std.Options.debug_io);
+        try file.writeStreamingAll(std.Options.debug_io, body);
+    }
+    try History.load(allocator, history, history_count, tmp_name);
+}
+
+test "load keeps the most recent occurrence of a repeated command" {
+    const allocator = std.testing.allocator;
+    const tmp_name = "den_test_history_recency.tmp";
+    defer std.Io.Dir.cwd().deleteFile(std.Options.debug_io, tmp_name) catch {};
+
+    var history: [8]?[]const u8 = @splat(null);
+    var count: usize = 0;
+    defer freeEntries(allocator, &history);
+
+    // `claude --dangerously-skip-permissions` ran long ago *and* most recently;
+    // the prefix search must land on the recent run, not the stale one.
+    try loadFixture(allocator, tmp_name,
+        \\claude --dangerously-skip-permissions
+        \\claude --skip-permissions
+        \\web
+        \\claude --dangerously-skip-permissions
+        \\
+    , &history, &count);
+
+    try std.testing.expectEqual(@as(usize, 3), count);
+    try std.testing.expectEqualStrings("claude --skip-permissions", history[0].?);
+    try std.testing.expectEqualStrings("web", history[1].?);
+    try std.testing.expectEqualStrings("claude --dangerously-skip-permissions", history[2].?);
+
+    // Which is what the autosuggestion's newest-first prefix walk relies on.
+    try std.testing.expectEqualStrings(
+        "claude --dangerously-skip-permissions",
+        History.prefixSearch(&history, count, "cl").?,
+    );
+}
+
+test "load keeps the newest entries when the file exceeds capacity" {
+    const allocator = std.testing.allocator;
+    const tmp_name = "den_test_history_capacity.tmp";
+    defer std.Io.Dir.cwd().deleteFile(std.Options.debug_io, tmp_name) catch {};
+
+    var history: [3]?[]const u8 = @splat(null);
+    var count: usize = 0;
+    defer freeEntries(allocator, &history);
+
+    try loadFixture(allocator, tmp_name, "one\ntwo\nthree\nfour\nfive\n", &history, &count);
+
+    try std.testing.expectEqual(@as(usize, 3), count);
+    try std.testing.expectEqualStrings("three", history[0].?);
+    try std.testing.expectEqualStrings("four", history[1].?);
+    try std.testing.expectEqualStrings("five", history[2].?);
+}
+
+test "load skips NUL-padded and blank lines" {
+    const allocator = std.testing.allocator;
+    const tmp_name = "den_test_history_corrupt.tmp";
+    defer std.Io.Dir.cwd().deleteFile(std.Options.debug_io, tmp_name) catch {};
+
+    var history: [8]?[]const u8 = @splat(null);
+    var count: usize = 0;
+    defer freeEntries(allocator, &history);
+
+    try loadFixture(allocator, tmp_name, "echo one\n\x00\x00\x00\x00\n   \necho two\n", &history, &count);
+
+    try std.testing.expectEqual(@as(usize, 2), count);
+    try std.testing.expectEqualStrings("echo one", history[0].?);
+    try std.testing.expectEqualStrings("echo two", history[1].?);
+}
+
+test "load drops the partial first line of an oversized file" {
+    const allocator = std.testing.allocator;
+    const tmp_name = "den_test_history_tail.tmp";
+    defer std.Io.Dir.cwd().deleteFile(std.Options.debug_io, tmp_name) catch {};
+
+    var history: [8]?[]const u8 = @splat(null);
+    var count: usize = 0;
+    defer freeEntries(allocator, &history);
+
+    // Write more than the tail window so the read starts mid-file.
+    var body = std.array_list.Managed(u8).init(allocator);
+    defer body.deinit();
+    while (body.items.len < MAX_READ_SIZE) {
+        try body.appendSlice("echo padding-that-is-long-enough-to-fill-the-window\n");
+    }
+    try body.appendSlice("echo newest\n");
+
+    {
+        const file = try std.Io.Dir.cwd().createFile(std.Options.debug_io, tmp_name, .{});
+        defer file.close(std.Options.debug_io);
+        try file.writeStreamingAll(std.Options.debug_io, body.items);
+    }
+    try History.load(allocator, &history, &count, tmp_name);
+
+    // Only whole lines survive, and the newest command is present.
+    try std.testing.expect(count >= 1);
+    try std.testing.expectEqualStrings("echo newest", history[count - 1].?);
+    var i: usize = 0;
+    while (i < count) : (i += 1) {
+        const entry = history[i].?;
+        try std.testing.expect(std.mem.startsWith(u8, entry, "echo "));
+    }
 }
 
 test "fastExactSearch finds exact match" {

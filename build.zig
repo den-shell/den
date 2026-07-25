@@ -768,6 +768,20 @@ pub fn build(b: *std.Build) void {
     const history_test_step = b.step("test-history", "Run history tests");
     history_test_step.dependOn(&run_history_tests.step);
 
+    // History store unit tests (load/save ordering, persistence)
+    const history_store_test_module = b.createModule(.{
+        .root_source_file = b.path("src/test_history_store_root.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    history_store_test_module.link_libc = true;
+    const history_store_tests = b.addTest(.{
+        .root_module = history_store_test_module,
+    });
+    const run_history_store_tests = b.addRunArtifact(history_store_tests);
+    const history_store_test_step = b.step("test-history-store", "Run history store unit tests");
+    history_store_test_step.dependOn(&run_history_store_tests.step);
+
     // Alias tests
     const alias_test_module = b.createModule(.{
         .root_source_file = b.path("tests/test_alias.zig"),
@@ -937,6 +951,7 @@ pub fn build(b: *std.Build) void {
     all_tests_step.dependOn(&run_cli_tests.step);
     all_tests_step.dependOn(&run_builtin_tests.step);
     all_tests_step.dependOn(&run_history_tests.step);
+    all_tests_step.dependOn(&run_history_store_tests.step);
     all_tests_step.dependOn(&run_alias_tests.step);
     all_tests_step.dependOn(&run_job_control_tests.step);
     all_tests_step.dependOn(&run_completion_tests.step);
