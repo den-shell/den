@@ -65,6 +65,43 @@ fn findNextHistoryMatch(
     return null;
 }
 
+/// Whether `entry` is worth offering as the inline completion of `input`.
+/// An entry that only adds whitespace has nothing to accept.
+fn suggestionUsable(entry: []const u8, input: []const u8) bool {
+    if (entry.len <= input.len) return false;
+    return std.mem.trim(u8, entry[input.len..], &std.ascii.whitespace).len != 0;
+}
+
+/// Pick the ghost-text suggestion for `input` from `history` (oldest first).
+///
+/// Recency decides: the newest command starting with what the user typed is
+/// what they're reaching for, which is why the scan runs backwards. A
+/// case-insensitive pass only runs when nothing matched exactly, so a stray
+/// Shift still suggests something instead of nothing.
+fn findSuggestion(history: []const ?[]const u8, count: usize, input: []const u8) ?[]const u8 {
+    if (input.len == 0) return null;
+    const upto = @min(count, history.len);
+
+    var i = upto;
+    while (i > 0) {
+        i -= 1;
+        const entry = history[i] orelse continue;
+        if (std.mem.startsWith(u8, entry, input) and suggestionUsable(entry, input)) return entry;
+    }
+
+    i = upto;
+    while (i > 0) {
+        i -= 1;
+        const entry = history[i] orelse continue;
+        if (entry.len <= input.len) continue;
+        if (std.ascii.eqlIgnoreCase(entry[0..input.len], input) and suggestionUsable(entry, input)) {
+            return entry;
+        }
+    }
+
+    return null;
+}
+
 fn completionReplacement(path_prefix: []const u8, candidate: []const u8, scratch: []u8) ?[]const u8 {
     if (path_prefix.len == 0 or std.mem.startsWith(u8, candidate, path_prefix)) return candidate;
 
@@ -220,7 +257,8 @@ pub const LineEditor = struct {
     completion_word_start: usize = 0,
     completion_path_prefix: ?[]const u8 = null, // Save the path prefix (e.g., "Documents/Projects/")
     // Inline suggestion state
-    suggestion: ?[]const u8 = null, // The suggested text from history
+    suggestion: ?[]const u8 = null, // Ghost text: slice of suggestion_entry past what's typed
+    suggestion_entry: ?[]const u8 = null, // Owned copy of the history entry it came from
     // Syntax highlighting
     syntax_highlighting: bool = true, // Enable/disable syntax highlighting
     // Wrap-aware redraw: cursor's display row (0-based) within the wrapped line
@@ -2984,59 +3022,92 @@ pub const LineEditor = struct {
 
         if (!self.autosuggestions) return;
         if (self.length == 0) return;
-        if (self.history == null or self.history_count == null) return;
+        const history = self.history orelse return;
+        const count_ptr = self.history_count orelse return;
 
         const current_input = self.buffer[0..self.length];
-        const history = self.history.?;
-        const count = self.history_count.?.*;
+        const match = findSuggestion(history, count_ptr.*, current_input) orelse return;
 
-        var i: usize = count;
-        while (i > 0) {
-            i -= 1;
-            if (history[i]) |entry| {
-                if (entry.len > current_input.len and std.mem.startsWith(u8, entry, current_input)) {
-                    self.suggestion = try self.allocator.dupe(u8, entry[current_input.len..]);
-                    return;
-                }
-            }
-        }
+        const owned = try self.allocator.dupe(u8, match);
+        self.suggestion_entry = owned;
+        self.suggestion = owned[self.length..];
     }
 
-    /// Display the suggestion in gray text
+    /// Display the suggestion in gray text.
+    ///
+    /// Clipped to what fits on the current row. Ghost text that wrapped would
+    /// leave the cursor a row below where the caller left it (the relative
+    /// cursor-left below can't climb rows) and could scroll the screen out from
+    /// under the next redraw. The full entry is still what Right/End accepts.
     fn displaySuggestion(self: *LineEditor) !void {
-        if (self.suggestion) |sugg| {
-            try self.writeBytes("\x1b[90m");
-            try self.writeBytes(sugg);
-            try self.writeBytes("\x1b[0m");
+        const sugg = self.suggestion orelse return;
+        if (sugg.len == 0) return;
 
-            var i: usize = 0;
-            while (i < sugg.len) : (i += 1) {
-                try self.writeBytes("\x1b[D");
-            }
+        const cols: usize = if (signals.getWindowSize()) |ws|
+            (if (ws.cols == 0) 80 else ws.cols)
+        else |_|
+            80;
+
+        const layout = self.promptLayout(cols);
+        // Leave the final cell of the row empty: filling it puts the terminal in
+        // a deferred-wrap state where the cursor's column is ambiguous.
+        const used = (layout.last_col + self.displayWidth(0, self.length)) % cols;
+        const room = cols - used - 1;
+        if (room == 0) return;
+
+        // Take whole codepoints only, up to the columns left on this row.
+        var bytes: usize = 0;
+        var width: usize = 0;
+        while (bytes < sugg.len) {
+            const len = @min(utf8SeqLen(sugg[bytes]), sugg.len - bytes);
+            const w = codepointWidth(decodeCodepoint(sugg[bytes .. bytes + len], len));
+            if (width + w > room) break;
+            bytes += len;
+            width += w;
         }
+        if (width == 0) return;
+
+        try self.writeBytes("\x1b[90m");
+        try self.writeBytes(sugg[0..bytes]);
+        try self.writeBytes("\x1b[0m");
+
+        var buf: [16]u8 = undefined;
+        const seq = std.fmt.bufPrint(&buf, "\x1b[{d}D", .{width}) catch return;
+        try self.writeBytes(seq);
     }
 
     /// Clear the suggestion
     fn clearSuggestion(self: *LineEditor) void {
-        if (self.suggestion) |sugg| {
-            self.allocator.free(sugg);
-            self.suggestion = null;
+        if (self.suggestion_entry) |entry| {
+            self.allocator.free(entry);
+            self.suggestion_entry = null;
         }
+        self.suggestion = null;
     }
 
     /// Accept the current suggestion
     fn acceptSuggestion(self: *LineEditor) !void {
-        if (self.suggestion) |sugg| {
-            for (sugg) |char| {
-                if (self.length >= self.buffer.len) break;
-                self.buffer[self.length] = char;
-                self.length += 1;
-                self.cursor += 1;
-            }
-
-            try self.writeBytes(sugg);
-
+        const entry = self.suggestion_entry orelse return;
+        if (entry.len > self.buffer.len or entry.len <= self.length) {
             self.clearSuggestion();
+            return;
+        }
+
+        // A case-insensitive match means what's on screen isn't a prefix of the
+        // entry, so adopt the entry verbatim rather than splicing onto a
+        // differently-cased stem.
+        const typed_matches = std.mem.eql(u8, self.buffer[0..self.length], entry[0..self.length]);
+        @memcpy(self.buffer[0..entry.len], entry);
+        const tail = entry[self.length..];
+        self.length = entry.len;
+        self.cursor = entry.len;
+
+        if (typed_matches) {
+            try self.writeBytes(tail);
+            self.clearSuggestion();
+        } else {
+            self.clearSuggestion();
+            try self.redrawLine();
         }
     }
 
@@ -3223,6 +3294,58 @@ test "isIncomplete: complete input" {
 test "isIncomplete: nested structures" {
     try std.testing.expect(LineEditor.isIncomplete("echo \"$(cmd"));
     try std.testing.expect(!LineEditor.isIncomplete("echo \"$(cmd)\""));
+}
+
+test "suggestion offers the most recently run match" {
+    const history = [_]?[]const u8{
+        "claude --dangerously-skip-permissions",
+        "claude upgrade",
+        "claude --skip-permissions",
+        "web",
+        "claude --dangerously-skip-permissions",
+    };
+
+    try std.testing.expectEqualStrings(
+        "claude --dangerously-skip-permissions",
+        findSuggestion(&history, history.len, "cl").?,
+    );
+    try std.testing.expectEqualStrings(
+        "claude upgrade",
+        findSuggestion(&history, history.len, "claude u").?,
+    );
+    try std.testing.expectEqual(@as(?[]const u8, null), findSuggestion(&history, history.len, "zzz"));
+    try std.testing.expectEqual(@as(?[]const u8, null), findSuggestion(&history, history.len, ""));
+}
+
+test "suggestion honours the live history count and ignores holes" {
+    const history = [_]?[]const u8{ "git status", null, "git push", null, null };
+
+    // Entries past history_count are stale slots, not suggestions.
+    try std.testing.expectEqualStrings("git push", findSuggestion(&history, 3, "git").?);
+    try std.testing.expectEqualStrings("git status", findSuggestion(&history, 2, "git").?);
+    try std.testing.expectEqual(@as(?[]const u8, null), findSuggestion(&history, 0, "git"));
+}
+
+test "suggestion skips entries that add nothing to accept" {
+    const history = [_]?[]const u8{ "make build", "make   " };
+
+    // "make " only pads with spaces, so it is not worth suggesting over the
+    // command that actually does something.
+    try std.testing.expectEqualStrings("make build", findSuggestion(&history, history.len, "make").?);
+    try std.testing.expectEqual(@as(?[]const u8, null), findSuggestion(&history, history.len, "make build"));
+}
+
+test "suggestion falls back to a case-insensitive match" {
+    const history = [_]?[]const u8{ "Docker compose up", "git status" };
+
+    try std.testing.expectEqualStrings(
+        "Docker compose up",
+        findSuggestion(&history, history.len, "docker").?,
+    );
+
+    // An exact match always wins over a case-insensitive one, however recent.
+    const both = [_]?[]const u8{ "docker ps", "Docker compose up" };
+    try std.testing.expectEqualStrings("docker ps", findSuggestion(&both, both.len, "docker").?);
 }
 
 test "history prefix navigation visits distinct matches in both directions" {
