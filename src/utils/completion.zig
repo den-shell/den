@@ -280,10 +280,21 @@ pub const Completion = struct {
             // Iterate files in directory
             var iter = dir.iterate();
             while (iter.next(std.Options.debug_io) catch continue) |entry| {
-                // Check if file starts with prefix
-                if (entry.kind == .file and self.prefixMatches(entry.name, prefix)) {
-                    // Check if executable
+                // Symlinked executables are the norm, not the exception —
+                // package managers and version managers install shims, and
+                // `claude`, `node` or anything under a `bin/` full of links
+                // would otherwise never be offered. Some filesystems also report
+                // an unknown kind while iterating. statFile below follows the
+                // link and rejects anything that isn't a real executable, so let
+                // those kinds through and let the stat decide.
+                const worth_probing = entry.kind == .file or
+                    entry.kind == .sym_link or
+                    entry.kind == .unknown;
+                if (worth_probing and self.prefixMatches(entry.name, prefix)) {
+                    // Check if executable (follows symlinks; a dangling link or
+                    // a link to a directory fails here and is skipped)
                     const stat = dir.statFile(std.Options.debug_io, entry.name, .{}) catch continue;
+                    if (stat.kind != .file) continue;
                     const is_executable = if (is_windows) true else (stat.permissions.toMode() & 0o111) != 0;
 
                     if (is_executable) {
