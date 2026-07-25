@@ -32,7 +32,7 @@ See [Benchmarks](./BENCHMARKS.md) for measured, reproducible performance numbers
 ## Community
 
 - [Discussions on GitHub](https://github.com/stacksjs/den/discussions)
-- [Join the Stacks Discord Server](https://discord.gg/stacksjs)
+- [Join the Stacks Discord Server](https://stacksjs.com/discord)
 
 ## License
 

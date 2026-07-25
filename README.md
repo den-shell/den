@@ -259,4 +259,4 @@ Made with 💙 by the Stacks team.
 ## Community
 
 - [GitHub Discussions](https://github.com/stacksjs/den/discussions)
-- [Discord Server](https://discord.gg/stacksjs)
+- [Discord Server](https://stacksjs.com/discord)
