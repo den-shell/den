@@ -33,9 +33,10 @@ jobs:
           submodules: recursive
 
       - name: Setup Zig
-        uses: mlugg/setup-zig@v2
+        uses: pantry-pm/pantry/packages/action@e2bc11fa83e4baff009dea2a12ef04ae6826976c # main
         with:
-          version: ${{ env.ZIG_VERSION }}
+          install: 'false'
+          packages: ziglang.org@${{ env.ZIG_VERSION }}
 
       - name: Cache Zig artifacts
         uses: actions/cache@v5
@@ -122,9 +123,10 @@ jobs:
           submodules: recursive
 
       - name: Setup Zig
-        uses: mlugg/setup-zig@v2
+        uses: pantry-pm/pantry/packages/action@e2bc11fa83e4baff009dea2a12ef04ae6826976c # main
         with:
-          version: ${{ env.ZIG_VERSION }}
+          install: 'false'
+          packages: ziglang.org@${{ env.ZIG_VERSION }}
 
       - name: Build
         run: zig build -Doptimize=ReleaseSafe
@@ -174,9 +176,10 @@ jobs:
           submodules: recursive
 
       - name: Setup Zig
-        uses: mlugg/setup-zig@v2
+        uses: pantry-pm/pantry/packages/action@e2bc11fa83e4baff009dea2a12ef04ae6826976c # main
         with:
-          version: ${{ env.ZIG_VERSION }}
+          install: 'false'
+          packages: ziglang.org@${{ env.ZIG_VERSION }}
 
       - name: Build release
         run: zig build -Doptimize=ReleaseFast
