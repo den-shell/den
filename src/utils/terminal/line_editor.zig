@@ -2358,12 +2358,15 @@ pub const LineEditor = struct {
             };
         }
 
-        // Sort by score (descending), then lexically so equal-scoring directory
-        // choices never jump around between repeated completion sessions.
+        // Sort by score (descending), then by the order the completion provider
+        // supplied. That order is already deterministic and carries ranking this
+        // scorer can't see — which commands the user actually runs, for one — so
+        // re-sorting equal scores lexically here would throw it away and put
+        // `clang` ahead of the `claude` the provider deliberately promoted.
         std.mem.sort(ScoredCompletion, scored, {}, struct {
             fn lessThan(_: void, a: ScoredCompletion, b: ScoredCompletion) bool {
                 if (a.score != b.score) return a.score > b.score;
-                return std.mem.lessThan(u8, a.text, b.text);
+                return a.index < b.index;
             }
         }.lessThan);
 
@@ -3424,6 +3427,29 @@ test "history search uses text before cursor and restores the draft cursor" {
     try std.testing.expectEqualStrings(draft, editor.saved_line.?);
     try std.testing.expectEqualStrings("git", editor.history_search_query.?);
     try std.testing.expectEqual(@as(usize, 3), editor.saved_history_cursor);
+}
+
+test "equally scored completions keep the order the provider supplied" {
+    var editor = LineEditor.init(std.testing.allocator, "");
+    defer editor.deinit();
+
+    // The provider promoted `claude` because that is what the user runs; the
+    // editor's re-sort must not reshuffle it back behind `clang` on a tie.
+    const supplied = [_][]const u8{ "claude", "clang", "clang++" };
+    const list = try std.testing.allocator.alloc([]const u8, supplied.len);
+    for (supplied, 0..) |item, i| list[i] = item;
+    editor.completion_list = list;
+
+    try editor.sortCompletionsByFuzzyScore("cla");
+
+    const sorted = editor.completion_list.?;
+    defer {
+        std.testing.allocator.free(sorted);
+        editor.completion_list = null;
+    }
+    try std.testing.expectEqualStrings("claude", sorted[0]);
+    try std.testing.expectEqualStrings("clang", sorted[1]);
+    try std.testing.expectEqualStrings("clang++", sorted[2]);
 }
 
 test "completion replacement does not duplicate nested path prefixes" {

@@ -21,6 +21,73 @@ pub fn getCompletionConfig() types.CompletionConfig {
     return g_completion_config;
 }
 
+/// Command history, borrowed from the shell so command completion can favour
+/// what the user actually runs. Null until the interactive loop registers it.
+var g_history: ?[]const ?[]const u8 = null;
+var g_history_count: ?*const usize = null;
+
+/// Point command completion at the shell's live history buffer. The shell owns
+/// the storage; it must outlive completion (it is a field of the running Shell).
+pub fn setHistorySource(history: []const ?[]const u8, count: *const usize) void {
+    g_history = history;
+    g_history_count = count;
+}
+
+pub fn clearHistorySource() void {
+    g_history = null;
+    g_history_count = null;
+}
+
+/// The command word of a history entry: `git push --force` -> `git`.
+fn historyCommandWord(entry: []const u8) []const u8 {
+    const trimmed = std.mem.trimStart(u8, entry, " \t");
+    const end = std.mem.indexOfAny(u8, trimmed, " \t|&;<>") orelse trimmed.len;
+    return trimmed[0..end];
+}
+
+/// Reorder command completions so ones the user has actually run come first,
+/// most recently used first. Everything else keeps its existing fuzzy-ranked
+/// order, so this only promotes — it never buries an unused command below
+/// another unused one.
+///
+/// Without this, `cl<Tab>` ranks every PATH command starting with "cl" the
+/// same and falls back to alphabetical, offering `clang` ahead of the `claude`
+/// the user runs daily.
+fn rankByHistoryUse(allocator: std.mem.Allocator, results: [][]const u8) void {
+    if (results.len < 2) return;
+    const history = g_history orelse return;
+    const count_ptr = g_history_count orelse return;
+    const count = @min(count_ptr.*, history.len);
+    if (count == 0) return;
+
+    // One pass over history: command word -> index of its most recent use.
+    var last_use = std.StringHashMap(usize).init(allocator);
+    defer last_use.deinit();
+    var i: usize = 0;
+    while (i < count) : (i += 1) {
+        const entry = history[i] orelse continue;
+        const word = historyCommandWord(entry);
+        if (word.len == 0) continue;
+        last_use.put(word, i) catch return; // Out of memory: keep fuzzy order
+    }
+
+    const Ctx = struct {
+        uses: *const std.StringHashMap(usize),
+
+        fn lessThan(ctx: @This(), a: []const u8, b: []const u8) bool {
+            const ua = ctx.uses.get(a);
+            const ub = ctx.uses.get(b);
+            if (ua == null and ub == null) return false; // Keep fuzzy order
+            if (ua == null) return false;
+            if (ub == null) return true;
+            return ua.? > ub.?; // More recently used first
+        }
+    };
+
+    // Stable so unused candidates keep the order rankByFuzzyScore gave them.
+    std.mem.sort([]const u8, results, Ctx{ .uses = &last_use }, Ctx.lessThan);
+}
+
 const InputContext = struct {
     segment: []const u8,
     command: []const u8,
@@ -147,7 +214,9 @@ pub fn tabCompletionFn(input: []const u8, allocator: std.mem.Allocator) ![][]con
         const looks_like_path = std.mem.indexOfScalar(u8, prefix, '/') != null or
             std.mem.startsWith(u8, prefix, "~");
         if (!looks_like_path) {
-            return configuredCompletions(allocator, try completion.completeCommand(prefix));
+            const commands = try completion.completeCommand(prefix);
+            rankByHistoryUse(allocator, commands);
+            return configuredCompletions(allocator, commands);
         }
         return configuredCompletions(allocator, try completion.completeFile(prefix));
     }
@@ -912,6 +981,74 @@ test "completion input context follows shell segments and quoting" {
         const context = analyzeInput("cd \"my dir/pa");
         try std.testing.expectEqualStrings("\"my dir/pa", context.prefix);
     }
+}
+
+test "history command word ignores leading space and arguments" {
+    try std.testing.expectEqualStrings("git", historyCommandWord("git push --force"));
+    try std.testing.expectEqualStrings("ls", historyCommandWord("   ls"));
+    try std.testing.expectEqualStrings("cat", historyCommandWord("cat file | wc -l"));
+    try std.testing.expectEqualStrings("", historyCommandWord(""));
+}
+
+test "command completions promote recently used commands" {
+    const allocator = std.testing.allocator;
+    defer clearHistorySource();
+
+    const history = [_]?[]const u8{
+        "claude --dangerously-skip-permissions",
+        "clang -o main main.c",
+        "claude --resume",
+    };
+    var count: usize = history.len;
+    setHistorySource(&history, &count);
+
+    // Alphabetical order is what fuzzy ranking leaves equally-scored PATH
+    // commands in; `claude` is the one actually being run.
+    var results = [_][]const u8{ "clang", "claude", "clear" };
+    rankByHistoryUse(allocator, &results);
+
+    try std.testing.expectEqualStrings("claude", results[0]);
+    try std.testing.expectEqualStrings("clang", results[1]);
+    // Never used, so it keeps its place behind both.
+    try std.testing.expectEqualStrings("clear", results[2]);
+}
+
+test "command completions keep fuzzy order when history is unset or unhelpful" {
+    const allocator = std.testing.allocator;
+    defer clearHistorySource();
+
+    var results = [_][]const u8{ "alpha", "beta", "gamma" };
+
+    clearHistorySource();
+    rankByHistoryUse(allocator, &results);
+    try std.testing.expectEqualStrings("alpha", results[0]);
+    try std.testing.expectEqualStrings("gamma", results[2]);
+
+    const history = [_]?[]const u8{ "unrelated one", "unrelated two" };
+    var count: usize = history.len;
+    setHistorySource(&history, &count);
+    rankByHistoryUse(allocator, &results);
+    try std.testing.expectEqualStrings("alpha", results[0]);
+    try std.testing.expectEqualStrings("beta", results[1]);
+    try std.testing.expectEqualStrings("gamma", results[2]);
+}
+
+test "command completion ranking respects the live history count" {
+    const allocator = std.testing.allocator;
+    defer clearHistorySource();
+
+    const history = [_]?[]const u8{ "clang -v", "claude", null };
+    var count: usize = 1; // Only "clang -v" has been run so far
+    setHistorySource(&history, &count);
+
+    var results = [_][]const u8{ "claude", "clang" };
+    rankByHistoryUse(allocator, &results);
+    try std.testing.expectEqualStrings("clang", results[0]);
+
+    // Stale slots past the count must not count as usage.
+    count = 2;
+    rankByHistoryUse(allocator, &results);
+    try std.testing.expectEqualStrings("claude", results[0]);
 }
 
 test "completion suggestion limit owns a correctly sized result" {

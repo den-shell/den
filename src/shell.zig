@@ -772,6 +772,8 @@ pub const Shell = struct {
         self.job_manager.deinit();
 
         // Clean up history (only clean up entries that were actually used)
+        // Drop completion's borrow of the buffer before the entries are freed.
+        shell_mod.clearHistorySource();
         History.deinit(self.allocator, self.history[0..self.history_max], self.history_file_path);
         if (self.structured_history) |*sh| {
             sh.deinit();
@@ -941,6 +943,9 @@ pub const Shell = struct {
                         editor.autosuggestions = self.config.line_editor.autosuggestions;
                         editor.suggestion_min_chars = @max(1, self.config.line_editor.suggestion_min_chars);
                         editor.setHistory(&self.history, &self.history_count);
+                        // Same buffer the inline suggestion reads, so Tab and
+                        // ghost text agree on what "recently used" means.
+                        shell_mod.setHistorySource(&self.history, &self.history_count);
                         editor.setCompletionFn(shell_mod.tabCompletionFn);
                         editor.setPromptRefreshFn(refreshPromptCallback);
                         editor.user_data = @ptrCast(self);

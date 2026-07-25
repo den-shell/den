@@ -178,4 +178,6 @@ pub const DispatchResult = builtin_dispatch.DispatchResult;
 // Re-export tab completion functions
 pub const tabCompletionFn = tab_completion.tabCompletionFn;
 pub const setCompletionConfig = tab_completion.setCompletionConfig;
+pub const setHistorySource = tab_completion.setHistorySource;
+pub const clearHistorySource = tab_completion.clearHistorySource;
 pub const getCompletionConfig = tab_completion.getCompletionConfig;
