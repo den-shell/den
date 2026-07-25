@@ -633,12 +633,13 @@ pub fn build(b: *std.Build) void {
     const fuzzing_test_step = b.step("test-fuzzing", "Run comprehensive fuzzing tests");
     fuzzing_test_step.dependOn(&run_fuzzing_tests.step);
 
-    // Terminal tests (multi-line input, isIncomplete function)
+    // Terminal tests (line editor, autosuggestions, multi-line input)
     const terminal_test_module = b.createModule(.{
-        .root_source_file = b.path("src/utils/terminal.zig"),
+        .root_source_file = b.path("src/test_line_editor_root.zig"),
         .target = target,
         .optimize = optimize,
     });
+    terminal_test_module.link_libc = true;
 
     const terminal_tests = b.addTest(.{
         .root_module = terminal_test_module,
