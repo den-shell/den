@@ -470,6 +470,25 @@ pub const Shell = struct {
             try env.put(path_key, path_val);
         }
 
+        // PWD has to describe THIS shell's working directory. Inherited from the
+        // parent it names wherever the parent happened to be, so `$PWD` was
+        // simply wrong until the first cd, and anything reading it (a prompt, a
+        // chpwd hook, a script) acted on the wrong directory.
+        {
+            var cwd_buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
+            if (std.process.currentPath(std.Options.debug_io, &cwd_buf)) |cwd_len| {
+                const pwd_key = try allocator.dupe(u8, "PWD");
+                errdefer allocator.free(pwd_key);
+                const pwd_val = try allocator.dupe(u8, cwd_buf[0..cwd_len]);
+                errdefer allocator.free(pwd_val);
+                if (env.fetchRemove(pwd_key)) |old| {
+                    allocator.free(old.key);
+                    allocator.free(old.value);
+                }
+                try env.put(pwd_key, pwd_val);
+            } else |_| {}
+        }
+
         // How a tool knows it is running under den, the same way ZSH_VERSION and
         // BASH_VERSION work. Den's own LSP has always offered $DEN_VERSION as a
         // completion, but nothing set it, so integrations had no way to detect

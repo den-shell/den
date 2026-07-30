@@ -38,6 +38,171 @@ fn formatParseError(err: anyerror) []const u8 {
 }
 
 /// Builtin: source - execute commands from file
+/// Execute a block of shell text the way a script is executed: split
+/// quote-aware into lines, with function definitions and multi-line control
+/// flow handled, rather than parsed as a single command chain.
+///
+/// Shared by `source` and `eval`. `eval` used to parse its argument as a
+/// command chain, which has no representation for a function definition, so
+/// `eval "$(tool init)"` - how essentially every shell integration is loaded -
+/// defined nothing at all and reported no error.
+pub fn executeScriptContent(self: *Shell, content: []const u8) void {
+    const control_flow = @import("../scripting/control_flow.zig");
+    const functions = @import("../scripting/functions.zig");
+
+    // Split content into lines (quote-aware)
+    var lines_buffer: [10000][]const u8 = undefined;
+    var lines_count: usize = 0;
+    {
+        var line_start: usize = 0;
+        var in_sq = false;
+        var in_dq = false;
+        var escaped = false;
+        // A '#' comment runs to end of line; quote characters inside it (e.g.
+        // an apostrophe in "Den's") must NOT toggle quote state, otherwise the
+        // following lines get swallowed as one giant quoted "line".
+        var in_comment = false;
+        var ci: usize = 0;
+        while (ci < content.len) : (ci += 1) {
+            if (escaped) {
+                // An escaped newline is a line continuation: don't split here.
+                escaped = false;
+                continue;
+            }
+            const ch = content[ci];
+            if (ch == '\\' and !in_sq and !in_comment) {
+                escaped = true;
+                continue;
+            }
+            if (ch == '\n') {
+                in_comment = false;
+                if (!in_sq and !in_dq) {
+                    if (lines_count >= lines_buffer.len) break;
+                    lines_buffer[lines_count] = content[line_start..ci];
+                    lines_count += 1;
+                    line_start = ci + 1;
+                }
+                continue;
+            }
+            if (in_comment) continue;
+            if (ch == '\'' and !in_dq) {
+                in_sq = !in_sq;
+            } else if (ch == '"' and !in_sq) {
+                in_dq = !in_dq;
+            } else if (ch == '#' and !in_sq and !in_dq) {
+                // '#' starts a comment only at the start of a word (start of
+                // line or preceded by whitespace), matching POSIX.
+                const prev_is_ws = ci == line_start or content[ci - 1] == ' ' or content[ci - 1] == '\t';
+                if (prev_is_ws) in_comment = true;
+            }
+        }
+        if (line_start <= content.len and lines_count < lines_buffer.len) {
+            lines_buffer[lines_count] = content[line_start..content.len];
+            lines_count += 1;
+        }
+    }
+    const lines = lines_buffer[0..lines_count];
+
+    var line_num: usize = 0;
+    var cf_parser = control_flow.ControlFlowParser.init(self.allocator);
+    var cf_executor = control_flow.ControlFlowExecutor.init(self);
+    var func_parser = functions.FunctionParser.init(self.allocator);
+
+    // Use @ptrCast to break circular error set inference
+    const cmd_fn = @as(*const fn (*Shell, []const u8) anyerror!void, @ptrCast(&Shell.executeCommand));
+
+    while (line_num < lines.len) : (line_num += 1) {
+        const trimmed = std.mem.trim(u8, lines[line_num], &std.ascii.whitespace);
+        if (trimmed.len == 0 or trimmed[0] == '#') continue;
+
+        // Check function definitions
+        const is_func_kw = std.mem.startsWith(u8, trimmed, "function ");
+        var is_paren_syntax = false;
+        if (std.mem.indexOf(u8, trimmed, "()")) |_| {
+            if (std.mem.indexOf(u8, trimmed, "{") != null) {
+                is_paren_syntax = true;
+            } else if (line_num + 1 < lines.len) {
+                const next_t = std.mem.trim(u8, lines[line_num + 1], &std.ascii.whitespace);
+                if (std.mem.startsWith(u8, next_t, "{")) is_paren_syntax = true;
+            }
+        }
+        if (is_func_kw or is_paren_syntax) {
+            // Check if this is a single-line function (both { and } on same line)
+            // If so, let the shell's own function parser handle it via cmd_fn
+            const has_close_brace = std.mem.indexOf(u8, trimmed, "}") != null;
+            if (!has_close_brace) {
+                if (func_parser.parseFunction(lines, line_num)) |result_val| {
+                    const result = result_val;
+                    defer {
+                        self.allocator.free(result.name);
+                        for (result.body) |line| self.allocator.free(line);
+                        self.allocator.free(result.body);
+                    }
+                    self.function_manager.defineFunction(result.name, result.body, false) catch break;
+                    line_num = result.end;
+                    continue;
+                } else |_| {
+                    // Parse failure: fall through to cmd_fn
+                }
+            }
+            // Single-line function or parse failure: fall through to cmd_fn
+        }
+
+        // A construct that opens and closes on one line is handed to the
+        // normal command path, which already parses it. The line-based
+        // parsers below only ever look for the body on FOLLOWING lines, so
+        // they read `if [ -d x ]; then export PATH=y; fi` as an if with an
+        // empty body and silently do nothing — which is most of what an rc
+        // file is made of.
+        if (isSelfContainedConstruct(trimmed)) {
+            cmd_fn(self, trimmed) catch {};
+            continue;
+        }
+
+        // Control flow constructs
+        if (std.mem.startsWith(u8, trimmed, "if ")) {
+            var result = cf_parser.parseIf(lines, line_num) catch break;
+            defer result.stmt.deinit();
+            self.last_exit_code = cf_executor.executeIf(&result.stmt) catch 1;
+            line_num = result.end;
+            continue;
+        }
+        if (std.mem.startsWith(u8, trimmed, "while ")) {
+            var result = cf_parser.parseWhile(lines, line_num, false) catch break;
+            defer result.loop.deinit();
+            self.last_exit_code = cf_executor.executeWhile(&result.loop) catch 1;
+            line_num = result.end;
+            continue;
+        }
+        if (std.mem.startsWith(u8, trimmed, "until ")) {
+            var result = cf_parser.parseWhile(lines, line_num, true) catch break;
+            defer result.loop.deinit();
+            self.last_exit_code = cf_executor.executeWhile(&result.loop) catch 1;
+            line_num = result.end;
+            continue;
+        }
+        if (std.mem.startsWith(u8, trimmed, "for ")) {
+            var result = cf_parser.parseFor(lines, line_num) catch break;
+            defer result.loop.deinit();
+            self.last_exit_code = cf_executor.executeFor(&result.loop) catch 1;
+            line_num = result.end;
+            continue;
+        }
+        if (std.mem.startsWith(u8, trimmed, "case ")) {
+            var result = cf_parser.parseCase(lines, line_num) catch break;
+            defer result.stmt.deinit();
+            self.last_exit_code = cf_executor.executeCase(&result.stmt) catch 1;
+            line_num = result.end;
+            continue;
+        }
+
+        // Simple command - execute directly
+        cmd_fn(self, trimmed) catch {
+            self.last_exit_code = 1;
+        };
+    }
+}
+
 /// Whether a line opens AND closes a control-flow construct by itself.
 ///
 /// The line-based parsers in `builtinSource` collect bodies from subsequent
@@ -174,165 +339,7 @@ pub fn builtinSource(self: *Shell, cmd: *types.ParsedCommand) !void {
         }
     }
 
-    // Execute file content using multi-line script processing.
-    // Split on newlines and use ControlFlowParser for if/while/for/case/functions,
-    // matching the same approach used by the -c flag handler.
-    if (content.len > 0) {
-        const control_flow = @import("../scripting/control_flow.zig");
-        const functions = @import("../scripting/functions.zig");
-
-        // Split content into lines (quote-aware)
-        var lines_buffer: [10000][]const u8 = undefined;
-        var lines_count: usize = 0;
-        {
-            var line_start: usize = 0;
-            var in_sq = false;
-            var in_dq = false;
-            var escaped = false;
-            // A '#' comment runs to end of line; quote characters inside it (e.g.
-            // an apostrophe in "Den's") must NOT toggle quote state, otherwise the
-            // following lines get swallowed as one giant quoted "line".
-            var in_comment = false;
-            var ci: usize = 0;
-            while (ci < content.len) : (ci += 1) {
-                if (escaped) {
-                    // An escaped newline is a line continuation: don't split here.
-                    escaped = false;
-                    continue;
-                }
-                const ch = content[ci];
-                if (ch == '\\' and !in_sq and !in_comment) {
-                    escaped = true;
-                    continue;
-                }
-                if (ch == '\n') {
-                    in_comment = false;
-                    if (!in_sq and !in_dq) {
-                        if (lines_count >= lines_buffer.len) break;
-                        lines_buffer[lines_count] = content[line_start..ci];
-                        lines_count += 1;
-                        line_start = ci + 1;
-                    }
-                    continue;
-                }
-                if (in_comment) continue;
-                if (ch == '\'' and !in_dq) {
-                    in_sq = !in_sq;
-                } else if (ch == '"' and !in_sq) {
-                    in_dq = !in_dq;
-                } else if (ch == '#' and !in_sq and !in_dq) {
-                    // '#' starts a comment only at the start of a word (start of
-                    // line or preceded by whitespace), matching POSIX.
-                    const prev_is_ws = ci == line_start or content[ci - 1] == ' ' or content[ci - 1] == '\t';
-                    if (prev_is_ws) in_comment = true;
-                }
-            }
-            if (line_start <= content.len and lines_count < lines_buffer.len) {
-                lines_buffer[lines_count] = content[line_start..content.len];
-                lines_count += 1;
-            }
-        }
-        const lines = lines_buffer[0..lines_count];
-
-        var line_num: usize = 0;
-        var cf_parser = control_flow.ControlFlowParser.init(self.allocator);
-        var cf_executor = control_flow.ControlFlowExecutor.init(self);
-        var func_parser = functions.FunctionParser.init(self.allocator);
-
-        // Use @ptrCast to break circular error set inference
-        const cmd_fn = @as(*const fn (*Shell, []const u8) anyerror!void, @ptrCast(&Shell.executeCommand));
-
-        while (line_num < lines.len) : (line_num += 1) {
-            const trimmed = std.mem.trim(u8, lines[line_num], &std.ascii.whitespace);
-            if (trimmed.len == 0 or trimmed[0] == '#') continue;
-
-            // Check function definitions
-            const is_func_kw = std.mem.startsWith(u8, trimmed, "function ");
-            var is_paren_syntax = false;
-            if (std.mem.indexOf(u8, trimmed, "()")) |_| {
-                if (std.mem.indexOf(u8, trimmed, "{") != null) {
-                    is_paren_syntax = true;
-                } else if (line_num + 1 < lines.len) {
-                    const next_t = std.mem.trim(u8, lines[line_num + 1], &std.ascii.whitespace);
-                    if (std.mem.startsWith(u8, next_t, "{")) is_paren_syntax = true;
-                }
-            }
-            if (is_func_kw or is_paren_syntax) {
-                // Check if this is a single-line function (both { and } on same line)
-                // If so, let the shell's own function parser handle it via cmd_fn
-                const has_close_brace = std.mem.indexOf(u8, trimmed, "}") != null;
-                if (!has_close_brace) {
-                    if (func_parser.parseFunction(lines, line_num)) |result_val| {
-                        const result = result_val;
-                        defer {
-                            self.allocator.free(result.name);
-                            for (result.body) |line| self.allocator.free(line);
-                            self.allocator.free(result.body);
-                        }
-                        self.function_manager.defineFunction(result.name, result.body, false) catch break;
-                        line_num = result.end;
-                        continue;
-                    } else |_| {
-                        // Parse failure: fall through to cmd_fn
-                    }
-                }
-                // Single-line function or parse failure: fall through to cmd_fn
-            }
-
-            // A construct that opens and closes on one line is handed to the
-            // normal command path, which already parses it. The line-based
-            // parsers below only ever look for the body on FOLLOWING lines, so
-            // they read `if [ -d x ]; then export PATH=y; fi` as an if with an
-            // empty body and silently do nothing — which is most of what an rc
-            // file is made of.
-            if (isSelfContainedConstruct(trimmed)) {
-                cmd_fn(self, trimmed) catch {};
-                continue;
-            }
-
-            // Control flow constructs
-            if (std.mem.startsWith(u8, trimmed, "if ")) {
-                var result = cf_parser.parseIf(lines, line_num) catch break;
-                defer result.stmt.deinit();
-                self.last_exit_code = cf_executor.executeIf(&result.stmt) catch 1;
-                line_num = result.end;
-                continue;
-            }
-            if (std.mem.startsWith(u8, trimmed, "while ")) {
-                var result = cf_parser.parseWhile(lines, line_num, false) catch break;
-                defer result.loop.deinit();
-                self.last_exit_code = cf_executor.executeWhile(&result.loop) catch 1;
-                line_num = result.end;
-                continue;
-            }
-            if (std.mem.startsWith(u8, trimmed, "until ")) {
-                var result = cf_parser.parseWhile(lines, line_num, true) catch break;
-                defer result.loop.deinit();
-                self.last_exit_code = cf_executor.executeWhile(&result.loop) catch 1;
-                line_num = result.end;
-                continue;
-            }
-            if (std.mem.startsWith(u8, trimmed, "for ")) {
-                var result = cf_parser.parseFor(lines, line_num) catch break;
-                defer result.loop.deinit();
-                self.last_exit_code = cf_executor.executeFor(&result.loop) catch 1;
-                line_num = result.end;
-                continue;
-            }
-            if (std.mem.startsWith(u8, trimmed, "case ")) {
-                var result = cf_parser.parseCase(lines, line_num) catch break;
-                defer result.stmt.deinit();
-                self.last_exit_code = cf_executor.executeCase(&result.stmt) catch 1;
-                line_num = result.end;
-                continue;
-            }
-
-            // Simple command - execute directly
-            cmd_fn(self, trimmed) catch {
-                self.last_exit_code = 1;
-            };
-        }
-    }
+    if (content.len > 0) executeScriptContent(self, content);
 }
 
 /// Builtin: mapfile/readarray - read lines from stdin into array
