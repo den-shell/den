@@ -503,6 +503,23 @@ pub const Shell = struct {
                 allocator.free(old.value);
             }
             try env.put(version_key, version_val);
+
+            // Also into the process environment, so child processes see it. A
+            // tool asked "which shell are you setting me up for?" runs as a
+            // separate process, and den's own map is invisible to it: pantry
+            // was handing den the bash integration because DEN_VERSION never
+            // reached it.
+            var name_buf: [16]u8 = undefined;
+            var value_buf: [64]u8 = undefined;
+            if (version_val.len < value_buf.len) {
+                const name = "DEN_VERSION";
+                @memcpy(name_buf[0..name.len], name);
+                name_buf[name.len] = 0;
+                @memcpy(value_buf[0..version_val.len], version_val);
+                value_buf[version_val.len] = 0;
+                const c_env = @import("executor/mod.zig").libc_env;
+                _ = c_env.setenv(name_buf[0..name.len :0], value_buf[0..version_val.len :0], 1);
+            }
         }
 
         // On macOS, build the full system PATH from /etc/paths(.d) so commands
