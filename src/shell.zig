@@ -166,6 +166,7 @@ const config_watch = @import("utils/config_watch.zig");
 const getConfigMtime = config_watch.getConfigMtime;
 const shell_mod = @import("shell/mod.zig");
 const dir_hooks = @import("shell/dir_hooks.zig");
+const build_options = @import("build_options");
 
 /// Hard limit for in-memory history entries.
 /// This ensures predictable memory usage regardless of config.history.max_entries.
@@ -467,6 +468,22 @@ pub const Shell = struct {
             const path_val = try allocator.dupe(u8, "/usr/bin:/bin");
             errdefer allocator.free(path_val);
             try env.put(path_key, path_val);
+        }
+
+        // How a tool knows it is running under den, the same way ZSH_VERSION and
+        // BASH_VERSION work. Den's own LSP has always offered $DEN_VERSION as a
+        // completion, but nothing set it, so integrations had no way to detect
+        // this shell and could not be written for it.
+        {
+            const version_key = try allocator.dupe(u8, "DEN_VERSION");
+            errdefer allocator.free(version_key);
+            const version_val = try allocator.dupe(u8, build_options.version);
+            errdefer allocator.free(version_val);
+            if (env.fetchRemove(version_key)) |old| {
+                allocator.free(old.key);
+                allocator.free(old.value);
+            }
+            try env.put(version_key, version_val);
         }
 
         // On macOS, build the full system PATH from /etc/paths(.d) so commands
