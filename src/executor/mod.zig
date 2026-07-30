@@ -887,12 +887,21 @@ pub const Executor = struct {
         // Auto-cd (like zsh): a bare directory name cds into it. Also handles
         // the multi-dot shorthand `...` -> `../..`, `....` -> `../../..` by
         // expanding it first so the directory check (and cd) see a real path.
-        {
+        //
+        // Only for a bare word with no arguments that is not also a command,
+        // which is what zsh's AUTO_CD does. Without those two conditions a
+        // directory in the working directory swallows a real command of the
+        // same name: in a checkout holding `pantry/`, `pantry shell:lookup ...`
+        // changed directory and exited 0 without running anything, and the same
+        // went for `docs`, `build`, `test`, `git` and every other name a
+        // directory commonly has. The command vanished silently, which is the
+        // worst way for it to fail.
+        if (command.args.len == 0) {
             const many = try expansion_mod.expandManyDots(self.allocator, command.name);
             defer if (many) |m| self.allocator.free(m);
             const autocd_target = many orelse command.name;
 
-            if (try self.isDirectory(autocd_target)) {
+            if (try self.isDirectory(autocd_target) and !self.commandExistsInPath(command.name)) {
                 var args = [_][]const u8{autocd_target};
                 var redirections = [_]types.Redirection{};
                 var cd_command = types.ParsedCommand{
@@ -1463,9 +1472,17 @@ pub const Executor = struct {
                 }
             }
 
-            // Auto-cd: if command name is a directory, cd into it
+            // Auto-cd: if command name is a directory, cd into it.
+            //
+            // Only for a bare word with no arguments, which is what zsh's
+            // AUTO_CD does. Without that check a directory in the working
+            // directory shadows a real command of the same name: in a project
+            // holding a `pantry/` directory, `pantry shell:lookup ...` silently
+            // changed directory and exited 0 instead of running anything, and
+            // the same went for `docs`, `build`, `test` and every other common
+            // directory name.
             if (self.shell) |shell| {
-                if (shell.shopt_autocd) {
+                if (shell.shopt_autocd and command.args.len == 0) {
                     var dir = std.Io.Dir.cwd().openDir(std.Options.debug_io, command.name, .{}) catch null;
                     if (dir) |*d| {
                         d.close(std.Options.debug_io);
