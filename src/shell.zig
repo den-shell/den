@@ -165,6 +165,7 @@ const matchRegexAt = regex.matchRegexAt;
 const config_watch = @import("utils/config_watch.zig");
 const getConfigMtime = config_watch.getConfigMtime;
 const shell_mod = @import("shell/mod.zig");
+const dir_hooks = @import("shell/dir_hooks.zig");
 
 /// Hard limit for in-memory history entries.
 /// This ensures predictable memory usage regardless of config.history.max_entries.
@@ -312,6 +313,9 @@ pub const Shell = struct {
     command_cache: std.StringHashMap([]const u8),
     // Named directories (zsh-style hash -d)
     named_dirs: std.StringHashMap([]const u8),
+    // Working directory as of the last prompt, for the chpwd hooks. Null until
+    // the first prompt records it.
+    last_hook_cwd: ?[]const u8,
     // Array variables (zsh-style arrays); sparse indexed arrays
     arrays: std.StringHashMap(types.IndexedArray),
     // Custom completion specifications (like bash's complete)
@@ -559,6 +563,7 @@ pub const Shell = struct {
             .signal_handlers = std.StringHashMap([]const u8).init(allocator),
             .command_cache = std.StringHashMap([]const u8).init(allocator),
             .named_dirs = std.StringHashMap([]const u8).init(allocator),
+            .last_hook_cwd = null,
             .arrays = std.StringHashMap(types.IndexedArray).init(allocator),
             .completion_registry = CompletionRegistry.init(allocator),
             .plugin_registry = PluginRegistry.init(allocator),
@@ -712,6 +717,9 @@ pub const Shell = struct {
 
         // Clean up function manager
         self.function_manager.deinit();
+
+        // Clean up the directory recorded for the chpwd hooks
+        dir_hooks.reset(self);
 
         // Clean up signal handlers
         var sig_iter = self.signal_handlers.iterator();
@@ -931,6 +939,15 @@ pub const Shell = struct {
 
             // Check for completed background jobs
             try self.job_manager.checkCompleted();
+
+            // Directory and pre-prompt hooks, before the prompt is built: an
+            // environment switcher changes PATH and prints its own line, and
+            // both belong to the prompt the user is about to see, not the one
+            // after it. Interactive only, since a script has no prompt to hook.
+            if (self.is_interactive) {
+                dir_hooks.runDirectoryHooks(self);
+                dir_hooks.runPrecmdHooks(self);
+            }
 
             // Read line from stdin
             const line = blk: {
@@ -4034,6 +4051,15 @@ pub const Shell = struct {
     }
 
     /// Source ~/.denrc at startup (like .zshrc)
+    ///
+    /// Delegates to the `source` builtin rather than reading the file here.
+    /// This used to execute the rc line by line, which meant every multi-line
+    /// construct silently misbehaved at startup: a function definition ran its
+    /// body immediately and left the shell with no function, and `if`, `for`,
+    /// `while`, and `case` fared no better. The builtin already splits
+    /// quote-aware and hands multi-line blocks to the control-flow parser, and
+    /// there is no reason for the rc to be parsed by different rules than the
+    /// file the user sources by hand.
     pub fn sourceRcFile(self: *Shell) !void {
         const home = std.c.getenv("HOME") orelse return;
         const home_str = std.mem.span(@as([*:0]const u8, @ptrCast(home)));
@@ -4041,32 +4067,18 @@ pub const Shell = struct {
         var path_buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
         const rc_path = std.fmt.bufPrint(&path_buf, "{s}/.denrc", .{home_str}) catch return;
 
-        // Open the file — silently return if it doesn't exist
-        const file = std.Io.Dir.cwd().openFile(std.Options.debug_io, rc_path, .{}) catch return;
-        defer file.close(std.Options.debug_io);
+        // Silently return when there is no rc file: an absent one is the
+        // default, not an error.
+        std.Io.Dir.cwd().access(std.Options.debug_io, rc_path, .{}) catch return;
 
-        const max_size: usize = 1024 * 1024; // 1MB max
-        const file_size = (file.stat(std.Options.debug_io) catch return).size;
-        const read_size: usize = @min(file_size, max_size);
-        const buffer = self.allocator.alloc(u8, read_size) catch return;
-        defer self.allocator.free(buffer);
+        // A single quote in the path would break out of the quoting below. No
+        // real HOME contains one, and mis-executing the rc is worse than
+        // skipping it.
+        if (std.mem.indexOfScalar(u8, rc_path, '\'') != null) return;
 
-        var total_read: usize = 0;
-        while (total_read < read_size) {
-            const n = file.readStreaming(std.Options.debug_io, &.{buffer[total_read..]}) catch break;
-            if (n == 0) break;
-            total_read += n;
-        }
-        const content = buffer[0..total_read];
-
-        // Execute each line as a shell command
-        var lines = std.mem.splitScalar(u8, content, '\n');
-        while (lines.next()) |line| {
-            const trimmed = std.mem.trim(u8, line, &std.ascii.whitespace);
-            if (trimmed.len == 0) continue;
-            if (trimmed[0] == '#') continue; // Skip comments
-            self.executeCommand(trimmed) catch continue;
-        }
+        var cmd_buf: [std.Io.Dir.max_path_bytes + 16]u8 = undefined;
+        const command = std.fmt.bufPrint(&cmd_buf, "source '{s}'", .{rc_path}) catch return;
+        self.executeCommand(command) catch return;
     }
 
     /// Load aliases from configuration
