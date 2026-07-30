@@ -1264,7 +1264,10 @@ pub const Expansion = struct {
         if (std.mem.indexOf(u8, content, "##")) |sep_pos| {
             if (sep_pos > 0 and sep_pos < content.len - 2) {
                 const var_name_pp = content[0..sep_pos];
-                const pp_pattern = content[sep_pos + 2 ..];
+                const raw_pp_pattern = content[sep_pos + 2 ..];
+                const expanded_pp = self.expandVarRefs(raw_pp_pattern) catch null;
+                defer if (expanded_pp) |ep| self.allocator.free(ep);
+                const pp_pattern = expanded_pp orelse raw_pp_pattern;
 
                 if (self.getVariableValue(var_name_pp)) |value| {
                     const result = try self.removePrefix(value, pp_pattern, true);
@@ -1279,7 +1282,10 @@ pub const Expansion = struct {
         if (std.mem.indexOf(u8, content, "#")) |sep_pos| {
             if (sep_pos > 0 and sep_pos < content.len - 1 and std.mem.indexOfScalar(u8, content[0..sep_pos], '/') == null) {
                 const var_name_pp = content[0..sep_pos];
-                const pp_pattern = content[sep_pos + 1 ..];
+                const raw_pp_pattern = content[sep_pos + 1 ..];
+                const expanded_pp = self.expandVarRefs(raw_pp_pattern) catch null;
+                defer if (expanded_pp) |ep| self.allocator.free(ep);
+                const pp_pattern = expanded_pp orelse raw_pp_pattern;
 
                 if (self.getVariableValue(var_name_pp)) |value| {
                     const result = try self.removePrefix(value, pp_pattern, false);
@@ -1293,7 +1299,10 @@ pub const Expansion = struct {
         if (std.mem.indexOf(u8, content, "%%")) |sep_pos| {
             if (sep_pos > 0 and sep_pos < content.len - 2 and std.mem.indexOfScalar(u8, content[0..sep_pos], '/') == null) {
                 const var_name_pp = content[0..sep_pos];
-                const pp_pattern = content[sep_pos + 2 ..];
+                const raw_pp_pattern = content[sep_pos + 2 ..];
+                const expanded_pp = self.expandVarRefs(raw_pp_pattern) catch null;
+                defer if (expanded_pp) |ep| self.allocator.free(ep);
+                const pp_pattern = expanded_pp orelse raw_pp_pattern;
 
                 if (self.getVariableValue(var_name_pp)) |value| {
                     const result = try self.removeSuffix(value, pp_pattern, true);
@@ -1308,7 +1317,10 @@ pub const Expansion = struct {
         if (std.mem.indexOf(u8, content, "%")) |sep_pos| {
             if (sep_pos > 0 and sep_pos < content.len - 1 and std.mem.indexOfScalar(u8, content[0..sep_pos], '/') == null) {
                 const var_name_pp = content[0..sep_pos];
-                const pp_pattern = content[sep_pos + 1 ..];
+                const raw_pp_pattern = content[sep_pos + 1 ..];
+                const expanded_pp = self.expandVarRefs(raw_pp_pattern) catch null;
+                defer if (expanded_pp) |ep| self.allocator.free(ep);
+                const pp_pattern = expanded_pp orelse raw_pp_pattern;
 
                 if (self.getVariableValue(var_name_pp)) |value| {
                     const result = try self.removeSuffix(value, pp_pattern, false);

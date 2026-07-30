@@ -38,6 +38,54 @@ fn formatParseError(err: anyerror) []const u8 {
 }
 
 /// Builtin: source - execute commands from file
+/// Whether a line opens AND closes a control-flow construct by itself.
+///
+/// The line-based parsers in `builtinSource` collect bodies from subsequent
+/// lines, so they cannot represent a one-liner. Recognising them here routes
+/// them to the shell's own parser instead.
+fn isSelfContainedConstruct(line: []const u8) bool {
+    const Pair = struct { open: []const u8, close: []const u8 };
+    const pairs = [_]Pair{
+        .{ .open = "if ", .close = "fi" },
+        .{ .open = "while ", .close = "done" },
+        .{ .open = "until ", .close = "done" },
+        .{ .open = "for ", .close = "done" },
+        .{ .open = "case ", .close = "esac" },
+    };
+
+    for (pairs) |pair| {
+        if (!std.mem.startsWith(u8, line, pair.open)) continue;
+        // The terminator has to appear as a word of its own, so `echo finish`
+        // is not read as a closed `if`, while `... ; done; echo x` is.
+        return containsWord(line[pair.open.len..], pair.close);
+    }
+
+    return false;
+}
+
+/// Whether `word` appears in `haystack` delimited by whitespace, `;`, or an end.
+fn containsWord(haystack: []const u8, word: []const u8) bool {
+    var search_from: usize = 0;
+    while (std.mem.indexOfPos(u8, haystack, search_from, word)) |pos| {
+        search_from = pos + 1;
+
+        if (pos > 0) {
+            const before = haystack[pos - 1];
+            if (before != ' ' and before != '\t' and before != ';') continue;
+        }
+
+        const after_pos = pos + word.len;
+        if (after_pos < haystack.len) {
+            const after = haystack[after_pos];
+            if (after != ' ' and after != '\t' and after != ';' and after != '\n') continue;
+        }
+
+        return true;
+    }
+
+    return false;
+}
+
 pub fn builtinSource(self: *Shell, cmd: *types.ParsedCommand) !void {
     if (cmd.args.len == 0) {
         try IO.eprint("den: source: usage: source filename\n", .{});
@@ -229,6 +277,17 @@ pub fn builtinSource(self: *Shell, cmd: *types.ParsedCommand) !void {
                     }
                 }
                 // Single-line function or parse failure: fall through to cmd_fn
+            }
+
+            // A construct that opens and closes on one line is handed to the
+            // normal command path, which already parses it. The line-based
+            // parsers below only ever look for the body on FOLLOWING lines, so
+            // they read `if [ -d x ]; then export PATH=y; fi` as an if with an
+            // empty body and silently do nothing — which is most of what an rc
+            // file is made of.
+            if (isSelfContainedConstruct(trimmed)) {
+                cmd_fn(self, trimmed) catch {};
+                continue;
             }
 
             // Control flow constructs
@@ -834,4 +893,39 @@ pub fn builtinCaller(self: *Shell, cmd: *types.ParsedCommand) !void {
     const frame = self.call_stack[self.call_stack_depth - 1 - expr_depth];
     try IO.print("{d} {s} {s}\n", .{ frame.line_number, frame.function_name, frame.source_file });
     self.last_exit_code = 0;
+}
+
+const testing = std.testing;
+
+test "isSelfContainedConstruct: one-line constructs are recognised" {
+    try testing.expect(isSelfContainedConstruct("if [ 1 -eq 1 ]; then echo x; fi"));
+    try testing.expect(isSelfContainedConstruct("for w in a b; do echo $w; done"));
+    try testing.expect(isSelfContainedConstruct("while [ $i -lt 2 ]; do i=$((i+1)); done"));
+    try testing.expect(isSelfContainedConstruct("until [ -f x ]; do sleep 1; done"));
+    try testing.expect(isSelfContainedConstruct("case $x in a) echo a;; esac"));
+}
+
+test "isSelfContainedConstruct: a trailing command still counts as closed" {
+    try testing.expect(isSelfContainedConstruct("for w in a b; do echo $w; done; echo after"));
+    try testing.expect(isSelfContainedConstruct("if [ -d /tmp ]; then cd /tmp; fi; pwd"));
+}
+
+test "isSelfContainedConstruct: an unclosed construct is left to the parser" {
+    try testing.expect(!isSelfContainedConstruct("if [ 1 -eq 1 ]; then"));
+    try testing.expect(!isSelfContainedConstruct("for w in a b; do"));
+    try testing.expect(!isSelfContainedConstruct("while true; do"));
+}
+
+test "isSelfContainedConstruct: the terminator must be its own word" {
+    // `wifi` and `finish` contain `fi`, and `redone` contains `done`.
+    try testing.expect(!isSelfContainedConstruct("if [ 1 -eq 1 ]; then echo wifi"));
+    try testing.expect(!isSelfContainedConstruct("for w in a; do echo redone"));
+    // A quoted terminator inside the body is still a real one elsewhere.
+    try testing.expect(isSelfContainedConstruct("if [ 1 -eq 1 ]; then echo wifi; fi"));
+}
+
+test "isSelfContainedConstruct: ordinary commands are not constructs" {
+    try testing.expect(!isSelfContainedConstruct("echo fi"));
+    try testing.expect(!isSelfContainedConstruct("echo done"));
+    try testing.expect(!isSelfContainedConstruct("export PATH=/usr/bin"));
 }
