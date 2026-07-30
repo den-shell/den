@@ -774,6 +774,16 @@ pub const Expansion = struct {
                                 pattern = rest[pattern_start..];
                             }
 
+                            // Both halves are subject to expansion, so
+                            // ${arr[@]//"$sep"/-} matches what $sep holds rather
+                            // than the two characters `$sep`.
+                            const expanded_pattern = self.expandVarRefs(pattern) catch null;
+                            defer if (expanded_pattern) |ep| self.allocator.free(ep);
+                            if (expanded_pattern) |ep| pattern = ep;
+                            const expanded_replacement = self.expandVarRefs(replacement) catch null;
+                            defer if (expanded_replacement) |er| self.allocator.free(er);
+                            if (expanded_replacement) |er| replacement = er;
+
                             const subst_sep: u8 = if (std.mem.eql(u8, index_part, "*")) blk: {
                                 const ifs_val = self.environment.get("IFS") orelse " \t\n";
                                 break :blk if (ifs_val.len > 0) ifs_val[0] else ' ';
@@ -1426,8 +1436,18 @@ pub const Expansion = struct {
 
                 // Find the second slash for the replacement
                 if (std.mem.indexOf(u8, rest[pattern_start..], "/")) |second_slash| {
-                    const pattern = rest[pattern_start .. pattern_start + second_slash];
-                    const replacement = rest[pattern_start + second_slash + 1 ..];
+                    const raw_pattern = rest[pattern_start .. pattern_start + second_slash];
+                    const raw_replacement = rest[pattern_start + second_slash + 1 ..];
+
+                    // Both halves are subject to expansion, so ${PATH//"$dir"/}
+                    // removes the directory the variable names rather than
+                    // looking for the literal characters `$dir`.
+                    const expanded_pattern = self.expandVarRefs(raw_pattern) catch null;
+                    defer if (expanded_pattern) |ep| self.allocator.free(ep);
+                    const pattern = expanded_pattern orelse raw_pattern;
+                    const expanded_replacement = self.expandVarRefs(raw_replacement) catch null;
+                    defer if (expanded_replacement) |er| self.allocator.free(er);
+                    const replacement = expanded_replacement orelse raw_replacement;
 
                     if (self.getVariableValue(var_name)) |value| {
                         if (anchor_prefix) {
@@ -1929,6 +1949,65 @@ pub const Expansion = struct {
     }
 
     /// Replace pattern in string with replacement
+
+    /// Expand `$NAME` and `${NAME}` references in a substitution pattern or
+    /// replacement, leaving everything else alone.
+    ///
+    /// Deliberately narrower than `expand`: the full expander recurses back
+    /// into braced-variable handling, which is where this is called from, and
+    /// Zig cannot infer an error set through that cycle. Patterns in practice
+    /// are a variable or a literal, which is exactly what this covers.
+    ///
+    /// Returns null when there is nothing to expand, so the caller keeps using
+    /// the original slice and nothing is allocated.
+    fn expandVarRefs(self: *Expansion, input: []const u8) error{OutOfMemory}!?[]u8 {
+        if (std.mem.indexOfScalar(u8, input, '$') == null) return null;
+
+        var out: std.ArrayList(u8) = .empty;
+        errdefer out.deinit(self.allocator);
+
+        var i: usize = 0;
+        while (i < input.len) {
+            if (input[i] != '$' or i + 1 >= input.len) {
+                try out.append(self.allocator, input[i]);
+                i += 1;
+                continue;
+            }
+
+            var name_start = i + 1;
+            var name_end = name_start;
+            var next = name_start;
+            if (input[name_start] == '{') {
+                name_start += 1;
+                name_end = name_start;
+                while (name_end < input.len and input[name_end] != '}') name_end += 1;
+                if (name_end >= input.len) {
+                    // Unterminated brace: not a reference, copy it through.
+                    try out.append(self.allocator, input[i]);
+                    i += 1;
+                    continue;
+                }
+                next = name_end + 1;
+            } else {
+                while (name_end < input.len and (std.ascii.isAlphanumeric(input[name_end]) or input[name_end] == '_')) name_end += 1;
+                if (name_end == name_start) {
+                    // A bare `$` with nothing name-like after it.
+                    try out.append(self.allocator, input[i]);
+                    i += 1;
+                    continue;
+                }
+                next = name_end;
+            }
+
+            if (self.getVariableValue(input[name_start..name_end])) |value| {
+                try out.appendSlice(self.allocator, value);
+            }
+            i = next;
+        }
+
+        return try out.toOwnedSlice(self.allocator);
+    }
+
     /// If replace_all is true, replace all occurrences; otherwise just first
     fn replaceInString(self: *Expansion, value: []const u8, pattern: []const u8, replacement: []const u8, replace_all: bool) ![]u8 {
         if (pattern.len == 0) {
@@ -3363,4 +3442,49 @@ test "removeQuotes single-quoted string" {
     const result = try removeQuotes(allocator, "'hello'");
     defer allocator.free(result);
     try std.testing.expectEqualStrings("hello", result);
+}
+
+test "expandVarRefs: a pattern with no variable allocates nothing" {
+    var env = std.StringHashMap([]const u8).init(std.testing.allocator);
+    defer env.deinit();
+    var exp = Expansion.init(std.testing.allocator, &env, 0);
+    try std.testing.expect(try exp.expandVarRefs("plain") == null);
+    try std.testing.expect(try exp.expandVarRefs(":/usr/bin:") == null);
+}
+
+test "expandVarRefs: a variable pattern expands to its value" {
+    var env = std.StringHashMap([]const u8).init(std.testing.allocator);
+    defer env.deinit();
+    try env.put("dir", "/opt/bin");
+    var exp = Expansion.init(std.testing.allocator, &env, 0);
+
+    const bare = (try exp.expandVarRefs("$dir")).?;
+    defer std.testing.allocator.free(bare);
+    try std.testing.expectEqualStrings("/opt/bin", bare);
+
+    const braced = (try exp.expandVarRefs("${dir}")).?;
+    defer std.testing.allocator.free(braced);
+    try std.testing.expectEqualStrings("/opt/bin", braced);
+
+    const surrounded = (try exp.expandVarRefs(":$dir:")).?;
+    defer std.testing.allocator.free(surrounded);
+    try std.testing.expectEqualStrings(":/opt/bin:", surrounded);
+}
+
+test "expandVarRefs: an unset variable expands to nothing" {
+    var env = std.StringHashMap([]const u8).init(std.testing.allocator);
+    defer env.deinit();
+    var exp = Expansion.init(std.testing.allocator, &env, 0);
+    const out = (try exp.expandVarRefs("a${nope}b")).?;
+    defer std.testing.allocator.free(out);
+    try std.testing.expectEqualStrings("ab", out);
+}
+
+test "expandVarRefs: a bare dollar is left as written" {
+    var env = std.StringHashMap([]const u8).init(std.testing.allocator);
+    defer env.deinit();
+    var exp = Expansion.init(std.testing.allocator, &env, 0);
+    const out = (try exp.expandVarRefs("cost$")).?;
+    defer std.testing.allocator.free(out);
+    try std.testing.expectEqualStrings("cost$", out);
 }
