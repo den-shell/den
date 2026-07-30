@@ -53,6 +53,24 @@ fn executeControlFlowInPipeline(shell: *Shell, command: []const u8) void {
     shell.executeCommand(command) catch {};
 }
 
+/// Whether a word is even a candidate for auto-cd.
+///
+/// zsh's AUTO_CD applies to a bare word, so anything carrying arguments is a
+/// command being run, not a directory being named.
+pub fn shouldConsiderAutoCd(arg_count: usize) bool {
+    return arg_count == 0;
+}
+
+/// Whether to auto-cd, given what the word turned out to be.
+///
+/// A real command always wins. Otherwise a directory in the working directory
+/// silently swallows a command of the same name, which is how `pantry`,
+/// `docs`, `build` and `test` stopped working inside checkouts that have a
+/// directory by that name.
+pub fn shouldAutoCd(is_directory: bool, exists_in_path: bool) bool {
+    return is_directory and !exists_in_path;
+}
+
 pub const Executor = struct {
     allocator: std.mem.Allocator,
     environment: *std.StringHashMap([]const u8),
@@ -896,12 +914,12 @@ pub const Executor = struct {
         // went for `docs`, `build`, `test`, `git` and every other name a
         // directory commonly has. The command vanished silently, which is the
         // worst way for it to fail.
-        if (command.args.len == 0) {
+        if (shouldConsiderAutoCd(command.args.len)) {
             const many = try expansion_mod.expandManyDots(self.allocator, command.name);
             defer if (many) |m| self.allocator.free(m);
             const autocd_target = many orelse command.name;
 
-            if (try self.isDirectory(autocd_target) and !self.commandExistsInPath(command.name)) {
+            if (shouldAutoCd(try self.isDirectory(autocd_target), self.commandExistsInPath(command.name))) {
                 var args = [_][]const u8{autocd_target};
                 var redirections = [_]types.Redirection{};
                 var cd_command = types.ParsedCommand{
@@ -1982,4 +2000,25 @@ test "parseIPv6 - invalid: too many groups" {
 
 test "parseIPv6 - invalid: multiple ::" {
     try std.testing.expect(parseIPv6("::1::2") == null);
+}
+
+test "auto-cd: only a bare word is a candidate" {
+    try std.testing.expect(shouldConsiderAutoCd(0));
+    // `pantry shell:lookup <dir>` is a command with arguments, never a cd.
+    try std.testing.expect(!shouldConsiderAutoCd(1));
+    try std.testing.expect(!shouldConsiderAutoCd(3));
+}
+
+test "auto-cd: a real command always beats a same-named directory" {
+    // A checkout with a `pantry/` directory must still run the pantry binary.
+    try std.testing.expect(!shouldAutoCd(true, true));
+}
+
+test "auto-cd: a directory that is not a command still cds" {
+    try std.testing.expect(shouldAutoCd(true, false));
+}
+
+test "auto-cd: a word that is neither does not cd" {
+    try std.testing.expect(!shouldAutoCd(false, false));
+    try std.testing.expect(!shouldAutoCd(false, true));
 }

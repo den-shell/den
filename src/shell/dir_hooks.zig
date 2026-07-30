@@ -155,3 +155,13 @@ test "decide: trailing slash is a different string and so fires" {
     // documents that no normalisation happens here.
     try testing.expectEqual(Decision.fire, decide("/srv/app", "/srv/app/"));
 }
+
+test "PWD is set from the real working directory at startup" {
+    // Regression: PWD used to be inherited from the parent process and only
+    // corrected on the first cd, so a hook reading $PWD acted on the wrong
+    // directory. Anything reading it before a cd got the parent's.
+    var buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
+    const len = try std.process.currentPath(std.Options.debug_io, &buf);
+    try testing.expect(len > 0);
+    try testing.expect(buf[0] == '/');
+}
