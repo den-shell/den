@@ -610,6 +610,71 @@ test "builtin grep: supported flags still use the builtin" {
     try test_utils.TestAssert.expectTrue(std.mem.indexOf(u8, result.stdout, "no") == null);
 }
 
+/// A regex pattern must reach a real regex engine.
+///
+/// The builtin matches literal substrings, so `^FOO=` was searched for as those
+/// five characters and found nothing - reported as "no match" rather than an
+/// error. `grep '^KEY=' .env | cut -d= -f2-` therefore produced an empty
+/// string, and callers treated that emptiness as a fact about the file. One
+/// such pipeline stored an empty GitHub Actions secret and reported success.
+test "builtin grep: an anchored pattern matches" {
+    const allocator = std.testing.allocator;
+
+    var fixture = try test_utils.DenShellFixture.init(allocator);
+    defer fixture.deinit();
+
+    const result = try fixture.execDirect("printf 'FOO=bar\\nxFOO=no\\n' | grep '^FOO='");
+    defer allocator.free(result.stdout);
+    defer allocator.free(result.stderr);
+
+    try test_utils.TestAssert.expectContains(result.stdout, "FOO=bar");
+    try test_utils.TestAssert.expectTrue(std.mem.indexOf(u8, result.stdout, "xFOO=no") == null);
+}
+
+test "builtin grep: an end anchor matches" {
+    const allocator = std.testing.allocator;
+
+    var fixture = try test_utils.DenShellFixture.init(allocator);
+    defer fixture.deinit();
+
+    const result = try fixture.execDirect("printf 'keep\\nkeeper\\n' | grep 'keep$'");
+    defer allocator.free(result.stdout);
+    defer allocator.free(result.stderr);
+
+    try test_utils.TestAssert.expectContains(result.stdout, "keep");
+    try test_utils.TestAssert.expectTrue(std.mem.indexOf(u8, result.stdout, "keeper") == null);
+}
+
+test "builtin grep: a character class matches" {
+    const allocator = std.testing.allocator;
+
+    var fixture = try test_utils.DenShellFixture.init(allocator);
+    defer fixture.deinit();
+
+    const result = try fixture.execDirect("printf 'a1\\nbb\\n' | grep '[0-9]'");
+    defer allocator.free(result.stdout);
+    defer allocator.free(result.stderr);
+
+    try test_utils.TestAssert.expectContains(result.stdout, "a1");
+    try test_utils.TestAssert.expectTrue(std.mem.indexOf(u8, result.stdout, "bb") == null);
+}
+
+/// A caret that is not an anchor is still a literal character, and handing the
+/// pattern to real grep keeps that true rather than trading one wrong answer
+/// for another.
+test "builtin grep: a caret inside the pattern stays literal" {
+    const allocator = std.testing.allocator;
+
+    var fixture = try test_utils.DenShellFixture.init(allocator);
+    defer fixture.deinit();
+
+    const result = try fixture.execDirect("printf 'a^b\\nab\\n' | grep 'a^b'");
+    defer allocator.free(result.stdout);
+    defer allocator.free(result.stderr);
+
+    try test_utils.TestAssert.expectContains(result.stdout, "a^b");
+}
+
 test "builtin date: +FORMAT falls back to real date" {
     const allocator = std.testing.allocator;
 

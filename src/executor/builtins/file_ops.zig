@@ -50,6 +50,34 @@ fn printTree(allocator: std.mem.Allocator, dir_path: []const u8, prefix: []const
     }
 }
 
+/// Whether a grep pattern uses regular-expression syntax.
+///
+/// The builtin below matches literal substrings - it has no regex engine - so a
+/// pattern like `^FOO=` was searched for as those five characters and found
+/// nothing. It reported "no match" rather than an error, which is the worst
+/// possible outcome: `grep '^HCLOUD_TOKEN=' .env | cut -d= -f2-` produced an
+/// empty string, and everything downstream treated that emptiness as a fact
+/// about the file. One such pipeline stored an empty GitHub Actions secret and
+/// reported success.
+///
+/// Real grep is on PATH and has a real engine, so anything that looks like a
+/// regex is handed to it through the same fallback the unsupported flags use.
+/// Literal patterns - the overwhelming majority, and what the builtin exists to
+/// make fast - are still handled here.
+///
+/// Deliberately generous about what counts as a regex: a false positive costs
+/// one exec of a program that was going to give the right answer anyway, while
+/// a false negative is silence in place of a match.
+fn looksLikeRegex(pattern: []const u8) bool {
+    for (pattern) |c| {
+        switch (c) {
+            '^', '$', '.', '*', '+', '?', '[', ']', '(', ')', '{', '}', '|', '\\' => return true,
+            else => {},
+        }
+    }
+    return false;
+}
+
 pub fn grep(allocator: std.mem.Allocator, command: *types.ParsedCommand) !i32 {
     if (command.args.len == 0) {
         try IO.eprint("den: grep: missing pattern\n", .{});
@@ -110,6 +138,11 @@ pub fn grep(allocator: std.mem.Allocator, command: *types.ParsedCommand) !i32 {
     }
 
     const pattern = command.args[pattern_idx];
+
+    // A regex belongs to the real grep, not to a literal substring search that
+    // would quietly report no match. See `looksLikeRegex`.
+    if (looksLikeRegex(pattern)) return error.FallbackToExternal;
+
     const files = if (pattern_idx + 1 < command.args.len) command.args[pattern_idx + 1 ..] else &[_][]const u8{};
 
     const reading_stdin = files.len == 0;
