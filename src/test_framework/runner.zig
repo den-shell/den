@@ -2,6 +2,7 @@ const std = @import("std");
 const builtin = @import("builtin");
 const compat = @import("compat");
 const types = @import("types.zig");
+const spawn_util = @import("spawn");
 
 /// Cross-platform handle read helper
 fn readHandle(handle: anytype, buf: []u8) !usize {
@@ -93,11 +94,17 @@ pub const TestRunner = struct {
         defer self.allocator.free(test_step);
         try cmd_args.append(self.allocator, test_step);
 
-        // Execute test
-        var child = std.process.spawn(std.Options.debug_io, .{
+        // Execute test.
+        //
+        // Through the shell's own spawn helper rather than `std.process.spawn`:
+        // that call is the Windows path in this tree, and on POSIX it fails
+        // with OutOfMemory before the child ever runs. Every module reported
+        // "Failed to spawn test", so `zig build test-runner` had not actually
+        // executed a test on macOS or Linux - a suite that looks like it ran
+        // and reports failures for a reason that has nothing to do with the
+        // code under test.
+        const captured = spawn_util.captureOutput(self.allocator, .{
             .argv = cmd_args.items,
-            .stdout = .pipe,
-            .stderr = .pipe,
         }) catch |err| {
             const end_time = compat.Instant.now() catch start_time;
             const duration = end_time.since(start_time);
@@ -106,61 +113,17 @@ pub const TestRunner = struct {
             self.allocator.free(error_msg);
             return result;
         };
+        defer captured.deinit(self.allocator);
 
-        // Read stdout manually
-        var stdout_buf = std.ArrayList(u8).empty;
-        defer stdout_buf.deinit(self.allocator);
-        if (child.stdout) |stdout_pipe| {
-            var read_buf: [4096]u8 = undefined;
-            while (true) {
-                const n = readHandle(stdout_pipe.handle, &read_buf) catch break;
-                if (n == 0) break;
-                try stdout_buf.appendSlice(self.allocator, read_buf[0..n]);
-                if (stdout_buf.items.len >= 1024 * 1024) break;
-            }
-        }
-        const stdout = stdout_buf.items;
-
-        // Read stderr manually
-        var stderr_buf = std.ArrayList(u8).empty;
-        defer stderr_buf.deinit(self.allocator);
-        if (child.stderr) |stderr_pipe| {
-            var read_buf: [4096]u8 = undefined;
-            while (true) {
-                const n = readHandle(stderr_pipe.handle, &read_buf) catch break;
-                if (n == 0) break;
-                try stderr_buf.appendSlice(self.allocator, read_buf[0..n]);
-                if (stderr_buf.items.len >= 1024 * 1024) break;
-            }
-        }
-        const stderr = stderr_buf.items;
-
-        const term = child.wait(std.Options.debug_io) catch |err| {
-            const end_time = compat.Instant.now() catch start_time;
-            const duration = end_time.since(start_time);
-            const error_msg = try std.fmt.allocPrint(self.allocator, "Failed to wait for test: {any}", .{err});
-            try result.setFailed(duration, error_msg);
-            self.allocator.free(error_msg);
-            return result;
-        };
+        const stdout = captured.stdout;
 
         const end_time = compat.Instant.now() catch start_time;
         const duration = end_time.since(start_time);
 
-        switch (term) {
-            .exited => |code| {
-                if (code == 0) {
-                    result.setPassed(duration);
-                } else {
-                    const error_output = if (stderr.len > 0) stderr else stdout;
-                    try result.setFailed(duration, error_output);
-                }
-            },
-            else => {
-                const error_msg = try std.fmt.allocPrint(self.allocator, "Test terminated abnormally: {any}", .{term});
-                try result.setFailed(duration, error_msg);
-                self.allocator.free(error_msg);
-            },
+        if (captured.exit_code == 0) {
+            result.setPassed(duration);
+        } else {
+            try result.setFailed(duration, stdout);
         }
 
         return result;

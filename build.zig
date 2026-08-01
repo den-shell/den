@@ -178,6 +178,19 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
     test_runner_module.addImport("compat", compat_module);
+    // The runner spawns `zig build <step>` per module. `std.process.spawn` is
+    // the Windows path in this tree; on POSIX it fails outright, which is why
+    // the shell has its own fork/execvp helper. The runner uses that helper now
+    // rather than a second, unproven spawn.
+    const test_runner_spawn_module = b.createModule(.{
+        .root_source_file = b.path("src/utils/spawn.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    test_runner_spawn_module.addImport("compat", compat_module);
+    test_runner_spawn_module.link_libc = true;
+    test_runner_module.addImport("spawn", test_runner_spawn_module);
+    test_runner_module.link_libc = true;
 
     const test_runner_exe = b.addExecutable(.{
         .name = "den-test",
