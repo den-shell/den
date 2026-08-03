@@ -9,6 +9,7 @@ pub const EscapeSequence = enum {
     alt_b, // Alt+B (word back)
     alt_f, // Alt+F (word forward)
     alt_d, // Alt+D (delete word forward)
+    alt_backspace, // Alt/Option+Backspace (delete word backward)
     home,
     end_key,
     delete,
@@ -85,6 +86,7 @@ pub const EscapeSequence = enum {
                 'b', 'B' => return .alt_b, // Alt+B (word back)
                 'f', 'F' => return .alt_f, // Alt+F (word forward)
                 'd', 'D' => return .alt_d, // Alt+D (delete word forward)
+                0x08, 0x7F => return .alt_backspace, // Alt/Option+Backspace
                 else => return .unknown,
             }
         }
@@ -99,6 +101,8 @@ test "EscapeSequence.parse recognizes arrows and back-tab" {
     try std.testing.expectEqual(EscapeSequence.down_arrow, EscapeSequence.parse("\x1b[B").?);
     try std.testing.expectEqual(EscapeSequence.back_tab, EscapeSequence.parse("\x1b[Z").?);
     try std.testing.expectEqual(EscapeSequence.ctrl_right, EscapeSequence.parse("\x1b[1;5C").?);
+    try std.testing.expectEqual(EscapeSequence.alt_backspace, EscapeSequence.parse("\x1b\x08").?);
+    try std.testing.expectEqual(EscapeSequence.alt_backspace, EscapeSequence.parse("\x1b\x7f").?);
     // Incomplete sequences return null until fully read.
     try std.testing.expectEqual(@as(?EscapeSequence, null), EscapeSequence.parse("\x1b["));
 }

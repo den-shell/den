@@ -113,7 +113,7 @@ Den treats whitespace as word boundaries. Navigation jumps to the start of the p
 
 ## Word Deletion
 
-### Delete Word Backward (Ctrl+W)
+### Delete Word Backward (Ctrl+W / Option+Delete)
 
 Deletes from cursor position back to the start of the current/previous word.
 
@@ -436,7 +436,7 @@ Search backwards through command history as you type. Just like bash/zsh.
 |-----|--------|
 | `Backspace` / `Ctrl+H` | Delete character before cursor |
 | `Delete` | Delete character at cursor |
-| `Ctrl+W` | Delete word before cursor |
+| `Ctrl+W` / `Option+Delete` | Delete word before cursor |
 | `Alt+D` | Delete word after cursor |
 | `Ctrl+U` | Delete from cursor to beginning of line |
 | `Ctrl+K` | Delete from cursor to end of line |
@@ -704,7 +704,7 @@ Movement:
   Ctrl+Right/Alt+F  Next word
 
 Deletion:
-  Ctrl+W            Delete word backward
+  Ctrl+W/Option+Delete Delete word backward
   Alt+D             Delete word forward
   Ctrl+U            Delete to start
   Ctrl+K            Delete to end
