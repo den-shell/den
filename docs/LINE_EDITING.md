@@ -463,7 +463,7 @@ Search backwards through command history as you type. Just like bash/zsh.
 | Key | Action |
 |-----|--------|
 | `Tab` | Complete / cycle suggestions |
-| `Esc` | Cancel completion |
+| `Esc` | Cancel completion or reverse search |
 
 ---
 

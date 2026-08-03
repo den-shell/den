@@ -742,11 +742,22 @@ pub const LineEditor = struct {
                 try self.handleWindowResize();
             }
 
-            const byte = (try self.terminal.readByte()) orelse {
+            const maybe_byte = try self.terminal.readByte();
+            if (maybe_byte == null) {
+                // A lone Escape has no parser terminator. Once the terminal's
+                // read timeout expires, handle it as a standalone key instead
+                // of leaving the editor stuck waiting for another byte.
+                if (in_escape) {
+                    if (escape_len == 1) try self.handleStandaloneEscape();
+                    in_escape = false;
+                    escape_len = 0;
+                }
+
                 // No data, sleep briefly (10ms)
                 std.Io.sleep(std.Options.debug_io, std.Io.Duration.fromNanoseconds(@as(i96, 10_000_000)), .awake) catch {};
                 continue;
-            };
+            }
+            const byte = maybe_byte.?;
 
             // Handle escape sequences
             if (in_escape) {
@@ -767,40 +778,6 @@ pub const LineEditor = struct {
 
             // Check for escape start
             if (byte == 0x1B) {
-                // In Vi insert mode, ESC switches to normal mode
-                if (self.editing_mode == .vi and (self.vi_mode == .insert or self.vi_mode == .replace)) {
-                    // Wait briefly to see if this is an escape sequence
-                    std.Io.sleep(std.Options.debug_io, std.Io.Duration.fromNanoseconds(@as(i96, 50_000_000)), .awake) catch {}; // 50ms
-                    if (try self.terminal.readByte()) |next_byte| {
-                        // There's a follow-up - it's an escape sequence, handle normally
-                        escape_buffer[0] = byte;
-                        escape_buffer[1] = next_byte;
-                        escape_len = 2;
-                        in_escape = true;
-                        continue;
-                    } else {
-                        // No follow-up byte - this is just ESC, switch to normal mode
-                        self.viEnterNormalMode();
-                        try self.redrawLine();
-                        continue;
-                    }
-                }
-                // Cancel visual mode on ESC (if standalone)
-                if (self.visual_mode) {
-                    std.Io.sleep(std.Options.debug_io, std.Io.Duration.fromNanoseconds(@as(i96, 50_000_000)), .awake) catch {}; // 50ms
-                    if (try self.terminal.readByte()) |next_byte| {
-                        // There's a follow-up - it's an escape sequence, handle normally
-                        escape_buffer[0] = byte;
-                        escape_buffer[1] = next_byte;
-                        escape_len = 2;
-                        in_escape = true;
-                        continue;
-                    } else {
-                        // No follow-up byte - cancel visual mode
-                        try self.cancelVisualMode();
-                        continue;
-                    }
-                }
                 escape_buffer[0] = byte;
                 escape_len = 1;
                 in_escape = true;
@@ -2256,6 +2233,19 @@ pub const LineEditor = struct {
             .paste_start => try self.handlePaste(),
             .paste_end => {}, // stray paste-end without a start: ignore
             else => {},
+        }
+    }
+
+    fn handleStandaloneEscape(self: *LineEditor) !void {
+        if (self.editing_mode == .vi and (self.vi_mode == .insert or self.vi_mode == .replace)) {
+            self.viEnterNormalMode();
+            try self.redrawLine();
+        } else if (self.reverse_search_mode) {
+            try self.cancelReverseSearch();
+        } else if (self.visual_mode) {
+            try self.cancelVisualMode();
+        } else if (self.completion_list != null) {
+            self.clearCompletionState();
         }
     }
 
