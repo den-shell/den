@@ -124,51 +124,7 @@ fn expandGit(ctx: *const PromptContext, allocator: std.mem.Allocator) ![]const u
         try parts.appendSlice(allocator, branch);
         try parts.appendSlice(allocator, "\x1b[0m"); // Reset
 
-        // Detailed status indicators
-        var has_status = false;
-
-        // Staged files (green +)
-        if (ctx.git_staged > 0) {
-            const staged_str = try std.fmt.allocPrint(allocator, " \x1b[32m+{d}\x1b[0m", .{ctx.git_staged});
-            defer allocator.free(staged_str);
-            try parts.appendSlice(allocator, staged_str);
-            has_status = true;
-        }
-
-        // Unstaged files (yellow !)
-        if (ctx.git_unstaged > 0) {
-            const unstaged_str = try std.fmt.allocPrint(allocator, " \x1b[33m!{d}\x1b[0m", .{ctx.git_unstaged});
-            defer allocator.free(unstaged_str);
-            try parts.appendSlice(allocator, unstaged_str);
-            has_status = true;
-        }
-
-        // Untracked files (red ?)
-        if (ctx.git_untracked > 0) {
-            const untracked_str = try std.fmt.allocPrint(allocator, " \x1b[31m?{d}\x1b[0m", .{ctx.git_untracked});
-            defer allocator.free(untracked_str);
-            try parts.appendSlice(allocator, untracked_str);
-            has_status = true;
-        }
-
-        // Stash indicator (cyan $)
-        if (ctx.git_stash > 0) {
-            const stash_str = try std.fmt.allocPrint(allocator, " \x1b[36m${d}\x1b[0m", .{ctx.git_stash});
-            defer allocator.free(stash_str);
-            try parts.appendSlice(allocator, stash_str);
-        }
-
-        // Ahead/behind indicators (white)
-        if (ctx.git_ahead > 0) {
-            const ahead_str = try std.fmt.allocPrint(allocator, " \x1b[37m↑{d}\x1b[0m", .{ctx.git_ahead});
-            defer allocator.free(ahead_str);
-            try parts.appendSlice(allocator, ahead_str);
-        }
-        if (ctx.git_behind > 0) {
-            const behind_str = try std.fmt.allocPrint(allocator, " \x1b[37m↓{d}\x1b[0m", .{ctx.git_behind});
-            defer allocator.free(behind_str);
-            try parts.appendSlice(allocator, behind_str);
-        }
+        const has_status = try appendGitStatus(ctx, allocator, &parts);
 
         // If no changes, show clean indicator (green ✓)
         if (!has_status) {
@@ -181,17 +137,61 @@ fn expandGit(ctx: *const PromptContext, allocator: std.mem.Allocator) ![]const u
     return try allocator.dupe(u8, "");
 }
 
-/// " git:(main)" — bold blue braces, red branch, yellow ✗ when the tree is dirty.
+/// " git:(main) !32 ?85 $1" — bold blue braces, red branch, then the working-tree
+/// counts. A bare yellow ✗ stands in when the tree is dirty in a way the counts
+/// don't cover.
 fn expandGitCompact(ctx: *const PromptContext, allocator: std.mem.Allocator) ![]const u8 {
     const branch = ctx.git_branch orelse return try allocator.dupe(u8, "");
 
-    const dirty = ctx.git_dirty or
-        ctx.git_staged > 0 or ctx.git_unstaged > 0 or ctx.git_untracked > 0;
+    var parts: std.ArrayList(u8) = .empty;
+    defer parts.deinit(allocator);
 
-    return try std.fmt.allocPrint(allocator, " \x1b[1;34mgit:(\x1b[0;31m{s}\x1b[34m){s}\x1b[0m", .{
-        branch,
-        if (dirty) " \x1b[33m\xE2\x9C\x97" else "", // ✗
-    });
+    const head = try std.fmt.allocPrint(allocator, " \x1b[1;34mgit:(\x1b[0;31m{s}\x1b[34m)\x1b[0m", .{branch});
+    defer allocator.free(head);
+    try parts.appendSlice(allocator, head);
+
+    const has_status = try appendGitStatus(ctx, allocator, &parts);
+    if (!has_status and ctx.git_dirty) {
+        try parts.appendSlice(allocator, " \x1b[33m\xE2\x9C\x97\x1b[0m"); // ✗
+    }
+
+    return try parts.toOwnedSlice(allocator);
+}
+
+/// Append the working-tree counters (+staged !unstaged ?untracked $stashed ↑ahead
+/// ↓behind), each with its own leading space. Returns whether the tree has local
+/// changes — stash and ahead/behind don't count as changes.
+fn appendGitStatus(
+    ctx: *const PromptContext,
+    allocator: std.mem.Allocator,
+    parts: *std.ArrayList(u8),
+) !bool {
+    var has_status = false;
+
+    const counters = [_]struct { count: usize, color: []const u8, marker: []const u8, is_change: bool }{
+        .{ .count = ctx.git_staged, .color = "\x1b[32m", .marker = "+", .is_change = true }, // green
+        .{ .count = ctx.git_unstaged, .color = "\x1b[33m", .marker = "!", .is_change = true }, // yellow
+        .{ .count = ctx.git_untracked, .color = "\x1b[31m", .marker = "?", .is_change = true }, // red
+        .{ .count = ctx.git_stash, .color = "\x1b[36m", .marker = "$", .is_change = false }, // cyan
+        .{ .count = ctx.git_ahead, .color = "\x1b[37m", .marker = "↑", .is_change = false }, // white
+        .{ .count = ctx.git_behind, .color = "\x1b[37m", .marker = "↓", .is_change = false }, // white
+    };
+
+    for (counters) |counter| {
+        if (counter.count == 0) continue;
+
+        const text = try std.fmt.allocPrint(allocator, " {s}{s}{d}\x1b[0m", .{
+            counter.color,
+            counter.marker,
+            counter.count,
+        });
+        defer allocator.free(text);
+        try parts.appendSlice(allocator, text);
+
+        if (counter.is_change) has_status = true;
+    }
+
+    return has_status;
 }
 
 fn expandUser(ctx: *const PromptContext, allocator: std.mem.Allocator) ![]const u8 {
@@ -683,20 +683,63 @@ test "expandGit compact renders git:(branch)" {
     const allocator = std.testing.allocator;
     var ctx = PromptContext.init(allocator);
     ctx.git_branch = "main";
-    // Clean tree: no ✗
+    // Clean tree: branch only, no counters and no ✗
 
     const clean = try expandGit(&ctx, allocator);
     defer allocator.free(clean);
     try std.testing.expect(std.mem.indexOf(u8, clean, "git:(") != null);
     try std.testing.expect(std.mem.indexOf(u8, clean, "main") != null);
     try std.testing.expect(std.mem.indexOf(u8, clean, "\xe2\x9c\x97") == null); // ✗
+}
 
-    ctx.git_unstaged = 2;
-    const dirty = try expandGit(&ctx, allocator);
-    defer allocator.free(dirty);
-    try std.testing.expect(std.mem.indexOf(u8, dirty, "\xe2\x9c\x97") != null);
-    // Compact style never shows per-category counts
-    try std.testing.expect(std.mem.indexOf(u8, dirty, "!2") == null);
+test "expandGit compact shows working-tree counts" {
+    const allocator = std.testing.allocator;
+    var ctx = PromptContext.init(allocator);
+    ctx.git_branch = "main";
+    ctx.git_dirty = true;
+    ctx.git_staged = 1;
+    ctx.git_unstaged = 32;
+    ctx.git_untracked = 85;
+    ctx.git_stash = 1;
+    ctx.git_ahead = 2;
+    ctx.git_behind = 3;
+
+    const result = try expandGit(&ctx, allocator);
+    defer allocator.free(result);
+    try std.testing.expect(std.mem.indexOf(u8, result, "+1") != null);
+    try std.testing.expect(std.mem.indexOf(u8, result, "!32") != null);
+    try std.testing.expect(std.mem.indexOf(u8, result, "?85") != null);
+    try std.testing.expect(std.mem.indexOf(u8, result, "$1") != null);
+    try std.testing.expect(std.mem.indexOf(u8, result, "↑2") != null);
+    try std.testing.expect(std.mem.indexOf(u8, result, "↓3") != null);
+    // Counts replace the bare ✗
+    try std.testing.expect(std.mem.indexOf(u8, result, "\xe2\x9c\x97") == null);
+}
+
+test "expandGit compact falls back to ✗ when dirty without counts" {
+    const allocator = std.testing.allocator;
+    var ctx = PromptContext.init(allocator);
+    ctx.git_branch = "main";
+    ctx.git_dirty = true;
+
+    const result = try expandGit(&ctx, allocator);
+    defer allocator.free(result);
+    try std.testing.expect(std.mem.indexOf(u8, result, "\xe2\x9c\x97") != null);
+}
+
+test "expandGit compact ignores stash and ahead when otherwise clean" {
+    const allocator = std.testing.allocator;
+    var ctx = PromptContext.init(allocator);
+    ctx.git_branch = "main";
+    ctx.git_stash = 1;
+    ctx.git_ahead = 2;
+
+    const result = try expandGit(&ctx, allocator);
+    defer allocator.free(result);
+    try std.testing.expect(std.mem.indexOf(u8, result, "$1") != null);
+    try std.testing.expect(std.mem.indexOf(u8, result, "↑2") != null);
+    // Not local changes, so no ✗
+    try std.testing.expect(std.mem.indexOf(u8, result, "\xe2\x9c\x97") == null);
 }
 
 test "expandGit shows status indicators" {
