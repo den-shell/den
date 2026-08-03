@@ -68,7 +68,7 @@ pub const LanguageModule = struct {
         .name = "bun",
         .command = "bun",
         .version_flag = "--version",
-        .icon = "🥟",
+        .icon = "🐰",
         .color = "#fbf0df",
         .file_patterns = &[_][]const u8{ "bun.lockb", "bunfig.toml" },
     };

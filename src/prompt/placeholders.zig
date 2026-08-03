@@ -267,7 +267,7 @@ fn expandModules(ctx: *const PromptContext, allocator: std.mem.Allocator) ![]con
     }
 
     if (ctx.bun_version) |version| {
-        try modules.appendSlice(allocator, " 🥟 ");
+        try modules.appendSlice(allocator, " 🐰 ");
         try modules.appendSlice(allocator, version);
         has_any = true;
     }

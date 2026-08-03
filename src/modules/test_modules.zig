@@ -201,7 +201,7 @@ test "LanguageModule - constants defined" {
 }
 
 test "LanguageModule - icons defined" {
-    try std.testing.expectEqualStrings("🥟", types.LanguageModule.Bun.icon);
+    try std.testing.expectEqualStrings("🐰", types.LanguageModule.Bun.icon);
     try std.testing.expectEqualStrings("⬢", types.LanguageModule.Node.icon);
     try std.testing.expectEqualStrings("🐍", types.LanguageModule.Python.icon);
     try std.testing.expectEqualStrings("🐹", types.LanguageModule.Go.icon);
