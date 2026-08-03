@@ -12,9 +12,11 @@
 
   // Prompt configuration
   "prompt": {
-    "format": "{path}{git}{modules} {symbol}",
+    "format": "{symbol} {path}{git}{modules} ",
     // "basename" shows just the current dir (den), "full" shows ~/Documents/Projects/den
     "path_style": "basename",
+    // "compact" shows git:(main) with a ✗ when dirty, "verbose" shows on 🌱 main ✓ +1 !2
+    "git_style": "compact",
     "show_git": true,
     "show_time": false,
     "show_user": false,
@@ -63,7 +65,7 @@
       "info": "#74B9FF"
     },
     "symbols": {
-      "prompt": "❯",
+      "prompt": "➜",
       "continuation": "…"
     }
   },

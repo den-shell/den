@@ -68,14 +68,14 @@ zig build -Doptimize=ReleaseSmall
 A first interactive session:
 
 ```text
-❯ echo "Hello, World!"
+➜  echo "Hello, World!"
 Hello, World!
 
-❯ export MY_VAR="test"
-❯ echo $MY_VAR
+➜  export MY_VAR="test"
+➜  echo $MY_VAR
 test
 
-❯ ls -la | grep zig
+➜  ls -la | grep zig
 -rw-r--r--  1 user  staff  42627 build.zig
 drwxr-xr-x  3 user  staff     96 zig-out
 ```

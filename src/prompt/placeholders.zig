@@ -64,6 +64,14 @@ pub const PlaceholderRegistry = struct {
 // Standard placeholder expanders
 
 fn expandPath(ctx: *const PromptContext, allocator: std.mem.Allocator) ![]const u8 {
+    const text = try pathText(ctx, allocator);
+    defer allocator.free(text);
+
+    // Cyan, like zsh's %c in the robbyrussell theme
+    return try std.fmt.allocPrint(allocator, "\x1b[36m{s}\x1b[0m", .{text});
+}
+
+fn pathText(ctx: *const PromptContext, allocator: std.mem.Allocator) ![]const u8 {
     const cwd = ctx.current_dir;
 
     // Default style: just the directory name (/Users/chris/Code/den -> den),
@@ -104,6 +112,8 @@ fn expandPath(ctx: *const PromptContext, allocator: std.mem.Allocator) ![]const 
 }
 
 fn expandGit(ctx: *const PromptContext, allocator: std.mem.Allocator) ![]const u8 {
+    if (ctx.git_style == .compact) return try expandGitCompact(ctx, allocator);
+
     if (ctx.git_branch) |branch| {
         var parts: std.ArrayList(u8) = .empty;
         defer parts.deinit(allocator);
@@ -171,6 +181,19 @@ fn expandGit(ctx: *const PromptContext, allocator: std.mem.Allocator) ![]const u
     return try allocator.dupe(u8, "");
 }
 
+/// " git:(main)" — bold blue braces, red branch, yellow ✗ when the tree is dirty.
+fn expandGitCompact(ctx: *const PromptContext, allocator: std.mem.Allocator) ![]const u8 {
+    const branch = ctx.git_branch orelse return try allocator.dupe(u8, "");
+
+    const dirty = ctx.git_dirty or
+        ctx.git_staged > 0 or ctx.git_unstaged > 0 or ctx.git_untracked > 0;
+
+    return try std.fmt.allocPrint(allocator, " \x1b[1;34mgit:(\x1b[0;31m{s}\x1b[34m){s}\x1b[0m", .{
+        branch,
+        if (dirty) " \x1b[33m\xE2\x9C\x97" else "", // ✗
+    });
+}
+
 fn expandUser(ctx: *const PromptContext, allocator: std.mem.Allocator) ![]const u8 {
     return try allocator.dupe(u8, ctx.username);
 }
@@ -185,10 +208,10 @@ fn expandSymbol(ctx: *const PromptContext, allocator: std.mem.Allocator) ![]cons
         return try allocator.dupe(u8, "\x1b[91m#\x1b[0m ");
     }
 
-    // Use the configured prompt symbol (theme.symbols.prompt, e.g. "❯"),
-    // colored green on success / red when the previous command failed.
+    // Use the configured prompt symbol (theme.symbols.prompt, e.g. "➜"), in
+    // bold green on success / bold red when the previous command failed.
     const symbol = if (ctx.prompt_symbol.len > 0) ctx.prompt_symbol else "\xE2\x9E\x9C";
-    const color = if (ctx.last_exit_code != 0) "\x1b[91m" else "\x1b[92m";
+    const color = if (ctx.last_exit_code != 0) "\x1b[1;31m" else "\x1b[1;32m";
     return try std.fmt.allocPrint(allocator, "{s}{s}\x1b[0m ", .{ color, symbol });
 }
 
@@ -531,7 +554,7 @@ test "expandPath returns home tilde" {
     ctx.home_dir = "/home/user";
     // Don't deinit ctx since we use string literals (not allocated)
 
-    const result = try expandPath(&ctx, allocator);
+    const result = try pathText(&ctx, allocator);
     defer allocator.free(result);
     try std.testing.expectEqualStrings("~", result);
 }
@@ -542,7 +565,7 @@ test "expandPath defaults to the directory name" {
     ctx.current_dir = "/home/user/Documents/Projects/den";
     ctx.home_dir = "/home/user";
 
-    const result = try expandPath(&ctx, allocator);
+    const result = try pathText(&ctx, allocator);
     defer allocator.free(result);
     try std.testing.expectEqualStrings("den", result);
 }
@@ -553,17 +576,17 @@ test "expandPath basename outside home and at root" {
     ctx.home_dir = "/home/user";
 
     ctx.current_dir = "/usr/local/bin";
-    const nested = try expandPath(&ctx, allocator);
+    const nested = try pathText(&ctx, allocator);
     defer allocator.free(nested);
     try std.testing.expectEqualStrings("bin", nested);
 
     ctx.current_dir = "/";
-    const root = try expandPath(&ctx, allocator);
+    const root = try pathText(&ctx, allocator);
     defer allocator.free(root);
     try std.testing.expectEqualStrings("/", root);
 
     ctx.current_dir = "/usr/local/";
-    const trailing = try expandPath(&ctx, allocator);
+    const trailing = try pathText(&ctx, allocator);
     defer allocator.free(trailing);
     try std.testing.expectEqualStrings("local", trailing);
 }
@@ -575,7 +598,7 @@ test "expandPath returns home-relative path" {
     ctx.home_dir = "/home/user";
     ctx.path_style = .full;
 
-    const result = try expandPath(&ctx, allocator);
+    const result = try pathText(&ctx, allocator);
     defer allocator.free(result);
     try std.testing.expectEqualStrings("~/projects", result);
 }
@@ -587,7 +610,7 @@ test "expandPath returns absolute path outside home" {
     ctx.home_dir = "/home/user";
     ctx.path_style = .full;
 
-    const result = try expandPath(&ctx, allocator);
+    const result = try pathText(&ctx, allocator);
     defer allocator.free(result);
     try std.testing.expectEqualStrings("/usr/local/bin", result);
 }
@@ -599,7 +622,7 @@ test "expandPath does not tilde a sibling of home" {
     ctx.home_dir = "/home/user";
     ctx.path_style = .full;
 
-    const result = try expandPath(&ctx, allocator);
+    const result = try pathText(&ctx, allocator);
     defer allocator.free(result);
     try std.testing.expectEqualStrings("/home/username", result);
 }
@@ -612,7 +635,7 @@ test "expandSymbol green arrow on success" {
     const result = try expandSymbol(&ctx, allocator);
     defer allocator.free(result);
     // Should contain the green escape code
-    try std.testing.expect(std.mem.indexOf(u8, result, "\x1b[92m") != null);
+    try std.testing.expect(std.mem.indexOf(u8, result, "\x1b[1;32m") != null);
 }
 
 test "expandSymbol red arrow on error" {
@@ -623,7 +646,7 @@ test "expandSymbol red arrow on error" {
     const result = try expandSymbol(&ctx, allocator);
     defer allocator.free(result);
     // Should contain the red escape code
-    try std.testing.expect(std.mem.indexOf(u8, result, "\x1b[91m") != null);
+    try std.testing.expect(std.mem.indexOf(u8, result, "\x1b[1;31m") != null);
 }
 
 test "expandSymbol root shows hash" {
@@ -656,9 +679,30 @@ test "expandGit shows branch name" {
     try std.testing.expect(std.mem.indexOf(u8, result, "main") != null);
 }
 
+test "expandGit compact renders git:(branch)" {
+    const allocator = std.testing.allocator;
+    var ctx = PromptContext.init(allocator);
+    ctx.git_branch = "main";
+    // Clean tree: no ✗
+
+    const clean = try expandGit(&ctx, allocator);
+    defer allocator.free(clean);
+    try std.testing.expect(std.mem.indexOf(u8, clean, "git:(") != null);
+    try std.testing.expect(std.mem.indexOf(u8, clean, "main") != null);
+    try std.testing.expect(std.mem.indexOf(u8, clean, "\xe2\x9c\x97") == null); // ✗
+
+    ctx.git_unstaged = 2;
+    const dirty = try expandGit(&ctx, allocator);
+    defer allocator.free(dirty);
+    try std.testing.expect(std.mem.indexOf(u8, dirty, "\xe2\x9c\x97") != null);
+    // Compact style never shows per-category counts
+    try std.testing.expect(std.mem.indexOf(u8, dirty, "!2") == null);
+}
+
 test "expandGit shows status indicators" {
     const allocator = std.testing.allocator;
     var ctx = PromptContext.init(allocator);
+    ctx.git_style = .verbose;
     ctx.git_branch = "dev";
     ctx.git_staged = 2;
     ctx.git_unstaged = 3;
@@ -675,6 +719,7 @@ test "expandGit shows status indicators" {
 test "expandGit clean shows checkmark" {
     const allocator = std.testing.allocator;
     var ctx = PromptContext.init(allocator);
+    ctx.git_style = .verbose;
     ctx.git_branch = "main";
     // All counts zero = clean
 

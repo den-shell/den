@@ -123,9 +123,11 @@ pub const KeybindingConfig = struct {
 };
 
 pub const PromptConfig = struct {
-    format: []const u8 = "{path}{git}{modules} {symbol}",
+    format: []const u8 = "{symbol} {path}{git}{modules} ",
     /// How {path} renders the working directory
     path_style: PathStyle = .basename,
+    /// How {git} renders branch and working-tree state
+    git_style: GitStyle = .compact,
     show_git: bool = true,
     show_time: bool = false,
     show_user: bool = false,
@@ -141,6 +143,13 @@ pub const PromptConfig = struct {
         basename,
         /// The whole home-relative path: ~/Documents/Projects/den
         full,
+    };
+
+    pub const GitStyle = enum {
+        /// git:(main) with a ✗ when the tree is dirty
+        compact,
+        /// on 🌱 main ✓ with per-category counts (+1 !2 ?3 $4 ↑5 ↓6)
+        verbose,
     };
 };
 
@@ -192,7 +201,7 @@ pub const ColorConfig = struct {
 };
 
 pub const SymbolConfig = struct {
-    prompt: []const u8 = "❯",
+    prompt: []const u8 = "➜",
     continuation: []const u8 = "…",
 };
 

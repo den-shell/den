@@ -92,6 +92,10 @@ pub fn updatePromptContext(self: *Shell) !void {
         .basename => .basename,
         .full => .full,
     };
+    self.prompt_context.git_style = switch (self.config.prompt.git_style) {
+        .compact => .compact,
+        .verbose => .verbose,
+    };
     self.prompt_context.is_root = sysinfo.isRoot();
     self.prompt_context.last_exit_code = self.last_exit_code;
 

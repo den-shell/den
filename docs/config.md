@@ -47,8 +47,9 @@ source "$HOME/.dotfiles/aliases.sh"
 
 ```jsonc
 "prompt": {
-  "format": "{path}{git}{modules} {symbol}",
+  "format": "{symbol} {path}{git}{modules} ",
   "path_style": "basename",  // "basename" = den, "full" = ~/Documents/Projects/den
+  "git_style": "compact",    // "compact" = git:(main) ✗, "verbose" = on 🌱 main ✓ +1 !2
   "show_git": true,          // git branch + working-tree status
   "show_time": false,
   "show_user": false,
@@ -64,9 +65,9 @@ source "$HOME/.dotfiles/aliases.sh"
 **Placeholders** available in `format`:
 
 - `{path}` — current directory: just its name (`den`) with `path_style: "basename"`, or the home-relative path (`~/Code/den`) with `path_style: "full"`
-- `{git}` — branch and working-tree status (when `show_git` is on)
+- `{git}` — branch and working-tree status (when `show_git` is on): ` git:(main)` plus a yellow `✗` when the tree is dirty with `git_style: "compact"`, or ` on 🌱 main ✓` with per-category counts (`+1 !2 ?3 $4 ↑5 ↓6`) with `git_style: "verbose"`
 - `{modules}` — runtime/context modules (e.g. detected tool versions); expands with a leading space, or to nothing when no runtime is detected
-- `{symbol}` — the prompt symbol from `theme.symbols.prompt`, with a trailing space
+- `{symbol}` — the prompt symbol from `theme.symbols.prompt`, with a trailing space; green normally, red after a failed command
 - `\n` — a newline (for a two-line prompt)
 
 See [Themes](./THEMES.md) for a full prompt/styling deep-dive.
@@ -120,7 +121,7 @@ See [Tab Completion](./TAB_COMPLETION.md) and [Autocompletion](./AUTOCOMPLETION.
     "info":      "#74B9FF"
   },
   "symbols": {
-    "prompt": "❯",
+    "prompt": "➜",
     "continuation": "…"
   }
 }
