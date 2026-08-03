@@ -10,6 +10,7 @@ pub const EscapeSequence = enum {
     alt_f, // Alt+F (word forward)
     alt_d, // Alt+D (delete word forward)
     alt_backspace, // Alt/Option+Backspace (delete word backward)
+    modified_delete, // Ctrl/Alt/Option+Delete (delete word forward)
     home,
     end_key,
     delete,
@@ -66,18 +67,45 @@ pub const EscapeSequence = enum {
                     };
                 }
 
-                // ESC[1;5C / ESC[1;5D (ctrl arrows)
+                // Modified keys, such as ESC[1;3D (Alt+Left),
+                // ESC[1;5C (Ctrl+Right), and ESC[3;5~ (Ctrl+Delete).
                 if (bytes[idx] == ';') {
-                    if (bytes.len < idx + 3) return null; // need ";5C"/";5D"
-                    return switch (bytes[idx + 2]) {
-                        'C' => .ctrl_right,
-                        'D' => .ctrl_left,
+                    var modifier_end = idx + 1;
+                    while (modifier_end < bytes.len and bytes[modifier_end] >= '0' and bytes[modifier_end] <= '9') : (modifier_end += 1) {}
+                    if (modifier_end == idx + 1) return .unknown;
+                    if (modifier_end >= bytes.len) return null;
+
+                    var modifier: u32 = 0;
+                    for (bytes[idx + 1 .. modifier_end]) |d| modifier = modifier * 10 + (d - '0');
+
+                    var num: u32 = 0;
+                    for (bytes[2..idx]) |d| num = num * 10 + (d - '0');
+
+                    return switch (bytes[modifier_end]) {
+                        'C' => if (num == 1 and modifier == 3) .alt_f else if (num == 1 and modifier == 5) .ctrl_right else .unknown,
+                        'D' => if (num == 1 and modifier == 3) .alt_b else if (num == 1 and modifier == 5) .ctrl_left else .unknown,
+                        '~' => if (num == 3 and (modifier == 3 or modifier == 5)) .modified_delete else .unknown,
                         else => .unknown,
                     };
                 }
 
                 return .unknown;
             }
+        }
+
+        // SS3 sequences are emitted by some terminals for cursor and home/end
+        // keys, especially while application cursor mode is active.
+        if (bytes[0] == 0x1B and bytes[1] == 'O') {
+            if (bytes.len < 3) return null;
+            return switch (bytes[2]) {
+                'A' => .up_arrow,
+                'B' => .down_arrow,
+                'C' => .right_arrow,
+                'D' => .left_arrow,
+                'H' => .home,
+                'F' => .end_key,
+                else => .unknown,
+            };
         }
 
         // Alt+key sequences (ESC followed by character)
@@ -101,8 +129,12 @@ test "EscapeSequence.parse recognizes arrows and back-tab" {
     try std.testing.expectEqual(EscapeSequence.down_arrow, EscapeSequence.parse("\x1b[B").?);
     try std.testing.expectEqual(EscapeSequence.back_tab, EscapeSequence.parse("\x1b[Z").?);
     try std.testing.expectEqual(EscapeSequence.ctrl_right, EscapeSequence.parse("\x1b[1;5C").?);
+    try std.testing.expectEqual(EscapeSequence.alt_b, EscapeSequence.parse("\x1b[1;3D").?);
+    try std.testing.expectEqual(EscapeSequence.alt_f, EscapeSequence.parse("\x1b[1;3C").?);
+    try std.testing.expectEqual(EscapeSequence.modified_delete, EscapeSequence.parse("\x1b[3;5~").?);
     try std.testing.expectEqual(EscapeSequence.alt_backspace, EscapeSequence.parse("\x1b\x08").?);
     try std.testing.expectEqual(EscapeSequence.alt_backspace, EscapeSequence.parse("\x1b\x7f").?);
+    try std.testing.expectEqual(EscapeSequence.home, EscapeSequence.parse("\x1bOH").?);
     // Incomplete sequences return null until fully read.
     try std.testing.expectEqual(@as(?EscapeSequence, null), EscapeSequence.parse("\x1b["));
 }

@@ -2242,6 +2242,7 @@ pub const LineEditor = struct {
             .ctrl_right, .alt_f => try self.moveCursorWordRight(),
             .alt_d => try self.killWordForward(),
             .alt_backspace => try self.killWordBackward(),
+            .modified_delete => try self.killWordForward(),
             .home => try self.moveCursorHome(),
             .end_key => {
                 // End key also accepts suggestion if present

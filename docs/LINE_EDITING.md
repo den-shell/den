@@ -425,8 +425,8 @@ Search backwards through command history as you type. Just like bash/zsh.
 |-----|--------|
 | `Left` | Move left one character |
 | `Right` | Move right one character |
-| `Ctrl+Left` / `Alt+B` | Move left one word |
-| `Ctrl+Right` / `Alt+F` | Move right one word |
+| `Ctrl+Left` / `Option+Left` / `Alt+B` | Move left one word |
+| `Ctrl+Right` / `Option+Right` / `Alt+F` | Move right one word |
 | `Ctrl+A` / `Home` | Move to beginning of line |
 | `Ctrl+E` / `End` | Move to end of line |
 
@@ -437,7 +437,7 @@ Search backwards through command history as you type. Just like bash/zsh.
 | `Backspace` / `Ctrl+H` | Delete character before cursor |
 | `Delete` | Delete character at cursor |
 | `Ctrl+W` / `Option+Delete` | Delete word before cursor |
-| `Alt+D` | Delete word after cursor |
+| `Alt+D` / `Ctrl+Delete` / `Option+Forward Delete` | Delete word after cursor |
 | `Ctrl+U` | Delete from cursor to beginning of line |
 | `Ctrl+K` | Delete from cursor to end of line |
 
