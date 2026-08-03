@@ -12,7 +12,9 @@
 
   // Prompt configuration
   "prompt": {
-    "format": "{path}{git} {modules} \n{symbol} ",
+    "format": "{path}{git}{modules} {symbol}",
+    // "basename" shows just the current dir (den), "full" shows ~/Documents/Projects/den
+    "path_style": "basename",
     "show_git": true,
     "show_time": false,
     "show_user": false,

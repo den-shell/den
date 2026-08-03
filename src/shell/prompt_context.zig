@@ -88,6 +88,10 @@ pub fn updatePromptContext(self: *Shell) !void {
     }
     self.prompt_context.hostname = try self.allocator.dupe(u8, hostname);
 
+    self.prompt_context.path_style = switch (self.config.prompt.path_style) {
+        .basename => .basename,
+        .full => .full,
+    };
     self.prompt_context.is_root = sysinfo.isRoot();
     self.prompt_context.last_exit_code = self.last_exit_code;
 

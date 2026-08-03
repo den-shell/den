@@ -66,6 +66,26 @@ pub const PlaceholderRegistry = struct {
 fn expandPath(ctx: *const PromptContext, allocator: std.mem.Allocator) ![]const u8 {
     const cwd = ctx.current_dir;
 
+    // Default style: just the directory name (/Users/chris/Code/den -> den),
+    // keeping the prompt short. Home is still "~" and the root dir stays "/".
+    if (ctx.path_style == .basename) {
+        if (ctx.home_dir) |home| {
+            if (home.len > 0 and std.mem.eql(u8, cwd, home)) {
+                return try allocator.dupe(u8, "~");
+            }
+        }
+        // Ignore trailing slashes, then take everything after the last one.
+        var end = cwd.len;
+        while (end > 1 and cwd[end - 1] == '/') end -= 1;
+        const trimmed = cwd[0..end];
+        if (std.mem.lastIndexOfScalar(u8, trimmed, '/')) |slash| {
+            const name = trimmed[slash + 1 ..];
+            // An empty name means trimmed is "/" — the root directory.
+            return try allocator.dupe(u8, if (name.len > 0) name else "/");
+        }
+        return try allocator.dupe(u8, trimmed);
+    }
+
     // Substitute $HOME with ~ (like zsh's %~), keeping the full home-relative
     // path: /Users/chris/Code -> ~/Code (not just "Code"), and home itself -> ~.
     if (ctx.home_dir) |home| {
@@ -215,22 +235,22 @@ fn expandModules(ctx: *const PromptContext, allocator: std.mem.Allocator) ![]con
 
     var has_any = false;
 
+    // Each module carries its own leading space (like {git}/{pkg}) so an empty
+    // {modules} never leaves a gap in the prompt.
     if (ctx.node_version) |version| {
-        try modules.appendSlice(allocator, "⬢ ");
+        try modules.appendSlice(allocator, " ⬢ ");
         try modules.appendSlice(allocator, version);
         has_any = true;
     }
 
     if (ctx.bun_version) |version| {
-        if (has_any) try modules.appendSlice(allocator, " ");
-        try modules.appendSlice(allocator, "🥟 ");
+        try modules.appendSlice(allocator, " 🥟 ");
         try modules.appendSlice(allocator, version);
         has_any = true;
     }
 
     if (ctx.deno_version) |version| {
-        if (has_any) try modules.appendSlice(allocator, " ");
-        try modules.appendSlice(allocator, "🦕 ");
+        try modules.appendSlice(allocator, " 🦕 ");
         try modules.appendSlice(allocator, version);
         has_any = true;
     }
@@ -516,11 +536,44 @@ test "expandPath returns home tilde" {
     try std.testing.expectEqualStrings("~", result);
 }
 
+test "expandPath defaults to the directory name" {
+    const allocator = std.testing.allocator;
+    var ctx = PromptContext.init(allocator);
+    ctx.current_dir = "/home/user/Documents/Projects/den";
+    ctx.home_dir = "/home/user";
+
+    const result = try expandPath(&ctx, allocator);
+    defer allocator.free(result);
+    try std.testing.expectEqualStrings("den", result);
+}
+
+test "expandPath basename outside home and at root" {
+    const allocator = std.testing.allocator;
+    var ctx = PromptContext.init(allocator);
+    ctx.home_dir = "/home/user";
+
+    ctx.current_dir = "/usr/local/bin";
+    const nested = try expandPath(&ctx, allocator);
+    defer allocator.free(nested);
+    try std.testing.expectEqualStrings("bin", nested);
+
+    ctx.current_dir = "/";
+    const root = try expandPath(&ctx, allocator);
+    defer allocator.free(root);
+    try std.testing.expectEqualStrings("/", root);
+
+    ctx.current_dir = "/usr/local/";
+    const trailing = try expandPath(&ctx, allocator);
+    defer allocator.free(trailing);
+    try std.testing.expectEqualStrings("local", trailing);
+}
+
 test "expandPath returns home-relative path" {
     const allocator = std.testing.allocator;
     var ctx = PromptContext.init(allocator);
     ctx.current_dir = "/home/user/projects";
     ctx.home_dir = "/home/user";
+    ctx.path_style = .full;
 
     const result = try expandPath(&ctx, allocator);
     defer allocator.free(result);
@@ -532,6 +585,7 @@ test "expandPath returns absolute path outside home" {
     var ctx = PromptContext.init(allocator);
     ctx.current_dir = "/usr/local/bin";
     ctx.home_dir = "/home/user";
+    ctx.path_style = .full;
 
     const result = try expandPath(&ctx, allocator);
     defer allocator.free(result);
@@ -543,6 +597,7 @@ test "expandPath does not tilde a sibling of home" {
     var ctx = PromptContext.init(allocator);
     ctx.current_dir = "/home/username"; // shares the "/home/user" prefix
     ctx.home_dir = "/home/user";
+    ctx.path_style = .full;
 
     const result = try expandPath(&ctx, allocator);
     defer allocator.free(result);

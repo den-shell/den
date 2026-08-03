@@ -1,5 +1,15 @@
 const std = @import("std");
 
+/// How {path} renders the working directory.
+/// Mirrors `PromptConfig.PathStyle`; kept separate so the prompt module builds
+/// standalone (its test root treats src/prompt as the module root).
+pub const PathStyle = enum {
+    /// Only the current directory name: ~/Documents/Projects/den -> den
+    basename,
+    /// The whole home-relative path: ~/Documents/Projects/den
+    full,
+};
+
 /// Prompt segment alignment
 pub const Alignment = enum {
     left,
@@ -51,6 +61,7 @@ pub const PromptContext = struct {
     // Path info
     current_dir: []const u8,
     home_dir: ?[]const u8,
+    path_style: PathStyle = .basename,
 
     // Git info
     git_branch: ?[]const u8,
@@ -102,6 +113,7 @@ pub const PromptContext = struct {
         return .{
             .current_dir = "",
             .home_dir = null,
+            .path_style = .basename,
             .git_branch = null,
             .git_dirty = false,
             .git_ahead = 0,

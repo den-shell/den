@@ -20,7 +20,7 @@ See [Benchmarks](./BENCHMARKS.md) for measured, reproducible performance numbers
 - A full interactive line editor with inline autosuggestions, syntax highlighting, and a navigable completion grid — see [Line Editing](./LINE_EDITING.md) and [Tab Completion](./TAB_COMPLETION.md).
 - Variable, command, arithmetic, brace, tilde, and glob expansion — see [Features](./FEATURES.md).
 - POSIX scripting with functions, loops, conditionals, and traps — see [Scripting](./SCRIPTING.md).
-- A two-line prompt with git status and runtime modules, fully themeable — see [Themes](./THEMES.md).
+- A single-line prompt with git status and runtime modules, fully themeable — see [Themes](./THEMES.md).
 
 ## Get started
 

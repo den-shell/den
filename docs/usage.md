@@ -8,11 +8,10 @@ Den can be used interactively, as a script interpreter, or as your login shell.
 den
 ```
 
-You get a two-line prompt ending in `❯`, with inline autosuggestions, syntax highlighting, and tab completion as you type.
+You get a single-line prompt ending in `❯`, with inline autosuggestions, syntax highlighting, and tab completion as you type.
 
 ```text
-~/projects
-❯ echo "Hello from Den!"
+projects ❯ echo "Hello from Den!"
 Hello from Den!
 ```
 

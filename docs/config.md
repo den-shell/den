@@ -47,7 +47,8 @@ source "$HOME/.dotfiles/aliases.sh"
 
 ```jsonc
 "prompt": {
-  "format": "{path}{git} {modules} \n{symbol} ",
+  "format": "{path}{git}{modules} {symbol}",
+  "path_style": "basename",  // "basename" = den, "full" = ~/Documents/Projects/den
   "show_git": true,          // git branch + working-tree status
   "show_time": false,
   "show_user": false,
@@ -62,10 +63,10 @@ source "$HOME/.dotfiles/aliases.sh"
 
 **Placeholders** available in `format`:
 
-- `{path}` — current directory, home-relative (`~/Code`)
+- `{path}` — current directory: just its name (`den`) with `path_style: "basename"`, or the home-relative path (`~/Code/den`) with `path_style: "full"`
 - `{git}` — branch and working-tree status (when `show_git` is on)
-- `{modules}` — runtime/context modules (e.g. detected tool versions)
-- `{symbol}` — the prompt symbol from `theme.symbols.prompt`
+- `{modules}` — runtime/context modules (e.g. detected tool versions); expands with a leading space, or to nothing when no runtime is detected
+- `{symbol}` — the prompt symbol from `theme.symbols.prompt`, with a trailing space
 - `\n` — a newline (for a two-line prompt)
 
 See [Themes](./THEMES.md) for a full prompt/styling deep-dive.

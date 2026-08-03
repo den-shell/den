@@ -123,7 +123,9 @@ pub const KeybindingConfig = struct {
 };
 
 pub const PromptConfig = struct {
-    format: []const u8 = "{path}{git} {modules} \n{symbol} ",
+    format: []const u8 = "{path}{git}{modules} {symbol}",
+    /// How {path} renders the working directory
+    path_style: PathStyle = .basename,
     show_git: bool = true,
     show_time: bool = false,
     show_user: bool = false,
@@ -133,6 +135,13 @@ pub const PromptConfig = struct {
     right_prompt: ?[]const u8 = null,
     transient: bool = false,
     simple_when_not_tty: bool = true,
+
+    pub const PathStyle = enum {
+        /// Only the current directory name: ~/Documents/Projects/den -> den
+        basename,
+        /// The whole home-relative path: ~/Documents/Projects/den
+        full,
+    };
 };
 
 pub const HistoryConfig = struct {
