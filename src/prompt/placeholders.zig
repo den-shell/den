@@ -559,11 +559,12 @@ test "expandPath returns home tilde" {
     try std.testing.expectEqualStrings("~", result);
 }
 
-test "expandPath defaults to the directory name" {
+test "expandPath basename keeps only the directory name" {
     const allocator = std.testing.allocator;
     var ctx = PromptContext.init(allocator);
     ctx.current_dir = "/home/user/Documents/Projects/den";
     ctx.home_dir = "/home/user";
+    ctx.path_style = .basename;
 
     const result = try pathText(&ctx, allocator);
     defer allocator.free(result);
@@ -574,6 +575,7 @@ test "expandPath basename outside home and at root" {
     const allocator = std.testing.allocator;
     var ctx = PromptContext.init(allocator);
     ctx.home_dir = "/home/user";
+    ctx.path_style = .basename;
 
     ctx.current_dir = "/usr/local/bin";
     const nested = try pathText(&ctx, allocator);

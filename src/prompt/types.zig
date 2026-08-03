@@ -13,9 +13,9 @@ pub const PathStyle = enum {
 /// How {git} renders branch and working-tree state.
 /// Mirrors `PromptConfig.GitStyle` (see the note on PathStyle).
 pub const GitStyle = enum {
-    /// git:(main) with a ✗ when the tree is dirty
+    /// git:(main) !32 ?85 $1
     compact,
-    /// on 🌱 main ✓ with per-category counts
+    /// on 🌱 main ✓ !32 ?85 $1
     verbose,
 };
 
@@ -70,7 +70,7 @@ pub const PromptContext = struct {
     // Path info
     current_dir: []const u8,
     home_dir: ?[]const u8,
-    path_style: PathStyle = .basename,
+    path_style: PathStyle = .full,
 
     // Git info
     git_style: GitStyle = .compact,
@@ -123,7 +123,7 @@ pub const PromptContext = struct {
         return .{
             .current_dir = "",
             .home_dir = null,
-            .path_style = .basename,
+            .path_style = .full,
             .git_style = .compact,
             .git_branch = null,
             .git_dirty = false,

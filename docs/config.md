@@ -48,7 +48,7 @@ source "$HOME/.dotfiles/aliases.sh"
 ```jsonc
 "prompt": {
   "format": "{symbol} {path}{git}{modules} ",
-  "path_style": "basename",  // "basename" = den, "full" = ~/Documents/Projects/den
+  "path_style": "full",      // "full" = ~/Documents/Projects/den, "basename" = den
   "git_style": "compact",    // "compact" = git:(main) !32 ?85, "verbose" = on 🌱 main ✓ !32 ?85
   "show_git": true,          // git branch + working-tree status
   "show_time": false,
@@ -64,11 +64,17 @@ source "$HOME/.dotfiles/aliases.sh"
 
 **Placeholders** available in `format`:
 
-- `{path}` — current directory: just its name (`den`) with `path_style: "basename"`, or the home-relative path (`~/Code/den`) with `path_style: "full"`
+- `{path}` — current directory: the home-relative path (`~/Code/den`) with `path_style: "full"`, or just its name (`den`) with `path_style: "basename"`
 - `{git}` — branch and working-tree status (when `show_git` is on): ` git:(main)` with `git_style: "compact"`, or ` on 🌱 main` with `git_style: "verbose"`. Both append the counters `+staged !unstaged ?untracked $stashed ↑ahead ↓behind`; verbose adds a green `✓` when the tree is clean, compact stays bare (falling back to a yellow `✗` if the tree is dirty but has no counts)
 - `{modules}` — runtime/context modules (e.g. detected tool versions); expands with a leading space, or to nothing when no runtime is detected
 - `{symbol}` — the prompt symbol from `theme.symbols.prompt`, with a trailing space; green normally, red after a failed command
-- `\n` — a newline (for a two-line prompt)
+- `\n` — a newline
+
+The default keeps what you type on the same line as the prompt. Move it to its own line by putting `{symbol}` after a `\n`:
+
+```jsonc
+"format": "{path}{git}{modules} \n{symbol} "
+```
 
 See [Themes](./THEMES.md) for a full prompt/styling deep-dive.
 

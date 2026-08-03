@@ -125,7 +125,7 @@ pub const KeybindingConfig = struct {
 pub const PromptConfig = struct {
     format: []const u8 = "{symbol} {path}{git}{modules} ",
     /// How {path} renders the working directory
-    path_style: PathStyle = .basename,
+    path_style: PathStyle = .full,
     /// How {git} renders branch and working-tree state
     git_style: GitStyle = .compact,
     show_git: bool = true,
@@ -146,9 +146,9 @@ pub const PromptConfig = struct {
     };
 
     pub const GitStyle = enum {
-        /// git:(main) with a ✗ when the tree is dirty
+        /// git:(main) !32 ?85 $1
         compact,
-        /// on 🌱 main ✓ with per-category counts (+1 !2 ?3 $4 ↑5 ↓6)
+        /// on 🌱 main ✓ !32 ?85 $1
         verbose,
     };
 };

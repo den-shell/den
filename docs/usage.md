@@ -11,7 +11,7 @@ den
 You get a single-line prompt starting with `➜`, with inline autosuggestions, syntax highlighting, and tab completion as you type.
 
 ```text
-➜  projects echo "Hello from Den!"
+➜  ~/projects echo "Hello from Den!"
 Hello from Den!
 ```
 

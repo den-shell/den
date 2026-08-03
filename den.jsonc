@@ -12,9 +12,11 @@
 
   // Prompt configuration
   "prompt": {
+    // For a two-line prompt, put the input on its own line:
+    //   "format": "{path}{git}{modules} \n{symbol} "
     "format": "{symbol} {path}{git}{modules} ",
-    // "basename" shows just the current dir (den), "full" shows ~/Documents/Projects/den
-    "path_style": "basename",
+    // "full" shows ~/Documents/Projects/den, "basename" shows just the current dir (den)
+    "path_style": "full",
     // "compact" shows git:(main) !32 ?85, "verbose" shows on 🌱 main ✓ !32 ?85
     "git_style": "compact",
     "show_git": true,
