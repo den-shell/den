@@ -283,27 +283,12 @@ pub const ControlFlowExecutor = struct {
 
         // Build positional params from function call frame or shell
         var pp_slice: [64][]const u8 = undefined;
-        var pp_count: usize = 0;
-        if (self.shell.function_manager.currentFrame()) |frame| {
-            var pi: usize = 0;
-            while (pi < frame.positional_params_count) : (pi += 1) {
-                if (frame.positional_params[pi]) |param| {
-                    pp_slice[pp_count] = param;
-                    pp_count += 1;
-                }
-            }
-        } else {
-            for (self.shell.positional_params) |maybe_param| {
-                if (maybe_param) |param| {
-                    pp_slice[pp_count] = param;
-                    pp_count += 1;
-                }
-            }
-        }
+        const pp = self.collectPositionalParams(&pp_slice);
+        const pp_count = pp.len;
 
         // Create expansion context with positional params
         var expander = Expansion.init(self.allocator, &self.shell.environment, self.shell.last_exit_code);
-        expander.positional_params = pp_slice[0..pp_count];
+        expander.positional_params = pp;
         expander.arrays = &self.shell.arrays;
         expander.assoc_arrays = &self.shell.assoc_arrays;
 
@@ -881,10 +866,51 @@ pub const ControlFlowExecutor = struct {
     }
 
     /// Expand a value (variables, command substitution, etc.)
+    /// The positional parameters visible from here: a running function's own
+    /// arguments when there is a frame, the shell's otherwise.
+    ///
+    /// The caller owns `buf` because the returned slice points into it - a
+    /// helper that declared the array itself would hand back a view of its own
+    /// dead stack frame.
+    fn collectPositionalParams(self: *ControlFlowExecutor, buf: *[64][]const u8) []const []const u8 {
+        var count: usize = 0;
+
+        if (self.shell.function_manager.currentFrame()) |frame| {
+            var pi: usize = 0;
+            while (pi < frame.positional_params_count) : (pi += 1) {
+                if (frame.positional_params[pi]) |param| {
+                    buf[count] = param;
+                    count += 1;
+                }
+            }
+        } else {
+            for (self.shell.positional_params) |maybe_param| {
+                if (maybe_param) |param| {
+                    buf[count] = param;
+                    count += 1;
+                }
+            }
+        }
+
+        return buf[0..count];
+    }
+
+    /// Expand a control-flow operand the same way the command path would.
+    ///
+    /// This used to expand against the environment alone, so inside a function
+    /// `$1` had nothing to resolve to and became the empty string. `case "$1"`
+    /// then matched no pattern but `*`, and picked the wrong branch in silence
+    /// - a wrong answer rather than an error, in the construct whose whole job
+    /// is choosing a branch. Arrays were missing for the same reason.
     fn expandValue(self: *ControlFlowExecutor, value: []const u8) ![]const u8 {
+        var pp_buf: [64][]const u8 = undefined;
+
         var expander = Expansion.init(self.allocator, &self.shell.environment, self.shell.last_exit_code);
-        const expanded = try expander.expand(value);
-        return expanded;
+        expander.positional_params = self.collectPositionalParams(&pp_buf);
+        expander.arrays = &self.shell.arrays;
+        expander.assoc_arrays = &self.shell.assoc_arrays;
+
+        return try expander.expand(value);
     }
 
     /// Match a pattern (supports full glob: *, ?, [abc], [a-z])

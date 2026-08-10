@@ -279,6 +279,12 @@ pub const FunctionManager = struct {
                 if (std.mem.startsWith(u8, trimmed, "if ") or std.mem.eql(u8, trimmed, "if")) {
                     if (cf_parser.parseIf(func.body, line_num)) |result| {
                         var stmt = result.stmt;
+                        // The parse owns its condition and every body line. The
+                        // top-level path has always freed them; this one never
+                        // did, so a function with a multi-line construct in it
+                        // leaked its own source on each call - loudly, because
+                        // the debug allocator reports it to stderr.
+                        defer stmt.deinit();
                         exit_code = cf_executor.executeIf(&stmt) catch 1;
                         line_num = result.end + 1;
 
@@ -292,6 +298,7 @@ pub const FunctionManager = struct {
                 } else if (std.mem.startsWith(u8, trimmed, "while ") or std.mem.eql(u8, trimmed, "while")) {
                     if (cf_parser.parseWhile(func.body, line_num, false)) |result| {
                         var loop = result.loop;
+                        defer loop.deinit();
                         exit_code = cf_executor.executeWhile(&loop) catch 1;
                         line_num = result.end + 1;
 
@@ -305,6 +312,7 @@ pub const FunctionManager = struct {
                 } else if (std.mem.startsWith(u8, trimmed, "until ") or std.mem.eql(u8, trimmed, "until")) {
                     if (cf_parser.parseWhile(func.body, line_num, true)) |result| {
                         var loop = result.loop;
+                        defer loop.deinit();
                         exit_code = cf_executor.executeWhile(&loop) catch 1;
                         line_num = result.end + 1;
 
@@ -318,6 +326,7 @@ pub const FunctionManager = struct {
                 } else if (std.mem.startsWith(u8, trimmed, "for ") or std.mem.eql(u8, trimmed, "for")) {
                     if (cf_parser.parseFor(func.body, line_num)) |result| {
                         var loop = result.loop;
+                        defer loop.deinit();
                         exit_code = cf_executor.executeFor(&loop) catch 1;
                         line_num = result.end + 1;
 
@@ -331,6 +340,7 @@ pub const FunctionManager = struct {
                 } else if (std.mem.startsWith(u8, trimmed, "case ")) {
                     if (cf_parser.parseCase(func.body, line_num)) |result| {
                         var stmt = result.stmt;
+                        defer stmt.deinit();
                         exit_code = cf_executor.executeCase(&stmt) catch 1;
                         line_num = result.end + 1;
 

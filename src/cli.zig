@@ -6,6 +6,7 @@ const ShellCompletion = @import("shell_completion.zig").ShellCompletion;
 const env_utils = @import("utils/env.zig");
 const IO = @import("utils/io.zig").IO;
 const LspServer = @import("lsp/server.zig").LspServer;
+const function_definition = @import("shell/function_definition.zig");
 const net_session = @import("net/session.zig");
 const build_options = @import("build_options");
 const upgrade = @import("upgrade.zig");
@@ -863,8 +864,11 @@ fn runCommandString(allocator: std.mem.Allocator, args: []const []const u8, conf
 
             // Check function definitions
             const is_func_kw = std.mem.startsWith(u8, trimmed, "function ");
+            // The parens have to be this line's own, not ones inside an
+            // argument: `eval "hi() { echo hi; }"` was taken for a definition
+            // of a function named `eval "hi`.
             var is_paren_syntax = false;
-            if (std.mem.indexOf(u8, trimmed, "()")) |_| {
+            if (function_definition.isFunctionDefinitionStart(trimmed)) {
                 if (std.mem.indexOf(u8, trimmed, "{") != null) {
                     is_paren_syntax = true;
                 } else if (line_num + 1 < lines.len) {

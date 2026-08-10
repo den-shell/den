@@ -4,6 +4,7 @@ const ControlFlowParser = @import("control_flow.zig").ControlFlowParser;
 const ControlFlowExecutor = @import("control_flow.zig").ControlFlowExecutor;
 const FunctionParser = @import("functions.zig").FunctionParser;
 const IO = @import("../utils/io.zig").IO;
+const function_definition = @import("../shell/function_definition.zig");
 
 /// Cached script entry
 const CachedScript = struct {
@@ -466,8 +467,11 @@ pub const ScriptManager = struct {
             const is_function_keyword = std.mem.startsWith(u8, trimmed, "function ");
 
             // For name() syntax, check if line contains () followed by { (either same line or next)
+            // The parens have to belong to this line rather than sit inside an
+            // argument: `eval "hi() { echo hi; }"` was read as defining a
+            // function called `eval "hi`, so eval never ran.
             var is_paren_syntax = false;
-            if (std.mem.indexOf(u8, trimmed, "()")) |_| {
+            if (function_definition.isFunctionDefinitionStart(trimmed)) {
                 // Has (), now check for { on same line or next line
                 if (std.mem.indexOf(u8, trimmed, "{") != null) {
                     is_paren_syntax = true;

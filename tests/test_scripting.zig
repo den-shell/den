@@ -1247,3 +1247,118 @@ test "scripting: negative substring length counts from the end" {
     try test_utils.TestAssert.expectEqual(@as(u8, 0), result.exit_code);
     try test_utils.TestAssert.expectContains(result.stdout, "[cde]");
 }
+
+// A control-flow operand inside a function body is expanded by a different
+// path than a plain command's arguments, and that path only ever saw the
+// environment. `$1` had nothing to resolve to, so the subject of a `case`
+// became the empty string and matched nothing but `*` - the construct whose
+// entire job is picking a branch, picking the wrong one and saying nothing.
+test "scripting: case matches on a function's positional parameter" {
+    const allocator = std.testing.allocator;
+
+    var fixture = try test_utils.DenShellFixture.init(allocator);
+    defer fixture.deinit();
+
+    const result = try fixture.execDirect(
+        \\pick() {
+        \\  case "$1" in
+        \\    a)
+        \\      echo "got a"
+        \\      ;;
+        \\    *)
+        \\      echo "got other"
+        \\      ;;
+        \\  esac
+        \\}
+        \\pick a
+    );
+    defer allocator.free(result.stdout);
+    defer allocator.free(result.stderr);
+
+    try test_utils.TestAssert.expectEqual(@as(u8, 0), result.exit_code);
+    try test_utils.TestAssert.expectContains(result.stdout, "got a");
+}
+
+test "scripting: case in a function still falls through when nothing matches" {
+    const allocator = std.testing.allocator;
+
+    var fixture = try test_utils.DenShellFixture.init(allocator);
+    defer fixture.deinit();
+
+    const result = try fixture.execDirect(
+        \\pick() {
+        \\  case "$1" in
+        \\    a)
+        \\      echo "got a"
+        \\      ;;
+        \\    *)
+        \\      echo "got other"
+        \\      ;;
+        \\  esac
+        \\}
+        \\pick zzz
+    );
+    defer allocator.free(result.stdout);
+    defer allocator.free(result.stderr);
+
+    try test_utils.TestAssert.expectEqual(@as(u8, 0), result.exit_code);
+    try test_utils.TestAssert.expectContains(result.stdout, "got other");
+}
+
+// `eval` used to parse its argument as a single command chain, which has no
+// representation for a function definition - and it never even got that far,
+// because a line merely *containing* `()` was taken for a function definition
+// itself, so `eval "hi() { ... }"` was read as defining `eval "hi`. Between
+// them that is `eval "$(tool init)"`, which is how essentially every shell
+// integration is loaded, doing nothing and saying nothing.
+test "scripting: eval defines a function its caller can then run" {
+    const allocator = std.testing.allocator;
+
+    var fixture = try test_utils.DenShellFixture.init(allocator);
+    defer fixture.deinit();
+
+    const result = try fixture.execDirect(
+        \\eval "hi() { echo EVAL_FN_RAN; }"
+        \\hi
+    );
+    defer allocator.free(result.stdout);
+    defer allocator.free(result.stderr);
+
+    try test_utils.TestAssert.expectEqual(@as(u8, 0), result.exit_code);
+    try test_utils.TestAssert.expectContains(result.stdout, "EVAL_FN_RAN");
+}
+
+test "scripting: eval still runs a plain command and keeps its exit code" {
+    const allocator = std.testing.allocator;
+
+    var fixture = try test_utils.DenShellFixture.init(allocator);
+    defer fixture.deinit();
+
+    const result = try fixture.execDirect(
+        \\eval "echo EVAL_CMD_RAN"
+        \\eval "false"
+        \\echo "code=$?"
+    );
+    defer allocator.free(result.stdout);
+    defer allocator.free(result.stderr);
+
+    try test_utils.TestAssert.expectContains(result.stdout, "EVAL_CMD_RAN");
+    try test_utils.TestAssert.expectContains(result.stdout, "code=1");
+}
+
+test "scripting: an assignment made inside eval survives it" {
+    const allocator = std.testing.allocator;
+
+    var fixture = try test_utils.DenShellFixture.init(allocator);
+    defer fixture.deinit();
+
+    const result = try fixture.execDirect(
+        \\eval "V=42"
+        \\echo "V=[$V]"
+    );
+    defer allocator.free(result.stdout);
+    defer allocator.free(result.stderr);
+
+    try test_utils.TestAssert.expectEqual(@as(u8, 0), result.exit_code);
+    try test_utils.TestAssert.expectContains(result.stdout, "V=[42]");
+}

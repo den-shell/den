@@ -7,6 +7,42 @@ const Shell = @import("../shell.zig").Shell;
 const FunctionParser = @import("../scripting/functions.zig").FunctionParser;
 const functions = @import("../scripting/functions.zig");
 
+/// Everything a function name is allowed to be made of.
+fn isValidFunctionName(name: []const u8) bool {
+    if (name.len == 0) return false;
+
+    for (name) |c| {
+        if (c == '_' or c == '-' or std.ascii.isAlphanumeric(c)) continue;
+        return false;
+    }
+
+    return true;
+}
+
+/// Does this line *begin* a function definition, as opposed to merely
+/// containing `()` somewhere in it?
+///
+/// The old test was "there is a `()` with something in front of it", which is
+/// also true of `eval "hi() { echo hi; }"` - so that line was read as defining
+/// a function called `eval "hi`, and never reached eval at all. It is true of
+/// any command carrying a function definition in an *argument*, which is
+/// precisely how a shell integration is loaded (`eval "$(tool init)"`).
+///
+/// A definition names its function first, so everything before the parens has
+/// to be one valid name and nothing besides.
+pub fn isFunctionDefinitionStart(trimmed: []const u8) bool {
+    if (std.mem.startsWith(u8, trimmed, "function ")) {
+        const after = std.mem.trim(u8, trimmed["function ".len..], &std.ascii.whitespace);
+        // `function name { ... }` is legal with no parens at all.
+        const name_end = std.mem.indexOfAny(u8, after, " \t{(") orelse after.len;
+        return isValidFunctionName(after[0..name_end]);
+    }
+
+    const paren = std.mem.indexOf(u8, trimmed, "()") orelse return false;
+
+    return isValidFunctionName(std.mem.trim(u8, trimmed[0..paren], &std.ascii.whitespace));
+}
+
 /// Check if input starts a function definition
 pub fn checkFunctionDefinitionStart(self: *Shell, trimmed: []const u8) !bool {
     // Check for "def name [params] -> type { ... }" syntax (Phase 5.2)
@@ -17,17 +53,7 @@ pub fn checkFunctionDefinitionStart(self: *Shell, trimmed: []const u8) !bool {
     // Check for "function name" or "name()" syntax
     const is_function_keyword = std.mem.startsWith(u8, trimmed, "function ");
 
-    // For name() syntax, check if line contains ()
-    var is_paren_syntax = false;
-    if (std.mem.indexOf(u8, trimmed, "()")) |_| {
-        // Make sure it's not just () by itself and there's a name before
-        const paren_pos = std.mem.indexOf(u8, trimmed, "()") orelse 0;
-        if (paren_pos > 0) {
-            is_paren_syntax = true;
-        }
-    }
-
-    if (!is_function_keyword and !is_paren_syntax) {
+    if (!isFunctionDefinitionStart(trimmed)) {
         return false;
     }
 

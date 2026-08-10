@@ -13,6 +13,7 @@ const IO = @import("../utils/io.zig").IO;
 const types = @import("../types/mod.zig");
 const parser_mod = @import("../parser/mod.zig");
 const executor_mod = @import("../executor/mod.zig");
+const function_definition = @import("function_definition.zig");
 
 // Forward declaration for Shell type
 const Shell = @import("../shell.zig").Shell;
@@ -117,8 +118,11 @@ pub fn executeScriptContent(self: *Shell, content: []const u8) void {
 
         // Check function definitions
         const is_func_kw = std.mem.startsWith(u8, trimmed, "function ");
+        // `()` has to be the line's own parameter list, not something inside
+        // an argument - `eval "hi() { echo hi; }"` was read as defining a
+        // function called `eval "hi` and never reached eval.
         var is_paren_syntax = false;
-        if (std.mem.indexOf(u8, trimmed, "()")) |_| {
+        if (function_definition.isFunctionDefinitionStart(trimmed)) {
             if (std.mem.indexOf(u8, trimmed, "{") != null) {
                 is_paren_syntax = true;
             } else if (line_num + 1 < lines.len) {
