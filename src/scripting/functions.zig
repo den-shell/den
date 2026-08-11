@@ -444,6 +444,119 @@ pub const FunctionParser = struct {
     }
 
     /// Parse function definition: function name { ... } or name() { ... }
+    /// Does this line both open and close the function body by itself?
+    ///
+    /// Quote-aware, so a `{` or `}` inside a string does not count towards the
+    /// nesting - `hi() { echo "}"; }` closes at the last brace, not the quoted
+    /// one.
+    fn isSingleLineDefinition(line: []const u8) bool {
+        var depth: i32 = 0;
+        var opened = false;
+        var in_sq = false;
+        var in_dq = false;
+        var i: usize = 0;
+
+        while (i < line.len) : (i += 1) {
+            const c = line[i];
+            if (c == '\\' and !in_sq and i + 1 < line.len) {
+                i += 1;
+                continue;
+            }
+            if (c == '\'' and !in_dq) {
+                in_sq = !in_sq;
+            } else if (c == '"' and !in_sq) {
+                in_dq = !in_dq;
+            } else if (!in_sq and !in_dq) {
+                if (c == '{') {
+                    depth += 1;
+                    opened = true;
+                } else if (c == '}') {
+                    depth -= 1;
+                }
+            }
+        }
+
+        return opened and depth == 0;
+    }
+
+    /// Split one line of shell into statements on its top-level `;`.
+    ///
+    /// Quotes, nested braces and control-flow words all suppress the split, so
+    /// `for x in a b; do echo $x; done` stays one statement and `case` clause
+    /// separators (`;;`) are not mistaken for two empty ones.
+    fn splitStatements(
+        allocator: std.mem.Allocator,
+        body: []const u8,
+        out: *[1000][]const u8,
+    ) !usize {
+        var count: usize = 0;
+        var cf_depth: u32 = 0;
+        var br_depth: u32 = 0;
+        var seg_start: usize = 0;
+        var in_sq = false;
+        var in_dq = false;
+        var i: usize = 0;
+
+        while (i < body.len) : (i += 1) {
+            const c = body[i];
+            if (c == '\\' and !in_sq and i + 1 < body.len) {
+                i += 1;
+                continue;
+            }
+            if (c == '\'' and !in_dq) {
+                in_sq = !in_sq;
+                continue;
+            }
+            if (c == '"' and !in_sq) {
+                in_dq = !in_dq;
+                continue;
+            }
+            if (in_sq or in_dq) continue;
+
+            if (c == '{') {
+                br_depth += 1;
+            } else if (c == '}' and br_depth > 0) {
+                br_depth -= 1;
+            }
+
+            if (isControlFlowWord(body, i, "for ") or
+                isControlFlowWord(body, i, "while ") or
+                isControlFlowWord(body, i, "until ") or
+                isControlFlowWord(body, i, "if ") or
+                isControlFlowWord(body, i, "case "))
+            {
+                cf_depth += 1;
+            } else if (isControlFlowEnd(body, i, "done") or
+                isControlFlowEnd(body, i, "fi") or
+                isControlFlowEnd(body, i, "esac"))
+            {
+                if (cf_depth > 0) cf_depth -= 1;
+            }
+
+            if (c == ';' and cf_depth == 0 and br_depth == 0) {
+                // `;;` ends a case clause; it is not a statement separator.
+                if (i + 1 < body.len and body[i + 1] == ';') {
+                    i += 1;
+                    continue;
+                }
+                const part = std.mem.trim(u8, body[seg_start..i], &std.ascii.whitespace);
+                if (part.len > 0 and count < out.len) {
+                    out[count] = try allocator.dupe(u8, part);
+                    count += 1;
+                }
+                seg_start = i + 1;
+            }
+        }
+
+        const last = std.mem.trim(u8, body[seg_start..], &std.ascii.whitespace);
+        if (last.len > 0 and count < out.len) {
+            out[count] = try allocator.dupe(u8, last);
+            count += 1;
+        }
+
+        return count;
+    }
+
     pub fn parseFunction(self: *FunctionParser, lines: [][]const u8, start: usize) !struct { name: []const u8, body: [][]const u8, end: usize } {
         const first_line = std.mem.trim(u8, lines[start], &std.ascii.whitespace);
 
@@ -486,6 +599,25 @@ pub const FunctionParser = struct {
         var brace_count: i32 = 0;
         var found_opening = false;
         var i = start_line;
+
+        // A definition that opens and closes on its own line has its whole
+        // body between those braces, and the loop below cannot see it: the
+        // line carrying `{` is excluded from the body, so `hi() { echo x; }`
+        // parsed to a function with no body at all - defined, callable,
+        // silent. `source` avoided it by routing one-liners elsewhere; `-c`
+        // and a script file argument came straight here.
+        if (isSingleLineDefinition(first_line)) {
+            const open = std.mem.indexOfScalar(u8, first_line, '{').?;
+            const close = std.mem.lastIndexOfScalar(u8, first_line, '}').?;
+            const inner = std.mem.trim(u8, first_line[open + 1 .. close], &std.ascii.whitespace);
+
+            body_count = try splitStatements(self.allocator, inner, &body_buffer);
+
+            const body = try self.allocator.alloc([]const u8, body_count);
+            @memcpy(body, body_buffer[0..body_count]);
+
+            return .{ .name = name, .body = body, .end = start };
+        }
 
         while (i < lines.len) : (i += 1) {
             const line = lines[i];
@@ -733,4 +865,27 @@ test "FunctionManager listFunctions is heap-allocated with no truncation" {
 
     // Empty manager returns empty slice, but it's properly heap-allocated
     try std.testing.expectEqual(@as(usize, 0), names.len);
+}
+
+/// Is a control-flow keyword starting here, at a word boundary?
+///
+/// Lives here rather than in the shell layer because both the single-line
+/// function parser above and `shell/function_definition.zig` split a body on
+/// its top-level semicolons and must agree about what a top level is.
+pub fn isControlFlowWord(input: []const u8, pos: usize, keyword: []const u8) bool {
+    if (pos > 0 and input[pos - 1] != ' ' and input[pos - 1] != '\t' and input[pos - 1] != ';') return false;
+    if (pos + keyword.len > input.len) return false;
+    return std.mem.eql(u8, input[pos..][0..keyword.len], keyword);
+}
+
+/// Is a control-flow closing word (`done`, `fi`, `esac`) at this position?
+pub fn isControlFlowEnd(input: []const u8, pos: usize, word: []const u8) bool {
+    if (pos > 0 and input[pos - 1] != ' ' and input[pos - 1] != '\t' and input[pos - 1] != ';') return false;
+    if (pos + word.len > input.len) return false;
+    if (!std.mem.eql(u8, input[pos..][0..word.len], word)) return false;
+    if (pos + word.len < input.len) {
+        const next = input[pos + word.len];
+        return next == ' ' or next == '\t' or next == ';' or next == '\n';
+    }
+    return true;
 }

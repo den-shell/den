@@ -1362,3 +1362,79 @@ test "scripting: an assignment made inside eval survives it" {
     try test_utils.TestAssert.expectEqual(@as(u8, 0), result.exit_code);
     try test_utils.TestAssert.expectContains(result.stdout, "V=[42]");
 }
+
+// A definition that opens and closes on one line defined the function with an
+// empty body: the parser excludes the line carrying `{` from the body, and for
+// a one-liner that is the only line there is. The function was defined and
+// callable and did nothing, which is why it went unnoticed - `type` confirmed
+// it existed. `source` sidestepped the parser; `-c` and a script file went
+// straight through it.
+test "scripting: a one-line function definition keeps its body" {
+    const allocator = std.testing.allocator;
+
+    var fixture = try test_utils.DenShellFixture.init(allocator);
+    defer fixture.deinit();
+
+    const result = try fixture.execDirect(
+        \\hi() { echo ONE_LINE_BODY_RAN; }
+        \\hi
+    );
+    defer allocator.free(result.stdout);
+    defer allocator.free(result.stderr);
+
+    try test_utils.TestAssert.expectEqual(@as(u8, 0), result.exit_code);
+    try test_utils.TestAssert.expectContains(result.stdout, "ONE_LINE_BODY_RAN");
+}
+
+test "scripting: a one-line function keeps every statement in its body" {
+    const allocator = std.testing.allocator;
+
+    var fixture = try test_utils.DenShellFixture.init(allocator);
+    defer fixture.deinit();
+
+    const result = try fixture.execDirect(
+        \\two() { echo FIRST; echo SECOND; }
+        \\two
+    );
+    defer allocator.free(result.stdout);
+    defer allocator.free(result.stderr);
+
+    try test_utils.TestAssert.expectContains(result.stdout, "FIRST");
+    try test_utils.TestAssert.expectContains(result.stdout, "SECOND");
+}
+
+// The body is split on its top-level semicolons, so a brace or a semicolon
+// inside a string must not be mistaken for structure.
+test "scripting: a one-line body is split quote-aware" {
+    const allocator = std.testing.allocator;
+
+    var fixture = try test_utils.DenShellFixture.init(allocator);
+    defer fixture.deinit();
+
+    const result = try fixture.execDirect(
+        \\s() { echo "x; y"; }
+        \\s
+    );
+    defer allocator.free(result.stdout);
+    defer allocator.free(result.stderr);
+
+    try test_utils.TestAssert.expectEqual(@as(u8, 0), result.exit_code);
+    try test_utils.TestAssert.expectContains(result.stdout, "x; y");
+}
+
+test "scripting: a one-line body keeps a whole control-flow construct together" {
+    const allocator = std.testing.allocator;
+
+    var fixture = try test_utils.DenShellFixture.init(allocator);
+    defer fixture.deinit();
+
+    const result = try fixture.execDirect(
+        \\c() { for i in 1 2; do echo "n=$i"; done; }
+        \\c
+    );
+    defer allocator.free(result.stdout);
+    defer allocator.free(result.stderr);
+
+    try test_utils.TestAssert.expectContains(result.stdout, "n=1");
+    try test_utils.TestAssert.expectContains(result.stdout, "n=2");
+}

@@ -232,25 +232,11 @@ pub fn handleMultilineContinuation(self: *Shell, trimmed: []const u8) !void {
     }
 }
 
-/// Check if a control flow keyword starts at position (preceded by start-of-string or whitespace/semicolon)
-fn isControlFlowWord(input: []const u8, pos: usize, keyword: []const u8) bool {
-    if (pos > 0 and input[pos - 1] != ' ' and input[pos - 1] != '\t' and input[pos - 1] != ';') return false;
-    if (pos + keyword.len > input.len) return false;
-    return std.mem.eql(u8, input[pos..][0..keyword.len], keyword);
-}
-
-/// Check if a control flow closer word is at position
-fn isControlFlowEnd(input: []const u8, pos: usize, word: []const u8) bool {
-    if (pos > 0 and input[pos - 1] != ' ' and input[pos - 1] != '\t' and input[pos - 1] != ';') return false;
-    if (pos + word.len > input.len) return false;
-    if (!std.mem.eql(u8, input[pos..][0..word.len], word)) return false;
-    // Must be followed by end, space, semicolon, or tab
-    if (pos + word.len < input.len) {
-        const next = input[pos + word.len];
-        return next == ' ' or next == '\t' or next == ';' or next == '\n';
-    }
-    return true;
-}
+// The two body-splitting paths - this one and the single-line parser in
+// `scripting/functions.zig` - have to agree about where a top level is, so
+// there is one implementation and it lives with the parser.
+const isControlFlowWord = functions.isControlFlowWord;
+const isControlFlowEnd = functions.isControlFlowEnd;
 
 /// Complete function definition parsing and register the function
 pub fn finishFunctionDefinition(self: *Shell) !void {
