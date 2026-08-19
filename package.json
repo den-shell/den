@@ -73,8 +73,8 @@
     "bench": "bun --bun benchmark/index.ts"
   },
   "devDependencies": {
-    "typescript": "^5.9.2",
-    "better-dx": "^0.2.15"
+    "better-dx": "^0.2.15",
+    "typescript": "^7.0.2"
   },
   "git-hooks": {
     "pre-commit": {
