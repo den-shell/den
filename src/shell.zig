@@ -215,15 +215,6 @@ fn getenv(key: []const u8) ?[]const u8 {
     return env_utils.getEnv(key);
 }
 
-/// Flush any pending bytes from stdin (non-blocking)
-extern "c" fn tcflush(fd: c_int, queue_selector: c_int) c_int;
-const TCIFLUSH = 1;
-
-fn flushStdin() void {
-    if (comptime builtin.os.tag == .windows) return;
-    _ = tcflush(std.posix.STDIN_FILENO, TCIFLUSH);
-}
-
 /// Ensure terminal is ready for prompt after a child process exits.
 /// Resets terminal attributes and moves to a fresh line.
 fn resetTerminalAfterChild() void {
@@ -1122,8 +1113,12 @@ pub const Shell = struct {
                 continue;
             }
 
-            // Expand history references (!, !!, !N, !-N, !string, ^old^new)
-            const maybe_expanded = self.history_expander.expand(trimmed, &self.history, self.history_count) catch |err| {
+            // Expand history references (!, !!, !N, !-N, !string, ^old^new).
+            // Pasted text is literal input and is left alone: a `!` in a
+            // pasted command is part of the command, not a history reference.
+            const was_pasted = if (self.line_editor) |*editor| self.is_interactive and editor.pasted else false;
+            const history_source: []const ?[]const u8 = if (was_pasted) &.{} else &self.history;
+            const maybe_expanded = self.history_expander.expand(trimmed, history_source, if (was_pasted) 0 else self.history_count) catch |err| {
                 IO.eprint("History expansion error: {}\n", .{err}) catch {};
                 // On error, continue with original command
                 if (!keep_private) try self.addToHistory(trimmed);
@@ -1163,9 +1158,10 @@ pub const Shell = struct {
                     var iter = std.mem.tokenizeAny(u8, command, " \t");
                     break :blk iter.next() orelse command;
                 };
-                // Check if it was an external command (not a builtin)
+                // Check if it was an external command (not a builtin). Input
+                // typed (or pasted) while it ran is kept for the next prompt,
+                // as every shell does; it is not flushed.
                 if (!executor_mod.Executor.isBuiltinName(first_word) and !self.aliases.contains(first_word)) {
-                    flushStdin();
                     resetTerminalAfterChild();
                 }
             }
