@@ -1,22 +1,6 @@
 const std = @import("std");
 const Shell = @import("../shell.zig").Shell;
-const control_flow = @import("control_flow.zig");
-const ControlFlowParser = control_flow.ControlFlowParser;
-const ControlFlowExecutor = control_flow.ControlFlowExecutor;
-
-/// Check if input contains a word (surrounded by word boundaries: start/end/space/semicolon)
-fn containsWord(input: []const u8, word: []const u8) bool {
-    var pos: usize = 0;
-    while (pos + word.len <= input.len) {
-        if (std.mem.eql(u8, input[pos..][0..word.len], word)) {
-            const at_start = pos == 0 or input[pos - 1] == ' ' or input[pos - 1] == ';' or input[pos - 1] == '\t';
-            const at_end = pos + word.len == input.len or input[pos + word.len] == ' ' or input[pos + word.len] == ';' or input[pos + word.len] == '\t' or input[pos + word.len] == '\n';
-            if (at_start and at_end) return true;
-        }
-        pos += 1;
-    }
-    return false;
-}
+const compound = @import("../parser/compound.zig");
 
 /// Typed parameter for custom commands (Phase 5.2)
 pub const TypedParam = struct {
@@ -251,113 +235,24 @@ pub const FunctionManager = struct {
 
         var exit_code: i32 = 0;
 
-        // Execute function body with control flow support
+        // Execute the body one complete command at a time. A line that opens
+        // a loop, `if`, `case` or group, or ends in `&&` or `|`, is joined with
+        // the lines that complete it; the shell runs compound commands
+        // wherever they appear in the command.
         var line_num: usize = 0;
-        var cf_parser = ControlFlowParser.init(self.allocator);
-        var cf_executor = ControlFlowExecutor.init(shell);
-
         while (line_num < func.body.len) {
-            const line = func.body[line_num];
-            const trimmed = std.mem.trim(u8, line, &std.ascii.whitespace);
-
+            const trimmed = std.mem.trim(u8, func.body[line_num], &std.ascii.whitespace);
             if (trimmed.len == 0 or trimmed[0] == '#') {
                 line_num += 1;
                 continue;
             }
 
-            // Check for control flow constructs
-            // One-liner detection: if the line contains both opener and closer
-            // (e.g., "for...done" or "if...fi"), treat as one-liner via executeCommand
-            const is_oneliner = (std.mem.startsWith(u8, trimmed, "for ") and
-                (containsWord(trimmed, "done") or containsWord(trimmed, "fi"))) or
-                (std.mem.startsWith(u8, trimmed, "while ") and containsWord(trimmed, "done")) or
-                (std.mem.startsWith(u8, trimmed, "until ") and containsWord(trimmed, "done")) or
-                (std.mem.startsWith(u8, trimmed, "if ") and containsWord(trimmed, "fi")) or
-                (std.mem.startsWith(u8, trimmed, "case ") and containsWord(trimmed, "esac"));
+            const collected = try compound.collectCommand(self.allocator, func.body, line_num);
+            defer if (collected.owned) self.allocator.free(collected.text);
+            line_num = collected.end + 1;
 
-            if (!is_oneliner) {
-                if (std.mem.startsWith(u8, trimmed, "if ") or std.mem.eql(u8, trimmed, "if")) {
-                    if (cf_parser.parseIf(func.body, line_num)) |result| {
-                        var stmt = result.stmt;
-                        // The parse owns its condition and every body line. The
-                        // top-level path has always freed them; this one never
-                        // did, so a function with a multi-line construct in it
-                        // leaked its own source on each call - loudly, because
-                        // the debug allocator reports it to stderr.
-                        defer stmt.deinit();
-                        exit_code = cf_executor.executeIf(&stmt) catch 1;
-                        line_num = result.end + 1;
-
-                        if (self.currentFrame()) |frame| {
-                            if (frame.return_requested) {
-                                return frame.return_code;
-                            }
-                        }
-                        continue;
-                    } else |_| {}
-                } else if (std.mem.startsWith(u8, trimmed, "while ") or std.mem.eql(u8, trimmed, "while")) {
-                    if (cf_parser.parseWhile(func.body, line_num, false)) |result| {
-                        var loop = result.loop;
-                        defer loop.deinit();
-                        exit_code = cf_executor.executeWhile(&loop) catch 1;
-                        line_num = result.end + 1;
-
-                        if (self.currentFrame()) |frame| {
-                            if (frame.return_requested) {
-                                return frame.return_code;
-                            }
-                        }
-                        continue;
-                    } else |_| {}
-                } else if (std.mem.startsWith(u8, trimmed, "until ") or std.mem.eql(u8, trimmed, "until")) {
-                    if (cf_parser.parseWhile(func.body, line_num, true)) |result| {
-                        var loop = result.loop;
-                        defer loop.deinit();
-                        exit_code = cf_executor.executeWhile(&loop) catch 1;
-                        line_num = result.end + 1;
-
-                        if (self.currentFrame()) |frame| {
-                            if (frame.return_requested) {
-                                return frame.return_code;
-                            }
-                        }
-                        continue;
-                    } else |_| {}
-                } else if (std.mem.startsWith(u8, trimmed, "for ") or std.mem.eql(u8, trimmed, "for")) {
-                    if (cf_parser.parseFor(func.body, line_num)) |result| {
-                        var loop = result.loop;
-                        defer loop.deinit();
-                        exit_code = cf_executor.executeFor(&loop) catch 1;
-                        line_num = result.end + 1;
-
-                        if (self.currentFrame()) |frame| {
-                            if (frame.return_requested) {
-                                return frame.return_code;
-                            }
-                        }
-                        continue;
-                    } else |_| {}
-                } else if (std.mem.startsWith(u8, trimmed, "case ")) {
-                    if (cf_parser.parseCase(func.body, line_num)) |result| {
-                        var stmt = result.stmt;
-                        defer stmt.deinit();
-                        exit_code = cf_executor.executeCase(&stmt) catch 1;
-                        line_num = result.end + 1;
-
-                        if (self.currentFrame()) |frame| {
-                            if (frame.return_requested) {
-                                return frame.return_code;
-                            }
-                        }
-                        continue;
-                    } else |_| {}
-                }
-            }
-
-            // Execute as regular command
-            shell.executeCommand(trimmed) catch {};
+            shell.executeCommand(collected.text) catch {};
             exit_code = shell.last_exit_code;
-            line_num += 1;
 
             // Check for return
             if (self.currentFrame()) |frame| {
@@ -365,6 +260,7 @@ pub const FunctionManager = struct {
                     return frame.return_code;
                 }
             }
+            if (shell.exit_requested) return exit_code;
 
             // Check errexit
             if (shell.option_errexit and exit_code != 0) {

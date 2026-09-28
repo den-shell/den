@@ -230,6 +230,22 @@ test "compound: groups and subshells inside loop bodies" {
     try expectRun("for i in 1 2; do ( echo s$i ); done", "s1\ns2\n", 0);
 }
 
+// ---- Newline-separated forms ----
+
+test "compound: newline-separated loops and conditionals" {
+    try expectRun("for i in 1 2\ndo\n  echo $i\ndone", "1\n2\n", 0);
+    try expectRun("x=1\nfor i in 1 2 3\ndo x=$((x*2))\ndone\necho $x", "8\n", 0);
+    try expectRun("cd /tmp &&\nfor i in 1 2; do echo $i; done", "1\n2\n", 0);
+    try expectRun("if true\nthen\n  echo y\nelif false\nthen\n  echo n\nfi", "y\n", 0);
+    try expectRun("case b in\n  a) echo A ;;\n  b)\n    echo B\n    ;;\nesac", "B\n", 0);
+    try expectRun(
+        "while true; do\n  for j in 1 2 3; do\n    if [ $j = 2 ]; then break 2; fi\n    echo $j\n  done\ndone\necho out",
+        "1\nout\n",
+        0,
+    );
+    try expectRun("{\necho a\necho b\n} | wc -l | tr -d ' '", "2\n", 0);
+}
+
 // ---- exit, return, errexit ----
 
 test "compound: exit inside a loop leaves the shell" {

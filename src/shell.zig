@@ -1072,7 +1072,19 @@ pub const Shell = struct {
                 } else {
                     // Non-interactive: render simple prompt and use basic readLine
                     try self.renderPrompt();
-                    break :blk try IO.readLine(self.allocator);
+                    const first = (try IO.readLine(self.allocator)) orelse break :blk null;
+                    // A command that goes on over several lines (an open loop,
+                    // `if`, `case`, group, quote, here-document or a trailing
+                    // `&&`/`|`) is read whole before it runs, as when typed.
+                    var joined: std.ArrayList(u8) = .fromOwnedSlice(first);
+                    errdefer joined.deinit(self.allocator);
+                    while (compound_parser.completeness(self.allocator, joined.items) == .incomplete) {
+                        const more = (try IO.readLine(self.allocator)) orelse break;
+                        defer self.allocator.free(more);
+                        try joined.append(self.allocator, '\n');
+                        try joined.appendSlice(self.allocator, more);
+                    }
+                    break :blk try joined.toOwnedSlice(self.allocator);
                 }
             };
 
