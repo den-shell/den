@@ -4,7 +4,7 @@
     // build.zig reads the binary's version from package.json, so the two must
     // not drift.
     .version = "0.2.3",
-    .minimum_zig_version = "0.17.0-dev.956+2dca73595",
+    .minimum_zig_version = "0.17.0-dev.2313+5b9147ed5",
     .fingerprint = 0x21f6953b2c78079,
     // Everything `zig build` needs. package.json is embedded by build.zig for
     // the version string, and the default install step builds the test runner,

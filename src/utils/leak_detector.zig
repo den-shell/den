@@ -61,7 +61,7 @@ pub const LeakDetector = struct {
             const addr = @intFromPtr(ptr);
             self.allocations.put(addr, .{
                 .size = len,
-                .stack_trace = if (builtin.mode == .Debug) std.debug.getSelfDebugInfo() catch null else null,
+                .stack_trace = if (builtin.mode == .debug) std.debug.getSelfDebugInfo() catch null else null,
                 .timestamp = std.time.milliTimestamp(),
             }) catch {};
 
@@ -206,7 +206,7 @@ pub const DebugAllocator = struct {
     enabled: bool,
 
     pub fn init(backing_allocator: std.mem.Allocator, enable_tracking: bool) DebugAllocator {
-        if (enable_tracking and builtin.mode == .Debug) {
+        if (enable_tracking and builtin.mode == .debug) {
             return .{
                 .inner = .{ .leak_detector = LeakDetector.init(backing_allocator) },
                 .enabled = true,
