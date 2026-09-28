@@ -27,4 +27,8 @@ fn run(allocator: std.mem.Allocator, args: std.process.Args) !void {
 
 test {
     std.testing.refAllDecls(@This());
+    // Modules whose tests no other step pulls in.
+    _ = @import("parser/compound.zig");
+    _ = @import("utils/syntax_highlight.zig");
+    _ = @import("utils/typo_correction.zig");
 }
