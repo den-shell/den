@@ -98,7 +98,7 @@ fn hasMode(io: std.Io, dir: std.Io.Dir, path: []const u8, bits: std.posix.mode_t
     const st = dir.statFile(io, path, .{}) catch return false;
     if (comptime builtin.os.tag == .windows) {
         if (bits == 0o444) return true;
-        if (bits == 0o222) return (@intFromEnum(st.permissions) & 1) == 0;
+        if (bits == 0o222) return (@backingInt(st.permissions) & 1) == 0;
         return false;
     }
     return (st.permissions.toMode() & bits) != 0;

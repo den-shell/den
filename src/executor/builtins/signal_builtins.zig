@@ -27,35 +27,35 @@ pub fn kill(_: std.mem.Allocator, command: *types.ParsedCommand) !i32 {
             [_]struct { num: u6, name: []const u8 }{}
         else
             [_]struct { num: u6, name: []const u8 }{
-                .{ .num = @intFromEnum(std.posix.SIG.HUP), .name = "HUP" },
-                .{ .num = @intFromEnum(std.posix.SIG.INT), .name = "INT" },
-                .{ .num = @intFromEnum(std.posix.SIG.QUIT), .name = "QUIT" },
-                .{ .num = @intFromEnum(std.posix.SIG.ILL), .name = "ILL" },
-                .{ .num = @intFromEnum(std.posix.SIG.TRAP), .name = "TRAP" },
-                .{ .num = @intFromEnum(std.posix.SIG.ABRT), .name = "ABRT" },
-                .{ .num = @intFromEnum(std.posix.SIG.BUS), .name = "BUS" },
-                .{ .num = @intFromEnum(std.posix.SIG.FPE), .name = "FPE" },
-                .{ .num = @intFromEnum(std.posix.SIG.KILL), .name = "KILL" },
-                .{ .num = @intFromEnum(std.posix.SIG.USR1), .name = "USR1" },
-                .{ .num = @intFromEnum(std.posix.SIG.SEGV), .name = "SEGV" },
-                .{ .num = @intFromEnum(std.posix.SIG.USR2), .name = "USR2" },
-                .{ .num = @intFromEnum(std.posix.SIG.PIPE), .name = "PIPE" },
-                .{ .num = @intFromEnum(std.posix.SIG.ALRM), .name = "ALRM" },
-                .{ .num = @intFromEnum(std.posix.SIG.TERM), .name = "TERM" },
-                .{ .num = @intFromEnum(std.posix.SIG.CHLD), .name = "CHLD" },
-                .{ .num = @intFromEnum(std.posix.SIG.CONT), .name = "CONT" },
-                .{ .num = @intFromEnum(std.posix.SIG.STOP), .name = "STOP" },
-                .{ .num = @intFromEnum(std.posix.SIG.TSTP), .name = "TSTP" },
-                .{ .num = @intFromEnum(std.posix.SIG.TTIN), .name = "TTIN" },
-                .{ .num = @intFromEnum(std.posix.SIG.TTOU), .name = "TTOU" },
-                .{ .num = @intFromEnum(std.posix.SIG.URG), .name = "URG" },
-                .{ .num = @intFromEnum(std.posix.SIG.XCPU), .name = "XCPU" },
-                .{ .num = @intFromEnum(std.posix.SIG.XFSZ), .name = "XFSZ" },
-                .{ .num = @intFromEnum(std.posix.SIG.VTALRM), .name = "VTALRM" },
-                .{ .num = @intFromEnum(std.posix.SIG.PROF), .name = "PROF" },
-                .{ .num = @intFromEnum(std.posix.SIG.WINCH), .name = "WINCH" },
-                .{ .num = @intFromEnum(std.posix.SIG.IO), .name = "IO" },
-                .{ .num = @intFromEnum(std.posix.SIG.SYS), .name = "SYS" },
+                .{ .num = @backingInt(std.posix.SIG.HUP), .name = "HUP" },
+                .{ .num = @backingInt(std.posix.SIG.INT), .name = "INT" },
+                .{ .num = @backingInt(std.posix.SIG.QUIT), .name = "QUIT" },
+                .{ .num = @backingInt(std.posix.SIG.ILL), .name = "ILL" },
+                .{ .num = @backingInt(std.posix.SIG.TRAP), .name = "TRAP" },
+                .{ .num = @backingInt(std.posix.SIG.ABRT), .name = "ABRT" },
+                .{ .num = @backingInt(std.posix.SIG.BUS), .name = "BUS" },
+                .{ .num = @backingInt(std.posix.SIG.FPE), .name = "FPE" },
+                .{ .num = @backingInt(std.posix.SIG.KILL), .name = "KILL" },
+                .{ .num = @backingInt(std.posix.SIG.USR1), .name = "USR1" },
+                .{ .num = @backingInt(std.posix.SIG.SEGV), .name = "SEGV" },
+                .{ .num = @backingInt(std.posix.SIG.USR2), .name = "USR2" },
+                .{ .num = @backingInt(std.posix.SIG.PIPE), .name = "PIPE" },
+                .{ .num = @backingInt(std.posix.SIG.ALRM), .name = "ALRM" },
+                .{ .num = @backingInt(std.posix.SIG.TERM), .name = "TERM" },
+                .{ .num = @backingInt(std.posix.SIG.CHLD), .name = "CHLD" },
+                .{ .num = @backingInt(std.posix.SIG.CONT), .name = "CONT" },
+                .{ .num = @backingInt(std.posix.SIG.STOP), .name = "STOP" },
+                .{ .num = @backingInt(std.posix.SIG.TSTP), .name = "TSTP" },
+                .{ .num = @backingInt(std.posix.SIG.TTIN), .name = "TTIN" },
+                .{ .num = @backingInt(std.posix.SIG.TTOU), .name = "TTOU" },
+                .{ .num = @backingInt(std.posix.SIG.URG), .name = "URG" },
+                .{ .num = @backingInt(std.posix.SIG.XCPU), .name = "XCPU" },
+                .{ .num = @backingInt(std.posix.SIG.XFSZ), .name = "XFSZ" },
+                .{ .num = @backingInt(std.posix.SIG.VTALRM), .name = "VTALRM" },
+                .{ .num = @backingInt(std.posix.SIG.PROF), .name = "PROF" },
+                .{ .num = @backingInt(std.posix.SIG.WINCH), .name = "WINCH" },
+                .{ .num = @backingInt(std.posix.SIG.IO), .name = "IO" },
+                .{ .num = @backingInt(std.posix.SIG.SYS), .name = "SYS" },
             };
 
         // If a signal number is given after -l, print just that signal name
@@ -175,7 +175,7 @@ pub fn kill(_: std.mem.Allocator, command: *types.ParsedCommand) !i32 {
     }
 
     // POSIX implementation
-    const default_sig: u8 = if (comptime builtin.os.tag == .windows) 15 else @intFromEnum(std.posix.SIG.TERM);
+    const default_sig: u8 = if (comptime builtin.os.tag == .windows) 15 else @backingInt(std.posix.SIG.TERM);
     var signal: u8 = explicit_signal orelse default_sig;
 
     // Parse signal if provided (and not already set via -s)
@@ -226,5 +226,5 @@ pub fn signalFromName(name: []const u8) ?u8 {
         return null;
     }
 
-    if (std.mem.eql(u8, name, "HUP")) return @intFromEnum(std.posix.SIG.HUP) else if (std.mem.eql(u8, name, "INT")) return @intFromEnum(std.posix.SIG.INT) else if (std.mem.eql(u8, name, "QUIT")) return @intFromEnum(std.posix.SIG.QUIT) else if (std.mem.eql(u8, name, "ILL")) return @intFromEnum(std.posix.SIG.ILL) else if (std.mem.eql(u8, name, "TRAP")) return @intFromEnum(std.posix.SIG.TRAP) else if (std.mem.eql(u8, name, "ABRT")) return @intFromEnum(std.posix.SIG.ABRT) else if (std.mem.eql(u8, name, "BUS")) return @intFromEnum(std.posix.SIG.BUS) else if (std.mem.eql(u8, name, "FPE")) return @intFromEnum(std.posix.SIG.FPE) else if (std.mem.eql(u8, name, "KILL")) return @intFromEnum(std.posix.SIG.KILL) else if (std.mem.eql(u8, name, "USR1")) return @intFromEnum(std.posix.SIG.USR1) else if (std.mem.eql(u8, name, "SEGV")) return @intFromEnum(std.posix.SIG.SEGV) else if (std.mem.eql(u8, name, "USR2")) return @intFromEnum(std.posix.SIG.USR2) else if (std.mem.eql(u8, name, "PIPE")) return @intFromEnum(std.posix.SIG.PIPE) else if (std.mem.eql(u8, name, "ALRM")) return @intFromEnum(std.posix.SIG.ALRM) else if (std.mem.eql(u8, name, "TERM")) return @intFromEnum(std.posix.SIG.TERM) else if (std.mem.eql(u8, name, "CHLD")) return @intFromEnum(std.posix.SIG.CHLD) else if (std.mem.eql(u8, name, "CONT")) return @intFromEnum(std.posix.SIG.CONT) else if (std.mem.eql(u8, name, "STOP")) return @intFromEnum(std.posix.SIG.STOP) else if (std.mem.eql(u8, name, "TSTP")) return @intFromEnum(std.posix.SIG.TSTP) else if (std.mem.eql(u8, name, "TTIN")) return @intFromEnum(std.posix.SIG.TTIN) else if (std.mem.eql(u8, name, "TTOU")) return @intFromEnum(std.posix.SIG.TTOU) else if (std.mem.eql(u8, name, "URG")) return @intFromEnum(std.posix.SIG.URG) else if (std.mem.eql(u8, name, "XCPU")) return @intFromEnum(std.posix.SIG.XCPU) else if (std.mem.eql(u8, name, "XFSZ")) return @intFromEnum(std.posix.SIG.XFSZ) else if (std.mem.eql(u8, name, "VTALRM")) return @intFromEnum(std.posix.SIG.VTALRM) else if (std.mem.eql(u8, name, "PROF")) return @intFromEnum(std.posix.SIG.PROF) else if (std.mem.eql(u8, name, "WINCH")) return @intFromEnum(std.posix.SIG.WINCH) else if (std.mem.eql(u8, name, "IO")) return @intFromEnum(std.posix.SIG.IO) else if (std.mem.eql(u8, name, "SYS")) return @intFromEnum(std.posix.SIG.SYS) else return null;
+    if (std.mem.eql(u8, name, "HUP")) return @backingInt(std.posix.SIG.HUP) else if (std.mem.eql(u8, name, "INT")) return @backingInt(std.posix.SIG.INT) else if (std.mem.eql(u8, name, "QUIT")) return @backingInt(std.posix.SIG.QUIT) else if (std.mem.eql(u8, name, "ILL")) return @backingInt(std.posix.SIG.ILL) else if (std.mem.eql(u8, name, "TRAP")) return @backingInt(std.posix.SIG.TRAP) else if (std.mem.eql(u8, name, "ABRT")) return @backingInt(std.posix.SIG.ABRT) else if (std.mem.eql(u8, name, "BUS")) return @backingInt(std.posix.SIG.BUS) else if (std.mem.eql(u8, name, "FPE")) return @backingInt(std.posix.SIG.FPE) else if (std.mem.eql(u8, name, "KILL")) return @backingInt(std.posix.SIG.KILL) else if (std.mem.eql(u8, name, "USR1")) return @backingInt(std.posix.SIG.USR1) else if (std.mem.eql(u8, name, "SEGV")) return @backingInt(std.posix.SIG.SEGV) else if (std.mem.eql(u8, name, "USR2")) return @backingInt(std.posix.SIG.USR2) else if (std.mem.eql(u8, name, "PIPE")) return @backingInt(std.posix.SIG.PIPE) else if (std.mem.eql(u8, name, "ALRM")) return @backingInt(std.posix.SIG.ALRM) else if (std.mem.eql(u8, name, "TERM")) return @backingInt(std.posix.SIG.TERM) else if (std.mem.eql(u8, name, "CHLD")) return @backingInt(std.posix.SIG.CHLD) else if (std.mem.eql(u8, name, "CONT")) return @backingInt(std.posix.SIG.CONT) else if (std.mem.eql(u8, name, "STOP")) return @backingInt(std.posix.SIG.STOP) else if (std.mem.eql(u8, name, "TSTP")) return @backingInt(std.posix.SIG.TSTP) else if (std.mem.eql(u8, name, "TTIN")) return @backingInt(std.posix.SIG.TTIN) else if (std.mem.eql(u8, name, "TTOU")) return @backingInt(std.posix.SIG.TTOU) else if (std.mem.eql(u8, name, "URG")) return @backingInt(std.posix.SIG.URG) else if (std.mem.eql(u8, name, "XCPU")) return @backingInt(std.posix.SIG.XCPU) else if (std.mem.eql(u8, name, "XFSZ")) return @backingInt(std.posix.SIG.XFSZ) else if (std.mem.eql(u8, name, "VTALRM")) return @backingInt(std.posix.SIG.VTALRM) else if (std.mem.eql(u8, name, "PROF")) return @backingInt(std.posix.SIG.PROF) else if (std.mem.eql(u8, name, "WINCH")) return @backingInt(std.posix.SIG.WINCH) else if (std.mem.eql(u8, name, "IO")) return @backingInt(std.posix.SIG.IO) else if (std.mem.eql(u8, name, "SYS")) return @backingInt(std.posix.SIG.SYS) else return null;
 }

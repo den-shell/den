@@ -389,7 +389,7 @@ pub const PluginRegistry = struct {
             .allocator = self.allocator,
         };
 
-        const index = @intFromEnum(hook_type);
+        const index = @backingInt(hook_type);
         try self.hooks[index].append(self.allocator, hook);
 
         // Sort by priority
@@ -439,7 +439,7 @@ pub const PluginRegistry = struct {
 
     /// Execute hooks of a specific type
     pub fn executeHooks(self: *PluginRegistry, hook_type: HookType, context: *HookContext) !void {
-        const index = @intFromEnum(hook_type);
+        const index = @backingInt(hook_type);
         for (self.hooks[index].items) |hook| {
             if (hook.enabled) {
                 hook.function(context) catch |err| {
@@ -475,7 +475,7 @@ pub const PluginRegistry = struct {
     /// (i.e., completed without error). Used for command_not_found to allow hooks to
     /// handle missing commands before the shell prints an error.
     pub fn executeHooksHandled(self: *PluginRegistry, hook_type: HookType, context: *HookContext) bool {
-        const index = @intFromEnum(hook_type);
+        const index = @backingInt(hook_type);
         var handled = false;
         for (self.hooks[index].items) |hook| {
             if (hook.enabled) {
@@ -761,8 +761,8 @@ test "findMatchingHooks supports many hooks (beyond old 32 limit)" {
 }
 
 test "HookType enum values" {
-    try std.testing.expectEqual(@as(u32, 0), @intFromEnum(HookType.pre_command));
-    try std.testing.expectEqual(@as(u32, 1), @intFromEnum(HookType.post_command));
+    try std.testing.expectEqual(@as(u32, 0), @backingInt(HookType.pre_command));
+    try std.testing.expectEqual(@as(u32, 1), @backingInt(HookType.post_command));
 }
 
 test "CustomHook fields" {

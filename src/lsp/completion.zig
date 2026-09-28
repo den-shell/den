@@ -30,7 +30,7 @@ pub const CompletionItemKind = enum(u8) {
     operator = 24,
 
     pub fn toInt(self: CompletionItemKind) u8 {
-        return @intFromEnum(self);
+        return @backingInt(self);
     }
 };
 

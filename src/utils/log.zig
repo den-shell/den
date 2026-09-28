@@ -104,7 +104,7 @@ pub const Logger = struct {
         defer self.mutex.unlock();
 
         // Check if we should log this level
-        if (@intFromEnum(level) < @intFromEnum(self.config.level)) {
+        if (@backingInt(level) < @backingInt(self.config.level)) {
             return;
         }
 

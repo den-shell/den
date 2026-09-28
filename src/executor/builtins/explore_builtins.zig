@@ -1059,8 +1059,8 @@ const RawTerminal = struct {
 
         termios.cflag.CSIZE = .CS8;
 
-        termios.cc[@intFromEnum(std.posix.V.MIN)] = 0;
-        termios.cc[@intFromEnum(std.posix.V.TIME)] = 1; // 100ms timeout
+        termios.cc[@backingInt(std.posix.V.MIN)] = 0;
+        termios.cc[@backingInt(std.posix.V.TIME)] = 1; // 100ms timeout
 
         try std.posix.tcsetattr(fd, .FLUSH, termios);
     }

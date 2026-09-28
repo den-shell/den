@@ -130,7 +130,7 @@ fn intoDatetime(allocator: std.mem.Allocator, input: []const u8) !i32 {
 
         const result = try std.fmt.allocPrint(allocator, "{d}-{d:0>2}-{d:0>2} {d:0>2}:{d:0>2}:{d:0>2}", .{
             yd.year,
-            @intFromEnum(month),
+            @backingInt(month),
             day_of_month,
             day.getHoursIntoDay(),
             day.getMinutesIntoHour(),

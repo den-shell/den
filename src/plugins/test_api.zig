@@ -49,7 +49,7 @@ test "PluginAPI - register hook" {
 
     try plugin_api.registerHook(.pre_command, testHook, 0);
 
-    const index = @intFromEnum(interface_mod.HookType.pre_command);
+    const index = @backingInt(interface_mod.HookType.pre_command);
     try std.testing.expectEqual(@as(usize, 1), registry.hooks[index].items.len);
 }
 
@@ -67,8 +67,8 @@ test "PluginAPI - unregister hooks" {
 
     plugin_api.unregisterHooks();
 
-    const pre_index = @intFromEnum(interface_mod.HookType.pre_command);
-    const post_index = @intFromEnum(interface_mod.HookType.post_command);
+    const pre_index = @backingInt(interface_mod.HookType.pre_command);
+    const post_index = @backingInt(interface_mod.HookType.post_command);
     try std.testing.expectEqual(@as(usize, 0), registry.hooks[pre_index].items.len);
     try std.testing.expectEqual(@as(usize, 0), registry.hooks[post_index].items.len);
 }
@@ -329,7 +329,7 @@ test "PluginContext - convenience methods" {
     try ctx.command("test", "Test command", testCommand);
     try ctx.completion("test:", testCompletion);
 
-    const index = @intFromEnum(interface_mod.HookType.pre_command);
+    const index = @backingInt(interface_mod.HookType.pre_command);
     try std.testing.expectEqual(@as(usize, 1), registry.hooks[index].items.len);
     try std.testing.expectEqual(@as(usize, 1), registry.commands.count());
     try std.testing.expectEqual(@as(usize, 1), registry.completions.items.len);

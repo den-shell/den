@@ -74,9 +74,9 @@ pub const Terminal = struct {
         raw.cflag.CSIZE = .CS8;
 
         // Minimum number of characters for non-canonical read
-        raw.cc[@intFromEnum(std.posix.V.MIN)] = 0;
+        raw.cc[@backingInt(std.posix.V.MIN)] = 0;
         // Timeout in deciseconds for non-canonical read
-        raw.cc[@intFromEnum(std.posix.V.TIME)] = 1;
+        raw.cc[@backingInt(std.posix.V.TIME)] = 1;
 
         // Apply the settings. TCSANOW, not TCSAFLUSH: flushing discarded input
         // that was already queued - the rest of a multi-line paste from a

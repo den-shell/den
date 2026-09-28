@@ -357,8 +357,8 @@ fn doConnect(sock: std.posix.socket_t, addr: *const std.c.sockaddr, addrlen: std
         if (connect_result >= 0) return true;
 
         const errno = std.c._errno().*;
-        if (errno == @intFromEnum(std.c.E.INTR)) continue; // EINTR - retry
-        if (errno == @intFromEnum(std.c.E.ISCONN)) return true; // EISCONN - already connected
+        if (errno == @backingInt(std.c.E.INTR)) continue; // EINTR - retry
+        if (errno == @backingInt(std.c.E.ISCONN)) return true; // EISCONN - already connected
         return false;
     }
     return false;
@@ -514,8 +514,8 @@ test "parseIPv6 edge cases" {
 test "errno constants are portable" {
     // Verify the errno values we use are properly defined
     // This test ensures the fix from magic numbers (4, 56) to portable enums works
-    const eintr = @intFromEnum(std.c.E.INTR);
-    const eisconn = @intFromEnum(std.c.E.ISCONN);
+    const eintr = @backingInt(std.c.E.INTR);
+    const eisconn = @backingInt(std.c.E.ISCONN);
     try std.testing.expect(eintr > 0);
     try std.testing.expect(eisconn > 0);
     try std.testing.expect(eintr != eisconn);

@@ -166,7 +166,7 @@ pub fn builtinKill(self: *Shell, cmd: *types.ParsedCommand) !void {
                 signal = .CONT;
             } else if (std.fmt.parseInt(u32, sig_arg[1..], 10)) |sig_num| {
                 // Try to parse as number (e.g., -9)
-                signal = @enumFromInt(sig_num);
+                signal = @fromBackingInt(@intCast(sig_num));
             } else |_| {
                 try IO.eprint("den: kill: {s}: invalid signal specification\n", .{sig_name});
                 self.last_exit_code = 1;

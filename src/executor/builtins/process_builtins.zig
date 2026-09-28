@@ -327,7 +327,7 @@ pub fn timeout(_: std.mem.Allocator, command: *types.ParsedCommand) !i32 {
             if (std.posix.W.IFEXITED(poll_status_u32)) {
                 return @intCast(std.posix.W.EXITSTATUS(poll_status_u32));
             } else if (std.posix.W.IFSIGNALED(poll_status_u32)) {
-                return 128 + @as(i32, @intCast(@intFromEnum(std.posix.W.TERMSIG(poll_status_u32))));
+                return 128 + @as(i32, @intCast(@backingInt(std.posix.W.TERMSIG(poll_status_u32))));
             }
             return 1;
         }
@@ -365,7 +365,7 @@ pub fn timeout(_: std.mem.Allocator, command: *types.ParsedCommand) !i32 {
                 if (std.posix.W.IFEXITED(final_status_u32)) {
                     return @intCast(std.posix.W.EXITSTATUS(final_status_u32));
                 } else if (std.posix.W.IFSIGNALED(final_status_u32)) {
-                    return 128 + @as(i32, @intCast(@intFromEnum(std.posix.W.TERMSIG(final_status_u32))));
+                    return 128 + @as(i32, @intCast(@backingInt(std.posix.W.TERMSIG(final_status_u32))));
                 }
             }
             return 124; // Standard timeout exit code
@@ -424,7 +424,7 @@ pub fn parseSignalName(name: []const u8) if (builtin.os.tag == .windows) u0 else
 
     // Handle numeric signal
     if (std.fmt.parseInt(u6, name, 10)) |num| {
-        return @enumFromInt(num);
+        return @fromBackingInt(@intCast(num));
     } else |_| {}
 
     // Remove SIG prefix if present

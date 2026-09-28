@@ -201,7 +201,7 @@ pub const Builder = struct {
     /// Set text style
     pub fn style(self: *Builder, s: Style) !void {
         var buf: [16]u8 = undefined;
-        const result = try std.fmt.bufPrint(&buf, CSI ++ "{d}m", .{@intFromEnum(s)});
+        const result = try std.fmt.bufPrint(&buf, CSI ++ "{d}m", .{@backingInt(s)});
         try self.buffer.appendSlice(self.allocator, result);
     }
 
@@ -612,8 +612,8 @@ pub const RawMode = struct {
         termios.cflag.CSIZE = .CS8;
 
         // Set minimum read size and timeout
-        termios.cc[@intFromEnum(std.posix.V.MIN)] = 0;
-        termios.cc[@intFromEnum(std.posix.V.TIME)] = 1;
+        termios.cc[@backingInt(std.posix.V.MIN)] = 0;
+        termios.cc[@backingInt(std.posix.V.TIME)] = 1;
 
         try std.posix.tcsetattr(stdin_fd, .FLUSH, termios);
     }

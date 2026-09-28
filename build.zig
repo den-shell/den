@@ -487,6 +487,8 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
     expansion_test_module.addImport("compat", compat_module);
+    // src/shell.zig reads the version from build_options.
+    expansion_test_module.addOptions("build_options", build_options);
 
     const expansion_tests = b.addTest(.{
         .root_module = expansion_test_module,

@@ -55,9 +55,9 @@ fn waitProcessPosix(pid: std.posix.pid_t, options: struct { no_hang: bool = fals
 
     const signaled = std.posix.W.IFSIGNALED(status_u32);
     return WaitResult{
-        .status = if (signaled) 128 + @as(i32, @intCast(@intFromEnum(std.posix.W.TERMSIG(status_u32)))) else @as(i32, std.posix.W.EXITSTATUS(status_u32)),
+        .status = if (signaled) 128 + @as(i32, @intCast(@backingInt(std.posix.W.TERMSIG(status_u32)))) else @as(i32, std.posix.W.EXITSTATUS(status_u32)),
         .signaled = signaled,
-        .signal = if (signaled) @as(u8, @intCast(@intFromEnum(std.posix.W.TERMSIG(status_u32)))) else null,
+        .signal = if (signaled) @as(u8, @intCast(@backingInt(std.posix.W.TERMSIG(status_u32)))) else null,
     };
 }
 

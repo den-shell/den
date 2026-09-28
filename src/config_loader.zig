@@ -1050,7 +1050,7 @@ test "ConfigSource default source" {
 }
 
 test "ConfigSource enum variants" {
-    try std.testing.expectEqual(@as(u32, 0), @intFromEnum(ConfigSource.SourceType.default));
+    try std.testing.expectEqual(@as(u32, 0), @backingInt(ConfigSource.SourceType.default));
 }
 
 test "DenConfig default values are reasonable" {

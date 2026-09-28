@@ -539,7 +539,7 @@ pub const Executor = struct {
             }
             const raw: u32 = @bitCast(wait_status);
             const status: i32 = if (std.posix.W.IFSIGNALED(raw))
-                128 + @as(i32, @intCast(@intFromEnum(std.posix.W.TERMSIG(raw))))
+                128 + @as(i32, @intCast(@backingInt(std.posix.W.TERMSIG(raw))))
             else
                 @intCast(std.posix.W.EXITSTATUS(raw));
             last_status = status;
@@ -1768,7 +1768,7 @@ pub const Executor = struct {
                 _ = process.waitpidIntr(pid, &wait_status_exec, 0);
                 const raw: u32 = @bitCast(wait_status_exec);
                 if (std.posix.W.IFSIGNALED(raw)) {
-                    return 128 + @as(i32, @intCast(@intFromEnum(std.posix.W.TERMSIG(raw))));
+                    return 128 + @as(i32, @intCast(@backingInt(std.posix.W.TERMSIG(raw))));
                 } else {
                     return @intCast(std.posix.W.EXITSTATUS(raw));
                 }
