@@ -125,9 +125,7 @@ pub const builtinShift = eval_builtins.builtinShift;
 pub const builtinBuiltin = eval_builtins.builtinBuiltin;
 
 // Re-export loop execution functions
-pub const executeCStyleForLoopOneline = loop_execution.executeCStyleForLoopOneline;
 pub const executeCStyleLoopBodyCommand = loop_execution.executeCStyleLoopBodyCommand;
-pub const executeWithCStyleForLoop = loop_execution.executeWithCStyleForLoop;
 pub const executeSelectLoop = loop_execution.executeSelectLoop;
 pub const executeSelectBody = loop_execution.executeSelectBody;
 pub const executeArithmeticStatement = loop_execution.executeArithmeticStatement;

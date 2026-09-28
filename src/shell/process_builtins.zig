@@ -50,6 +50,7 @@ pub fn builtinExec(self: *Shell, cmd: *types.ParsedCommand) !void {
 
     // Mark shell as not running to exit after this command
     self.running = false;
+    self.exit_requested = true;
 }
 
 /// Builtin: kill - send signal to job or process

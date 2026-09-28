@@ -612,9 +612,12 @@ pub fn builtinBreak(shell: *Shell, cmd: *types.ParsedCommand) !void {
     else
         1;
 
-    // Signal break to the loop with the number of levels to break
-    shell.break_levels = if (levels > 0) levels else 1;
     shell.last_exit_code = 0;
+    // Outside any loop there is nothing to leave; sh ignores it.
+    if (shell.loop_depth == 0) return;
+    // Signal break to the loop with the number of levels to break, never more
+    // levels than there are loops.
+    shell.break_levels = @min(if (levels > 0) levels else 1, shell.loop_depth);
 }
 
 /// Builtin: continue - skip to next loop iteration
@@ -625,7 +628,8 @@ pub fn builtinContinue(shell: *Shell, cmd: *types.ParsedCommand) !void {
     else
         1;
 
-    // Signal continue to the loop with the number of levels
-    shell.continue_levels = if (levels > 0) levels else 1;
     shell.last_exit_code = 0;
+    if (shell.loop_depth == 0) return;
+    // Signal continue to the loop with the number of levels
+    shell.continue_levels = @min(if (levels > 0) levels else 1, shell.loop_depth);
 }

@@ -188,6 +188,48 @@ pub const CaseClause = struct {
     terminator: CaseTerminator = .normal,
 };
 
+/// Turn a case pattern (already expanded, quotes still in place) into a glob
+/// for `globMatch`: quotes are removed and every glob character they protected
+/// is backslash-escaped, so it only matches itself.
+pub fn quotedPatternToGlob(allocator: std.mem.Allocator, pattern: []const u8) ![]const u8 {
+    if (std.mem.indexOfAny(u8, pattern, "'\"\\") == null) return pattern;
+    var out: std.ArrayList(u8) = .empty;
+    errdefer out.deinit(allocator);
+    var in_single = false;
+    var in_double = false;
+    var i: usize = 0;
+    while (i < pattern.len) : (i += 1) {
+        const c = pattern[i];
+        if (in_single) {
+            if (c == '\'') {
+                in_single = false;
+                continue;
+            }
+        } else if (c == '\'' and !in_double) {
+            in_single = true;
+            continue;
+        } else if (c == '"') {
+            in_double = !in_double;
+            continue;
+        } else if (c == '\\' and i + 1 < pattern.len) {
+            // Keep an escape as an escape; inside double quotes only \ " $ `
+            // are escapes, anything else is a literal backslash.
+            const next = pattern[i + 1];
+            if (!in_double or next == '\\' or next == '"' or next == '$' or next == '`') {
+                i += 1;
+                try out.append(allocator, '\\');
+                try out.append(allocator, next);
+                continue;
+            }
+        }
+        if ((in_single or in_double) and (c == '*' or c == '?' or c == '[' or c == ']' or c == '\\')) {
+            try out.append(allocator, '\\');
+        }
+        try out.append(allocator, c);
+    }
+    return out.toOwnedSlice(allocator);
+}
+
 /// Control flow executor
 pub const ControlFlowExecutor = struct {
     shell: *Shell,
@@ -233,9 +275,12 @@ pub const ControlFlowExecutor = struct {
     /// Execute while loop
     pub fn executeWhile(self: *ControlFlowExecutor, loop: *WhileLoop) !i32 {
         var last_exit: i32 = 0;
+        self.shell.loop_depth += 1;
+        defer self.shell.loop_depth -= 1;
 
         while (true) {
             const condition_result = self.evaluateCondition(loop.condition);
+            if (self.unwinding()) return last_exit;
 
             // For while: continue if true, for until: continue if false
             const should_continue = if (loop.is_until) !condition_result else condition_result;
@@ -243,6 +288,7 @@ pub const ControlFlowExecutor = struct {
             if (!should_continue) break;
 
             last_exit = self.executeBody(loop.body);
+            if (self.unwinding()) return last_exit;
 
             // Check for break
             if (self.break_levels > 0) {
@@ -271,6 +317,8 @@ pub const ControlFlowExecutor = struct {
     /// Supports: `for i in a b c`, `for i in ${arr[@]}`, `for i in "${arr[@]}"`
     pub fn executeFor(self: *ControlFlowExecutor, loop: *ForLoop) !i32 {
         var last_exit: i32 = 0;
+        self.shell.loop_depth += 1;
+        defer self.shell.loop_depth -= 1;
 
         // Expand each item (handles array variables like ${arr[@]})
         var expanded_items = std.ArrayList([]const u8).empty;
@@ -410,9 +458,16 @@ pub const ControlFlowExecutor = struct {
             }
         }
 
-        // Glob-expand items that contain glob characters (unquoted)
+        // Glob-expand items that contain glob characters (unquoted). The
+        // matches are owned here; items kept as they are stay owned by
+        // expanded_items, which frees them.
         var glob_expanded: std.ArrayListUnmanaged([]const u8) = .empty;
         defer glob_expanded.deinit(self.allocator);
+        var glob_matches: std.ArrayListUnmanaged([]const u8) = .empty;
+        defer {
+            for (glob_matches.items) |m| self.allocator.free(m);
+            glob_matches.deinit(self.allocator);
+        }
         // Get cwd for glob expansion
         var cwd_buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
         const cwd_ptr = std.c.getcwd(&cwd_buf, cwd_buf.len);
@@ -432,10 +487,13 @@ pub const ControlFlowExecutor = struct {
                     try glob_expanded.append(self.allocator, ei);
                     self.allocator.free(matches[0]);
                 } else {
+                    // `ei` stays in expanded_items and is freed with it; freeing
+                    // it here as well was a double free.
+                    try glob_matches.ensureUnusedCapacity(self.allocator, matches.len);
                     for (matches) |m| {
+                        glob_matches.appendAssumeCapacity(m);
                         try glob_expanded.append(self.allocator, m);
                     }
-                    self.allocator.free(ei);
                 }
             } else {
                 try glob_expanded.append(self.allocator, ei);
@@ -460,6 +518,7 @@ pub const ControlFlowExecutor = struct {
             }
 
             last_exit = self.executeBody(loop.body);
+            if (self.unwinding()) return last_exit;
 
             // Check for break
             if (self.break_levels > 0) {
@@ -487,6 +546,8 @@ pub const ControlFlowExecutor = struct {
     /// Execute C-style for loop: for ((init; condition; update))
     pub fn executeCStyleFor(self: *ControlFlowExecutor, loop: *CStyleForLoop) !i32 {
         var last_exit: i32 = 0;
+        self.shell.loop_depth += 1;
+        defer self.shell.loop_depth -= 1;
 
         // Execute initialization (if present)
         if (loop.init) |init_stmt| {
@@ -503,6 +564,7 @@ pub const ControlFlowExecutor = struct {
 
             // Execute body
             last_exit = self.executeBody(loop.body);
+            if (self.unwinding()) return last_exit;
 
             // Check for break
             if (self.break_levels > 0) {
@@ -535,6 +597,8 @@ pub const ControlFlowExecutor = struct {
     /// Execute select menu for interactive selection
     pub fn executeSelect(self: *ControlFlowExecutor, menu: *SelectMenu) !i32 {
         var last_exit: i32 = 0;
+        self.shell.loop_depth += 1;
+        defer self.shell.loop_depth -= 1;
         const stdin_handle = if (comptime builtin.os.tag == .windows) @import("windows_compat").GetStdHandle(@import("windows_compat").STD_INPUT_HANDLE) orelse return error.Unexpected else std.posix.STDIN_FILENO;
         const stderr_handle = if (comptime builtin.os.tag == .windows) @import("windows_compat").GetStdHandle(@import("windows_compat").STD_ERROR_HANDLE) orelse return error.Unexpected else std.posix.STDERR_FILENO;
         const stdin_file = std.Io.File{ .handle = stdin_handle, .flags = .{ .nonblocking = false } };
@@ -608,6 +672,7 @@ pub const ControlFlowExecutor = struct {
 
             // Execute body
             last_exit = self.executeBody(menu.body);
+            if (self.unwinding()) return last_exit;
 
             // Check for break
             if (self.break_levels > 0) {
@@ -661,7 +726,9 @@ pub const ControlFlowExecutor = struct {
                 for (case_clause.patterns) |pattern| {
                     const expanded_pattern = self.expandValue(pattern) catch pattern;
                     defer if (expanded_pattern.ptr != pattern.ptr) self.allocator.free(expanded_pattern);
-                    const unquoted_pattern = removeQuotes(self.allocator, expanded_pattern) catch expanded_pattern;
+                    // Quoted parts of a pattern match literally: `"a*"` is the
+                    // two characters a and *, not a glob.
+                    const unquoted_pattern = quotedPatternToGlob(self.allocator, expanded_pattern) catch expanded_pattern;
                     defer if (unquoted_pattern.ptr != expanded_pattern.ptr) self.allocator.free(unquoted_pattern);
                     if (try self.matchPattern(expanded_value, unquoted_pattern)) {
                         matched = true;
@@ -802,6 +869,16 @@ pub const ControlFlowExecutor = struct {
         return std.fmt.parseInt(i64, t, 10) catch null;
     }
 
+    /// Whether an `exit`, or a `return` from the running function, is
+    /// unwinding: no further command of the body or iteration may run.
+    fn unwinding(self: *ControlFlowExecutor) bool {
+        if (self.shell.exit_requested) return true;
+        if (self.shell.function_manager.currentFrame()) |frame| {
+            if (frame.return_requested) return true;
+        }
+        return false;
+    }
+
     /// Execute a body of commands
     pub fn executeBody(self: *ControlFlowExecutor, body: [][]const u8) i32 {
         var last_exit: i32 = 0;
@@ -812,25 +889,29 @@ pub const ControlFlowExecutor = struct {
 
             // Check for break (with optional level)
             if (std.mem.eql(u8, trimmed, "break") or std.mem.startsWith(u8, trimmed, "break ")) {
+                // Outside any loop `break` does nothing, as in sh.
+                if (self.shell.loop_depth == 0) continue;
+                var levels: u32 = 1;
                 if (std.mem.startsWith(u8, trimmed, "break ")) {
                     const level_str = std.mem.trim(u8, trimmed[6..], &std.ascii.whitespace);
-                    self.break_levels = std.fmt.parseInt(u32, level_str, 10) catch 1;
-                    if (self.break_levels == 0) self.break_levels = 1;
-                } else {
-                    self.break_levels = 1;
+                    levels = std.fmt.parseInt(u32, level_str, 10) catch 1;
+                    if (levels == 0) levels = 1;
                 }
+                // `break 5` inside two loops leaves both, and nothing more.
+                self.break_levels = @min(levels, self.shell.loop_depth);
                 return 0;
             }
 
             // Check for continue (with optional level)
             if (std.mem.eql(u8, trimmed, "continue") or std.mem.startsWith(u8, trimmed, "continue ")) {
+                if (self.shell.loop_depth == 0) continue;
+                var levels: u32 = 1;
                 if (std.mem.startsWith(u8, trimmed, "continue ")) {
                     const level_str = std.mem.trim(u8, trimmed[9..], &std.ascii.whitespace);
-                    self.continue_levels = std.fmt.parseInt(u32, level_str, 10) catch 1;
-                    if (self.continue_levels == 0) self.continue_levels = 1;
-                } else {
-                    self.continue_levels = 1;
+                    levels = std.fmt.parseInt(u32, level_str, 10) catch 1;
+                    if (levels == 0) levels = 1;
                 }
+                self.continue_levels = @min(levels, self.shell.loop_depth);
                 return 0;
             }
 
@@ -855,6 +936,9 @@ pub const ControlFlowExecutor = struct {
             if (self.break_levels > 0 or self.continue_levels > 0) {
                 return last_exit;
             }
+
+            // `exit`, or `return` from the function this body runs in.
+            if (self.unwinding()) return last_exit;
 
             // Check errexit
             if (self.shell.option_errexit and last_exit != 0) {
@@ -967,6 +1051,11 @@ pub const ControlFlowExecutor = struct {
                 if (negate) matched_class = !matched_class;
                 if (!matched_class) return false;
                 s += 1;
+            } else if (pattern[p] == '\\' and p + 1 < pattern.len) {
+                // Escaped character: matches itself only.
+                if (s >= str.len or str[s] != pattern[p + 1]) return false;
+                s += 1;
+                p += 2;
             } else {
                 if (s >= str.len or str[s] != pattern[p]) return false;
                 s += 1;

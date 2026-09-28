@@ -886,6 +886,23 @@ pub fn build(b: *std.Build) void {
     const chaining_test_step = b.step("test-chaining", "Run chaining integration tests");
     chaining_test_step.dependOn(&run_chaining_tests.step);
 
+    // Compound commands (for/while/until/if/case, groups, subshells) run by
+    // the den binary itself, so the binary must be built first.
+    const compound_test_module = b.createModule(.{
+        .root_source_file = b.path("tests/test_compound_commands.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+
+    const compound_tests = b.addTest(.{
+        .root_module = compound_test_module,
+    });
+
+    const run_compound_tests = b.addRunArtifact(compound_tests);
+    run_compound_tests.step.dependOn(b.getInstallStep());
+    const compound_test_step = b.step("test-compound", "Run compound command integration tests (den -c)");
+    compound_test_step.dependOn(&run_compound_tests.step);
+
     // Scripting integration tests
     const scripting_test_module = b.createModule(.{
         .root_source_file = b.path("tests/test_scripting.zig"),
@@ -971,6 +988,7 @@ pub fn build(b: *std.Build) void {
     all_tests_step.dependOn(&run_completion_tests.step);
     all_tests_step.dependOn(&run_pipeline_tests.step);
     all_tests_step.dependOn(&run_chaining_tests.step);
+    all_tests_step.dependOn(&run_compound_tests.step);
     all_tests_step.dependOn(&run_scripting_tests.step);
     all_tests_step.dependOn(&run_repl_tests.step);
     all_tests_step.dependOn(&run_shell_integration_tests.step);

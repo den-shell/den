@@ -1,9 +1,11 @@
 //! Loop Execution Module
 //!
 //! This module implements shell loop constructs:
-//! - C-style for loops: for ((init; cond; update)); do body; done
 //! - Select loops: select VAR in items; do body; done
 //! - Arithmetic evaluation for loop conditions
+//!
+//! `for ((init; cond; update))` runs on the ControlFlowExecutor
+//! (see shell/compound_execution.zig).
 
 const std = @import("std");
 const IO = @import("../utils/io.zig").IO;
@@ -12,159 +14,7 @@ const Expansion = @import("../utils/expansion.zig").Expansion;
 // Forward declaration for Shell type
 const Shell = @import("../shell.zig").Shell;
 
-/// Execute a one-line C-style for loop: for ((init; cond; update)); do cmd1; cmd2; done
-pub fn executeCStyleForLoopOneline(self: *Shell, input: []const u8) !void {
-    const trimmed = std.mem.trim(u8, input, &std.ascii.whitespace);
-
-    // Find "for ((" and "))"
-    if (!std.mem.startsWith(u8, trimmed, "for ((")) {
-        try IO.eprint("den: syntax error: expected 'for ((...))\n", .{});
-        self.last_exit_code = 1;
-        return;
-    }
-
-    // Find the closing ))
-    const expr_start = 6; // After "for (("
-    const expr_end_rel = std.mem.indexOf(u8, trimmed[expr_start..], "))") orelse {
-        try IO.eprint("den: syntax error: missing '))'n", .{});
-        self.last_exit_code = 1;
-        return;
-    };
-    const expr = trimmed[expr_start..][0..expr_end_rel];
-
-    // Parse init; condition; update
-    var parts: [3]?[]const u8 = .{ null, null, null };
-    var parts_count: usize = 0;
-    var part_iter = std.mem.splitSequence(u8, expr, ";");
-    while (part_iter.next()) |part| : (parts_count += 1) {
-        if (parts_count >= 3) break;
-        const trimmed_part = std.mem.trim(u8, part, &std.ascii.whitespace);
-        if (trimmed_part.len > 0) {
-            parts[parts_count] = trimmed_part;
-        }
-    }
-
-    // Find "do" and "done" to extract body
-    const after_parens = trimmed[expr_start + expr_end_rel + 2 ..];
-    const trimmed_after = std.mem.trim(u8, after_parens, &std.ascii.whitespace);
-
-    // Skip optional ';' after ))
-    var body_start = trimmed_after;
-    if (body_start.len > 0 and body_start[0] == ';') {
-        body_start = std.mem.trim(u8, body_start[1..], &std.ascii.whitespace);
-    }
-
-    // Find "do" keyword
-    if (!std.mem.startsWith(u8, body_start, "do")) {
-        try IO.eprint("den: syntax error: expected 'do'\n", .{});
-        self.last_exit_code = 1;
-        return;
-    }
-    body_start = std.mem.trim(u8, body_start[2..], &std.ascii.whitespace);
-
-    // Find "done" keyword as a standalone word, not inside quotes or as a substring.
-    // Also accounts for nesting: inner for/while/until loops have their own "done".
-    const done_pos = findStandaloneDone(body_start) orelse {
-        try IO.eprint("den: syntax error: expected 'done'\n", .{});
-        self.last_exit_code = 1;
-        return;
-    };
-    const body_content = std.mem.trim(u8, body_start[0..done_pos], &std.ascii.whitespace);
-
-    // Check if there's anything after 'done' that we need to execute later
-    const after_done = body_start[done_pos + 4 ..];
-    const remaining_commands = std.mem.trim(u8, after_done, &std.ascii.whitespace);
-
-    // Split body by semicolons (respecting quotes)
-    var body_cmds = std.ArrayList([]const u8).empty;
-    defer body_cmds.deinit(self.allocator);
-
-    var cmd_start: usize = 0;
-    var in_single_quote = false;
-    var in_double_quote = false;
-    var i: usize = 0;
-    while (i < body_content.len) : (i += 1) {
-        const c = body_content[i];
-        if (c == '\'' and !in_double_quote) {
-            in_single_quote = !in_single_quote;
-        } else if (c == '"' and !in_single_quote) {
-            in_double_quote = !in_double_quote;
-        } else if (c == ';' and !in_single_quote and !in_double_quote) {
-            const cmd = std.mem.trim(u8, body_content[cmd_start..i], &std.ascii.whitespace);
-            if (cmd.len > 0) {
-                try body_cmds.append(self.allocator, cmd);
-            }
-            cmd_start = i + 1;
-        }
-    }
-    // Don't forget the last command
-    const last_cmd = std.mem.trim(u8, body_content[cmd_start..], &std.ascii.whitespace);
-    if (last_cmd.len > 0) {
-        try body_cmds.append(self.allocator, last_cmd);
-    }
-
-    // Execute the C-style for loop inline
-    // 1. Execute initialization
-    if (parts[0]) |init_stmt| {
-        executeArithmeticStatement(self, init_stmt);
-    }
-
-    // 2. Loop while condition is true
-    var iteration_count: usize = 0;
-    const max_iterations: usize = 100000; // Safety limit
-    while (iteration_count < max_iterations) : (iteration_count += 1) {
-        // Check condition
-        if (parts[1]) |cond| {
-            if (!evaluateArithmeticCondition(self, cond)) break;
-        }
-
-        // Execute body commands - directly using a simple method that avoids recursion
-        for (body_cmds.items) |cmd| {
-            executeCStyleLoopBodyCommand(self, cmd);
-            if (self.break_levels > 0 or self.continue_levels > 0) break;
-        }
-
-        // Check for break after body execution
-        if (self.break_levels > 0) {
-            self.break_levels -= 1;
-            break;
-        }
-
-        // Check for continue after body execution
-        if (self.continue_levels > 0) {
-            self.continue_levels -= 1;
-            // Still execute update, then continue to next iteration
-        }
-
-        // Execute update
-        if (parts[2]) |update| {
-            executeArithmeticStatement(self, update);
-        }
-    }
-
-    self.last_exit_code = 0;
-
-    // Execute any remaining commands after "done"
-    if (remaining_commands.len > 0) {
-        // Strip leading semicolon if present
-        var cmds_to_run = remaining_commands;
-        if (cmds_to_run[0] == ';') {
-            cmds_to_run = std.mem.trim(u8, cmds_to_run[1..], &std.ascii.whitespace);
-        }
-        if (cmds_to_run.len > 0) {
-            // Execute the remaining commands using the simplified executor
-            var iter = std.mem.splitScalar(u8, cmds_to_run, ';');
-            while (iter.next()) |cmd| {
-                const trimmed_cmd = std.mem.trim(u8, cmd, &std.ascii.whitespace);
-                if (trimmed_cmd.len > 0) {
-                    executeCStyleLoopBodyCommand(self, trimmed_cmd);
-                }
-            }
-        }
-    }
-}
-
-/// Execute a command in the body of a C-style for loop
+/// Execute a command in the body of a select loop
 /// Handles variable assignments directly, delegates other commands to executeCommand
 pub fn executeCStyleLoopBodyCommand(self: *Shell, cmd: []const u8) void {
     const trimmed = std.mem.trim(u8, cmd, &std.ascii.whitespace);
@@ -225,77 +75,6 @@ pub fn executeCStyleLoopBodyCommand(self: *Shell, cmd: []const u8) void {
     self.executeCommand(expanded) catch {
         self.last_exit_code = 1;
     };
-}
-
-/// Execute input that contains a C-style for loop with commands before and/or after
-pub fn executeWithCStyleForLoop(self: *Shell, input: []const u8) !void {
-    const trimmed = std.mem.trim(u8, input, &std.ascii.whitespace);
-
-    // Find the position of "for ((" in the input
-    const for_pos = std.mem.indexOf(u8, trimmed, "for ((") orelse {
-        executeCStyleLoopBodyCommand(self, input);
-        return;
-    };
-
-    // Extract any commands before the for loop
-    const before_for = std.mem.trim(u8, trimmed[0..for_pos], &std.ascii.whitespace);
-
-    // Execute commands before the for loop
-    if (before_for.len > 0) {
-        var cmds = before_for;
-        if (cmds.len > 0 and cmds[cmds.len - 1] == ';') {
-            cmds = std.mem.trim(u8, cmds[0 .. cmds.len - 1], &std.ascii.whitespace);
-        }
-        if (cmds.len > 0) {
-            executeCStyleLoopBodyCommand(self, cmds);
-        }
-    }
-
-    // Now extract the for loop
-    const for_content = trimmed[for_pos..];
-
-    // Find "done" keyword with proper boundary checking
-    var done_pos: ?usize = null;
-    var search_pos: usize = 0;
-    while (search_pos < for_content.len) {
-        const maybe_done = std.mem.indexOf(u8, for_content[search_pos..], "done");
-        if (maybe_done) |pos| {
-            const actual_pos = search_pos + pos;
-            const at_start = actual_pos == 0 or !std.ascii.isAlphanumeric(for_content[actual_pos - 1]);
-            const at_end = actual_pos + 4 >= for_content.len or
-                !std.ascii.isAlphanumeric(for_content[actual_pos + 4]);
-            if (at_start and at_end) {
-                done_pos = actual_pos;
-                break;
-            }
-            search_pos = actual_pos + 1;
-        } else {
-            break;
-        }
-    }
-
-    if (done_pos == null) {
-        try IO.eprint("den: syntax error: expected 'done'\n", .{});
-        self.last_exit_code = 1;
-        return;
-    }
-
-    const for_loop_end = done_pos.? + 4;
-    const for_loop = for_content[0..for_loop_end];
-
-    // Execute the for loop
-    try executeCStyleForLoopOneline(self, for_loop);
-
-    // Extract any commands after the for loop
-    if (for_loop_end < for_content.len) {
-        var after_done = std.mem.trim(u8, for_content[for_loop_end..], &std.ascii.whitespace);
-        if (after_done.len > 0 and after_done[0] == ';') {
-            after_done = std.mem.trim(u8, after_done[1..], &std.ascii.whitespace);
-        }
-        if (after_done.len > 0) {
-            executeCStyleLoopBodyCommand(self, after_done);
-        }
-    }
 }
 
 /// Execute a select loop: select VAR in ITEM1 ITEM2 ...; do BODY; done
@@ -380,6 +159,8 @@ pub fn executeSelectLoop(self: *Shell, input: []const u8) !void {
     }
 
     // Main select loop
+    self.loop_depth += 1;
+    defer self.loop_depth -= 1;
     while (true) {
         try IO.eprint("{s}", .{ps3});
 
@@ -477,6 +258,7 @@ pub fn executeSelectBody(self: *Shell, body: []const u8) void {
             } else {
                 self.break_levels = 1;
             }
+            self.break_levels = @min(self.break_levels, self.loop_depth);
             return;
         }
 
