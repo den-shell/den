@@ -335,6 +335,29 @@ pub const LineEditor = struct {
     input_queue_head: usize = 0,
     input_queue_len: usize = 0,
 
+    // --- key dispatch ---
+    /// Keymaps to consult, owned by the shell. Null disables the keymap and
+    /// leaves every key to the built-in handling below, which is the case
+    /// before the shell has any (and in tests that do not set it).
+    keymaps: ?*keymap.KeymapSet = null,
+    /// Bytes of a key sequence read so far that is still ambiguous.
+    pending: keymap.KeySeq = .{},
+    /// Widget to run if `pending` stops growing: the sequence matched exactly,
+    /// but a longer binding also starts with it, so the longer one gets first
+    /// refusal. This is how `^X` coexists with `^X(`.
+    pending_fallback: ?Widget = null,
+    pending_fallback_len: u8 = 0,
+    /// Empty reads since the last byte arrived.
+    idle_polls: u8 = 0,
+    /// Empty reads to wait through before an ambiguous sequence resolves. Each
+    /// is roughly the terminal's read timeout (~100ms), and 1 reproduces the
+    /// timing a lone Escape has always had. zsh spells this $KEYTIMEOUT.
+    key_timeout_polls: u8 = 1,
+    /// Bytes handed to the built-in escape parser, which keeps accumulating
+    /// until the sequence is complete.
+    escape_seq: keymap.KeySeq = .{},
+    in_escape: bool = false,
+
     const UndoState = struct {
         buffer: [4096]u8,
         length: usize,
@@ -900,6 +923,107 @@ pub const LineEditor = struct {
         try self.redrawLine();
     }
 
+    /// Drive the keymap over a script of bytes, the way readLine's loop does,
+    /// and settle anything left pending as the read timeout would. This is the
+    /// entry point for testing key dispatch without a terminal.
+    fn feedKeys(self: *LineEditor, bytes: []const u8) !Flow {
+        self.pushBack(bytes);
+        while (try self.nextByte()) |b| {
+            if (try self.keymapProbe(b)) |flow| {
+                switch (flow) {
+                    .cont => {},
+                    else => return flow,
+                }
+            }
+        }
+        if (self.pending.len > 0) return try self.resolvePending();
+        return .cont;
+    }
+
+    /// Which keymap is in force right now.
+    fn activeKeymapId(self: *const LineEditor) keymap.KeymapId {
+        if (self.reverse_search_mode) return .isearch;
+        if (self.editing_mode == .vi) return switch (self.vi_mode) {
+            .normal => .vicmd,
+            .replace => .vireplace,
+            .insert => .viins,
+        };
+        return .emacs;
+    }
+
+    /// Offer a byte to the keymap.
+    ///
+    /// Returns null when the keymap has nothing to say and the byte should take
+    /// the built-in path below -- which is every byte that begins no binding, so
+    /// ordinary typing costs one lookup and nothing else.
+    fn keymapProbe(self: *LineEditor, byte: u8) !?Flow {
+        const maps = self.keymaps orelse return null;
+        const map = maps.getConst(self.activeKeymapId());
+
+        var probe = self.pending;
+        if (!probe.push(byte)) {
+            // Longer than any bindable sequence; give up on it.
+            self.clearPending();
+            return null;
+        }
+
+        switch (map.lookup(probe.slice())) {
+            .exact => |widget| {
+                self.clearPending();
+                return try self.invokeWidget(widget, probe.slice());
+            },
+            .exact_prefix => |widget| {
+                // Wait for the longer binding, remembering this one.
+                self.pending = probe;
+                self.pending_fallback = widget;
+                self.pending_fallback_len = probe.len;
+                return .cont;
+            },
+            .prefix => {
+                self.pending = probe;
+                return .cont;
+            },
+            .none => {
+                if (self.pending.len == 0) return null; // first byte: fall through
+                // Mid-sequence and nothing matches. Hand what we have to the
+                // built-in escape parser, which understands the sequences the
+                // keymap does not enumerate, and let it keep accumulating.
+                self.handOffToEscapeParser(probe);
+                self.clearPending();
+                return .cont;
+            },
+        }
+    }
+
+    fn clearPending(self: *LineEditor) void {
+        self.pending.clear();
+        self.pending_fallback = null;
+        self.pending_fallback_len = 0;
+    }
+
+    /// Resume the built-in escape handling for a sequence the keymap rejected.
+    fn handOffToEscapeParser(self: *LineEditor, seq: keymap.KeySeq) void {
+        if (seq.len == 0 or seq.bytes[0] != 0x1B) return; // nothing else to try
+        self.escape_seq = seq;
+        self.in_escape = true;
+    }
+
+    /// Nothing more arrived: settle an ambiguous sequence.
+    fn resolvePending(self: *LineEditor) !Flow {
+        const seq = self.pending;
+        const fallback = self.pending_fallback;
+        const fallback_len = self.pending_fallback_len;
+        self.clearPending();
+
+        if (fallback) |widget| {
+            // Run the shorter binding and re-dispatch whatever followed it.
+            if (seq.len > fallback_len) self.pushBack(seq.slice()[fallback_len..]);
+            return try self.invokeWidget(widget, seq.slice()[0..fallback_len]);
+        }
+        self.handOffToEscapeParser(seq);
+        return .cont;
+    }
+
     /// Run a widget. `key` is the byte sequence that triggered it, which the
     /// inserting widgets need (zsh calls it $KEYS).
     pub fn invokeWidget(self: *LineEditor, widget: Widget, key: []const u8) !Flow {
@@ -1159,9 +1283,10 @@ pub const LineEditor = struct {
         // mode and the first characters typed are swallowed as vi commands.
         if (self.editing_mode == .vi) self.viEnterInsertMode();
 
-        var escape_buffer: [8]u8 = undefined;
-        var escape_len: usize = 0;
-        var in_escape: bool = false;
+        self.clearPending();
+        self.escape_seq.clear();
+        self.in_escape = false;
+        self.idle_polls = 0;
 
         while (true) {
             // Check for window resize (SIGWINCH)
@@ -1172,13 +1297,40 @@ pub const LineEditor = struct {
 
             const maybe_byte = try self.nextByte();
             if (maybe_byte == null) {
+                // An ambiguous key sequence settles once input stops arriving:
+                // `^X` on its own runs nothing because `^X(` might still be
+                // coming, but a lone `^[` is Escape rather than the start of a
+                // cursor-key sequence.
+                if (self.pending.len > 0) {
+                    self.idle_polls += 1;
+                    if (self.idle_polls >= self.key_timeout_polls) {
+                        self.idle_polls = 0;
+                        switch (try self.resolvePending()) {
+                            .cont => {},
+                            .accepted => |line| {
+                                try self.terminal.disableRawMode();
+                                return line;
+                            },
+                            .eof => {
+                                try self.terminal.disableRawMode();
+                                return null;
+                            },
+                            .interrupt => {
+                                try self.terminal.disableRawMode();
+                                return error.Interrupted;
+                            },
+                        }
+                        continue;
+                    }
+                }
+
                 // A lone Escape has no parser terminator. Once the terminal's
                 // read timeout expires, handle it as a standalone key instead
                 // of leaving the editor stuck waiting for another byte.
-                if (in_escape) {
-                    if (escape_len == 1) try self.handleStandaloneEscape();
-                    in_escape = false;
-                    escape_len = 0;
+                if (self.in_escape) {
+                    if (self.escape_seq.len == 1) try self.handleStandaloneEscape();
+                    self.in_escape = false;
+                    self.escape_seq.clear();
                 }
 
                 // No data, sleep briefly (10ms)
@@ -1186,29 +1338,51 @@ pub const LineEditor = struct {
                 continue;
             }
             const byte = maybe_byte.?;
+            self.idle_polls = 0;
+
+            // Keymap first, so a bound key wins over the built-in handling
+            // below. Skipped while the escape parser is mid-sequence, and while
+            // a completion menu is open: the menu owns the arrow keys and Enter,
+            // so bindings do not fire until it is dismissed.
+            if (!self.in_escape and self.completion_list == null) {
+                if (try self.keymapProbe(byte)) |flow| switch (flow) {
+                    .cont => continue,
+                    .accepted => |line| {
+                        try self.terminal.disableRawMode();
+                        return line;
+                    },
+                    .eof => {
+                        try self.terminal.disableRawMode();
+                        return null;
+                    },
+                    .interrupt => {
+                        try self.terminal.disableRawMode();
+                        return error.Interrupted;
+                    },
+                };
+            }
 
             // Handle escape sequences
-            if (in_escape) {
-                escape_buffer[escape_len] = byte;
-                escape_len += 1;
+            if (self.in_escape) {
+                _ = self.escape_seq.push(byte);
 
-                if (EscapeSequence.parse(escape_buffer[0..escape_len])) |seq| {
+                if (EscapeSequence.parse(self.escape_seq.slice())) |seq| {
                     try self.handleEscapeSequence(seq);
-                    in_escape = false;
-                    escape_len = 0;
-                } else if (escape_len >= escape_buffer.len) {
+                    self.in_escape = false;
+                    self.escape_seq.clear();
+                } else if (self.escape_seq.len >= keymap.max_key_seq_len) {
                     // Invalid sequence, ignore
-                    in_escape = false;
-                    escape_len = 0;
+                    self.in_escape = false;
+                    self.escape_seq.clear();
                 }
                 continue;
             }
 
             // Check for escape start
             if (byte == 0x1B) {
-                escape_buffer[0] = byte;
-                escape_len = 1;
-                in_escape = true;
+                self.escape_seq.clear();
+                _ = self.escape_seq.push(byte);
+                self.in_escape = true;
                 continue;
             }
 
@@ -4316,4 +4490,177 @@ test "invokeWidget isearch widgets drive the search query" {
     _ = try editor.invokeWidget(.isearch_accept_and_redispatch, "\x01");
     try std.testing.expect(!editor.reverse_search_mode);
     try std.testing.expectEqual(@as(?u8, 0x01), try editor.nextByte());
+}
+
+/// An editor wired to a capture buffer and its own keymaps, with text in place.
+fn testKeyEditor(sink: *std.ArrayList(u8), maps: *keymap.KeymapSet, text: []const u8) LineEditor {
+    var editor = testEditor(sink, text);
+    editor.keymaps = maps;
+    return editor;
+}
+
+test "keymap dispatches single-byte bindings" {
+    var sink: std.ArrayList(u8) = .empty;
+    defer sink.deinit(std.testing.allocator);
+    var maps = keymap.KeymapSet.init();
+    defer maps.deinit(std.testing.allocator);
+    var editor = testKeyEditor(&sink, &maps, "echo hi");
+    defer editor.deinit();
+
+    _ = try editor.feedKeys("\x01"); // Ctrl+A
+    try std.testing.expectEqual(@as(usize, 0), editor.cursor);
+    _ = try editor.feedKeys("\x05"); // Ctrl+E
+    try std.testing.expectEqual(@as(usize, 7), editor.cursor);
+}
+
+test "keymap dispatches a multi-byte sequence" {
+    var sink: std.ArrayList(u8) = .empty;
+    defer sink.deinit(std.testing.allocator);
+    var maps = keymap.KeymapSet.init();
+    defer maps.deinit(std.testing.allocator);
+    var editor = testKeyEditor(&sink, &maps, "");
+    defer editor.deinit();
+
+    try std.testing.expect(!editor.macro_recording);
+    _ = try editor.feedKeys("\x18("); // Ctrl+X (
+    try std.testing.expect(editor.macro_recording);
+    _ = try editor.feedKeys("\x18)"); // Ctrl+X )
+    try std.testing.expect(!editor.macro_recording);
+}
+
+test "a lone Ctrl+X types nothing when its sequence never completes" {
+    // Regression test. Ctrl+X used to read the second byte itself with a
+    // non-blocking read and drop the prefix when it had not arrived yet; the
+    // late byte was then reprocessed as ordinary input, so a slow `^X(` typed a
+    // literal '(' into the line. Ctrl+X is a prefix with no exact binding, so
+    // settling it must run nothing at all.
+    var sink: std.ArrayList(u8) = .empty;
+    defer sink.deinit(std.testing.allocator);
+    var maps = keymap.KeymapSet.init();
+    defer maps.deinit(std.testing.allocator);
+    var editor = testKeyEditor(&sink, &maps, "");
+    defer editor.deinit();
+
+    _ = try editor.feedKeys("\x18");
+    try std.testing.expectEqual(@as(usize, 0), editor.length);
+    try std.testing.expect(!editor.macro_recording);
+    try std.testing.expectEqual(@as(u8, 0), editor.pending.len);
+}
+
+test "a lone Escape settles as Escape, not as a cursor-key prefix" {
+    var sink: std.ArrayList(u8) = .empty;
+    defer sink.deinit(std.testing.allocator);
+    var maps = keymap.KeymapSet.init();
+    defer maps.deinit(std.testing.allocator);
+    var editor = testKeyEditor(&sink, &maps, "abc");
+    defer editor.deinit();
+
+    // Escape cancels visual selection, which is what den-escape does in emacs.
+    editor.visual_mode = true;
+    _ = try editor.feedKeys("\x1b");
+    try std.testing.expect(!editor.visual_mode);
+    try std.testing.expectEqual(@as(u8, 0), editor.pending.len);
+}
+
+test "keymap dispatches an arrow key by its bytes" {
+    var sink: std.ArrayList(u8) = .empty;
+    defer sink.deinit(std.testing.allocator);
+    var maps = keymap.KeymapSet.init();
+    defer maps.deinit(std.testing.allocator);
+    var editor = testKeyEditor(&sink, &maps, "abc");
+    defer editor.deinit();
+
+    editor.cursor = 2;
+    _ = try editor.feedKeys("\x1b[D"); // Left
+    try std.testing.expectEqual(@as(usize, 1), editor.cursor);
+    _ = try editor.feedKeys("\x1b[C"); // Right
+    try std.testing.expectEqual(@as(usize, 2), editor.cursor);
+}
+
+test "a user binding takes effect immediately" {
+    var sink: std.ArrayList(u8) = .empty;
+    defer sink.deinit(std.testing.allocator);
+    var maps = keymap.KeymapSet.init();
+    defer maps.deinit(std.testing.allocator);
+    var editor = testKeyEditor(&sink, &maps, "echo hi");
+    defer editor.deinit();
+
+    // Rebind Ctrl+T, which defaults to transpose-chars.
+    try maps.get(.emacs).bind(std.testing.allocator, "\x14", .kill_whole_line, 0);
+    _ = try editor.feedKeys("\x14");
+    try std.testing.expectEqual(@as(usize, 0), editor.length);
+}
+
+test "an unbound byte is left to the built-in handling" {
+    var sink: std.ArrayList(u8) = .empty;
+    defer sink.deinit(std.testing.allocator);
+    var maps = keymap.KeymapSet.init();
+    defer maps.deinit(std.testing.allocator);
+    var editor = testKeyEditor(&sink, &maps, "");
+    defer editor.deinit();
+
+    // Printable characters are not in the table; the probe declines them so the
+    // existing insert path (with its modal branches) still runs.
+    try std.testing.expectEqual(@as(?Flow, null), try editor.keymapProbe('q'));
+    try std.testing.expectEqual(@as(usize, 0), editor.length);
+}
+
+test "an unbound key consumes its byte instead of falling through" {
+    // This is what makes `bindkey -r` honest while the built-in handling is
+    // still in place: unbinding records "does nothing" rather than deleting the
+    // row, so Ctrl+A stops moving the cursor instead of reverting to it.
+    var sink: std.ArrayList(u8) = .empty;
+    defer sink.deinit(std.testing.allocator);
+    var maps = keymap.KeymapSet.init();
+    defer maps.deinit(std.testing.allocator);
+    var editor = testKeyEditor(&sink, &maps, "echo hi");
+    defer editor.deinit();
+
+    _ = try maps.get(.emacs).unbind(std.testing.allocator, "\x01");
+    editor.cursor = 4;
+    const flow = try editor.keymapProbe(0x01);
+    try std.testing.expectEqual(@as(?Flow, Flow.cont), flow); // consumed
+    try std.testing.expectEqual(@as(usize, 4), editor.cursor); // but did nothing
+}
+
+test "an unenumerated escape sequence is handed back to the escape parser" {
+    var sink: std.ArrayList(u8) = .empty;
+    defer sink.deinit(std.testing.allocator);
+    var maps = keymap.KeymapSet.init();
+    defer maps.deinit(std.testing.allocator);
+    var editor = testKeyEditor(&sink, &maps, "abc");
+    defer editor.deinit();
+
+    // ESC [ 1 ; 2 diverges from every table entry at the "2".
+    _ = try editor.feedKeys("\x1b[1;2");
+    try std.testing.expect(editor.in_escape);
+    try std.testing.expectEqualStrings("\x1b[1;2", editor.escape_seq.slice());
+    try std.testing.expectEqual(@as(u8, 0), editor.pending.len);
+}
+
+test "the keymap is skipped entirely when it is not set" {
+    var sink: std.ArrayList(u8) = .empty;
+    defer sink.deinit(std.testing.allocator);
+    var editor = testEditor(&sink, "echo hi");
+    defer editor.deinit();
+
+    try std.testing.expectEqual(@as(?Flow, null), try editor.keymapProbe(0x01));
+}
+
+test "activeKeymapId follows the editing and search modes" {
+    var sink: std.ArrayList(u8) = .empty;
+    defer sink.deinit(std.testing.allocator);
+    var editor = testEditor(&sink, "");
+    defer editor.deinit();
+
+    try std.testing.expectEqual(keymap.KeymapId.emacs, editor.activeKeymapId());
+    editor.setEditingMode(.vi);
+    try std.testing.expectEqual(keymap.KeymapId.viins, editor.activeKeymapId());
+    editor.vi_mode = .normal;
+    try std.testing.expectEqual(keymap.KeymapId.vicmd, editor.activeKeymapId());
+    editor.vi_mode = .replace;
+    try std.testing.expectEqual(keymap.KeymapId.vireplace, editor.activeKeymapId());
+    // Incremental search wins over the editing mode.
+    editor.reverse_search_mode = true;
+    try std.testing.expectEqual(keymap.KeymapId.isearch, editor.activeKeymapId());
 }
