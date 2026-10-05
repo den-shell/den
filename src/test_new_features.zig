@@ -5,6 +5,7 @@
 
 test {
     _ = @import("compat/zsh.zig"); // zsh compatibility layer
+    _ = @import("compat/bindkey.zig"); // zsh bindkey key-sequence notation
     _ = @import("ai/completion.zig"); // AI-assisted completions
     _ = @import("net/session.zig"); // distributed shell sessions
     _ = @import("plugins/wasm.zig"); // WebAssembly plugin host
