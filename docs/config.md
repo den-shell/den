@@ -173,7 +173,14 @@ Aliases can be defined declaratively here, or at runtime with the `alias` builti
 }
 ```
 
-See [Line Editing](./LINE_EDITING.md) for the full keymap.
+`mode` chooses the editing style for the interactive line editor. With `"vi"`,
+each line starts in insert mode; **Esc** switches to normal mode for navigation
+(`h` `l` `0` `$` `^` `w` `b` `e` `x` `dd` `cc` `u` …), and `i` `a` `A` `I` `o`
+`s` `S` `C` `R` return to inserting. Every new prompt starts in insert mode
+again, as zsh's `viins` does.
+
+`custom` is not yet applied — see [Line Editing](./LINE_EDITING.md) for the
+full default keymap.
 
 ## See also
 

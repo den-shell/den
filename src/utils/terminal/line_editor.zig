@@ -730,6 +730,10 @@ pub const LineEditor = struct {
             80;
         self.rendered_cursor_row = self.promptLayout(init_cols).rows;
         self.clearHistorySearch();
+        // Every new line starts in insert mode, as zsh's viins does. Without
+        // this, a line accepted from normal mode leaves the next line in normal
+        // mode and the first characters typed are swallowed as vi commands.
+        if (self.editing_mode == .vi) self.viEnterInsertMode();
 
         var escape_buffer: [8]u8 = undefined;
         var escape_len: usize = 0;
@@ -3523,4 +3527,34 @@ test "completion word replacement rejects overflow without mutation" {
     try std.testing.expect(!replaceBufferRange(&buffer, &length, 3, 4, "far-too-long"));
     try std.testing.expectEqual(@as(usize, 4), length);
     try std.testing.expectEqualStrings("cd x", buffer[0..length]);
+}
+
+test "setEditingMode selects vi and starts in insert mode" {
+    var editor = LineEditor.init(std.testing.allocator, "");
+    defer editor.deinit();
+
+    try std.testing.expectEqual(EditingMode.emacs, editor.editing_mode);
+
+    editor.setEditingMode(.vi);
+    try std.testing.expectEqual(EditingMode.vi, editor.editing_mode);
+    try std.testing.expectEqual(ViMode.insert, editor.vi_mode);
+
+    editor.setEditingMode(.emacs);
+    try std.testing.expectEqual(EditingMode.emacs, editor.editing_mode);
+}
+
+test "leaving vi normal mode is reset for the next line" {
+    var editor = LineEditor.init(std.testing.allocator, "");
+    defer editor.deinit();
+
+    editor.setEditingMode(.vi);
+    editor.viEnterNormalMode();
+    try std.testing.expectEqual(ViMode.normal, editor.vi_mode);
+
+    // readLine seeds each line with viEnterInsertMode; assert the reset it
+    // performs, without needing a tty to run the loop itself.
+    editor.viEnterInsertMode();
+    try std.testing.expectEqual(ViMode.insert, editor.vi_mode);
+    try std.testing.expectEqual(@as(?u8, null), editor.vi_pending_op);
+    try std.testing.expectEqual(@as(usize, 0), editor.vi_count);
 }

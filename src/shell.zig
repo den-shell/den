@@ -1012,6 +1012,12 @@ pub const Shell = struct {
                         editor.syntax_highlighting = self.config.line_editor.syntax_highlighting;
                         editor.autosuggestions = self.config.line_editor.autosuggestions;
                         editor.suggestion_min_chars = @max(1, self.config.line_editor.suggestion_min_chars);
+                        // `keybindings.mode` was parsed and validated but never
+                        // applied, so vi mode was unreachable in production.
+                        switch (self.config.keybindings.mode) {
+                            .emacs => editor.setEditingMode(.emacs),
+                            .vi => editor.setEditingMode(.vi),
+                        }
                         editor.setHistory(&self.history, &self.history_count);
                         // Same buffer the inline suggestion reads, so Tab and
                         // ghost text agree on what "recently used" means.
