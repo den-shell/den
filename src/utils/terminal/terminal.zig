@@ -24,9 +24,20 @@ pub const Terminal = struct {
     original_termios: if (builtin.os.tag == .windows) ?u32 else ?std.posix.termios = null,
     original_output_mode: if (builtin.os.tag == .windows) ?u32 else void = if (builtin.os.tag == .windows) null else {},
     is_raw: bool = false,
+    /// Scripted input read instead of stdin, so tests can drive the line
+    /// editor key by key (including pastes) without a terminal.
+    script: ?[]const u8 = null,
+    script_pos: usize = 0,
+
+    /// In a `script`, a pause: no input is waiting at this point.
+    pub const script_idle: u8 = 0xFF;
 
     /// Enable raw terminal mode (disable canonical mode, echo, etc.)
     pub fn enableRawMode(self: *Terminal) !void {
+        if (self.script != null) {
+            self.is_raw = true;
+            return;
+        }
         if (builtin.os.tag == .windows) {
             return self.enableRawModeWindows();
         }
@@ -63,12 +74,15 @@ pub const Terminal = struct {
         raw.cflag.CSIZE = .CS8;
 
         // Minimum number of characters for non-canonical read
-        raw.cc[@intFromEnum(std.posix.V.MIN)] = 0;
+        raw.cc[@backingInt(std.posix.V.MIN)] = 0;
         // Timeout in deciseconds for non-canonical read
-        raw.cc[@intFromEnum(std.posix.V.TIME)] = 1;
+        raw.cc[@backingInt(std.posix.V.TIME)] = 1;
 
-        // Apply the settings
-        try std.posix.tcsetattr(stdin_fd, .FLUSH, raw);
+        // Apply the settings. TCSANOW, not TCSAFLUSH: flushing discarded input
+        // that was already queued - the rest of a multi-line paste from a
+        // terminal without bracketed paste, or keys typed ahead while the last
+        // command ran - so it never reached the editor.
+        try std.posix.tcsetattr(stdin_fd, .NOW, raw);
         self.is_raw = true;
     }
 
@@ -120,6 +134,10 @@ pub const Terminal = struct {
 
     /// Disable raw terminal mode (restore original settings)
     pub fn disableRawMode(self: *Terminal) !void {
+        if (self.script != null) {
+            self.is_raw = false;
+            return;
+        }
         if (!self.is_raw) return; // Already in normal mode
         if (self.original_termios == null) return;
 
@@ -136,7 +154,8 @@ pub const Terminal = struct {
         }
 
         const stdin_fd = posix.STDIN_FILENO;
-        try std.posix.tcsetattr(stdin_fd, .FLUSH, self.original_termios.?);
+        // TCSANOW keeps queued input for the next prompt (see enableRawMode).
+        try std.posix.tcsetattr(stdin_fd, .NOW, self.original_termios.?);
         self.is_raw = false;
     }
 
@@ -144,6 +163,15 @@ pub const Terminal = struct {
     /// Returns null if no data available
     pub fn readByte(self: *Terminal) !?u8 {
         if (!self.is_raw) return error.NotInRawMode;
+
+        if (self.script) |script| {
+            if (self.script_pos >= script.len) return error.EndOfStream;
+            self.script_pos += 1;
+            const byte = script[self.script_pos - 1];
+            // 0xFF never occurs in UTF-8 text: in a script it stands for a
+            // moment with no input waiting (the user paused).
+            return if (byte == script_idle) null else byte;
+        }
 
         if (builtin.os.tag == .windows) {
             const stdin_handle = @import("windows_compat").GetStdHandle(@import("windows_compat").STD_INPUT_HANDLE) orelse return error.GetStdHandleFailed;
@@ -175,5 +203,15 @@ pub const Terminal = struct {
 
         if (bytes_read == 0) return null;
         return buf[0];
+    }
+
+    /// Whether another byte of input is already waiting to be read. Bytes
+    /// arriving faster than anyone types are a paste or typed-ahead keys.
+    pub fn hasPendingInput(self: *Terminal) bool {
+        if (self.script) |script| return self.script_pos < script.len and script[self.script_pos] != script_idle;
+        if (comptime builtin.os.tag == .windows) return false;
+        var fds = [_]posix.pollfd{.{ .fd = posix.STDIN_FILENO, .events = posix.POLL.IN, .revents = 0 }};
+        const n = posix.poll(&fds, 0) catch return false;
+        return n > 0 and (fds[0].revents & posix.POLL.IN) != 0;
     }
 };

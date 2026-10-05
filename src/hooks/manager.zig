@@ -116,7 +116,7 @@ pub const HookManager = struct {
             .allocator = self.allocator,
         };
 
-        const index = @intFromEnum(hook_type);
+        const index = @backingInt(hook_type);
         try self.hooks[index].append(self.allocator, hook);
 
         // Sort by priority (lower numbers run first)
@@ -141,7 +141,7 @@ pub const HookManager = struct {
 
     /// Execute hooks with options
     pub fn executeHooks(self: *HookManager, hook_type: HookType, context: *HookContext, options: HookOptions) ![]HookResult {
-        const index = @intFromEnum(hook_type);
+        const index = @backingInt(hook_type);
         const hooks_list = self.hooks[index].items;
 
         if (hooks_list.len == 0) {
@@ -247,19 +247,19 @@ pub const HookManager = struct {
 
     /// Get hook count for a specific type
     pub fn getHookCount(self: *HookManager, hook_type: HookType) usize {
-        const index = @intFromEnum(hook_type);
+        const index = @backingInt(hook_type);
         return self.hooks[index].items.len;
     }
 
     /// List all hooks for a specific type
     pub fn listHooks(self: *HookManager, hook_type: HookType) []const Hook {
-        const index = @intFromEnum(hook_type);
+        const index = @backingInt(hook_type);
         return self.hooks[index].items;
     }
 
     /// Enable/disable a specific hook
     pub fn setHookEnabled(self: *HookManager, plugin_name: []const u8, hook_type: HookType, enabled: bool) void {
-        const index = @intFromEnum(hook_type);
+        const index = @backingInt(hook_type);
         for (self.hooks[index].items) |*hook| {
             if (std.mem.eql(u8, hook.plugin_name, plugin_name)) {
                 hook.enabled = enabled;

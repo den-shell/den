@@ -28,7 +28,7 @@ pub fn build(b: *std.Build) void {
     const static_build = b.option(bool, "static", "Build statically linked binary") orelse false;
     // Strip release builds by default (smaller binary, no runtime cost); keep
     // symbols for Debug. Override explicitly with -Dstrip=false.
-    const strip = b.option(bool, "strip", "Strip debug symbols") orelse (optimize != .Debug);
+    const strip = b.option(bool, "strip", "Strip debug symbols") orelse (optimize != .debug);
     const link_libc = b.option(bool, "link-libc", "Link against libc") orelse true;
     const build_options = b.addOptions();
     build_options.addOption([]const u8, "version", package_version);
@@ -122,18 +122,18 @@ pub fn build(b: *std.Build) void {
         const release_module = b.createModule(.{
             .root_source_file = b.path("src/main.zig"),
             .target = release_target,
-            .optimize = .ReleaseSmall,
+            .optimize = .small,
             .strip = true, // distributed binaries: smallest + stripped (~1.3MB)
         });
         const release_compat_module = b.createModule(.{
             .root_source_file = b.path("src/utils/compat.zig"),
             .target = release_target,
-            .optimize = .ReleaseSmall,
+            .optimize = .small,
         });
         const release_windows_compat_module = b.createModule(.{
             .root_source_file = b.path("src/utils/windows_compat.zig"),
             .target = release_target,
-            .optimize = .ReleaseSmall,
+            .optimize = .small,
         });
         release_compat_module.link_libc = true;
         release_module.addImport("compat", release_compat_module);
@@ -487,6 +487,8 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
     expansion_test_module.addImport("compat", compat_module);
+    // src/shell.zig reads the version from build_options.
+    expansion_test_module.addOptions("build_options", build_options);
 
     const expansion_tests = b.addTest(.{
         .root_module = expansion_test_module,
@@ -886,6 +888,23 @@ pub fn build(b: *std.Build) void {
     const chaining_test_step = b.step("test-chaining", "Run chaining integration tests");
     chaining_test_step.dependOn(&run_chaining_tests.step);
 
+    // Compound commands (for/while/until/if/case, groups, subshells) run by
+    // the den binary itself, so the binary must be built first.
+    const compound_test_module = b.createModule(.{
+        .root_source_file = b.path("tests/test_compound_commands.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+
+    const compound_tests = b.addTest(.{
+        .root_module = compound_test_module,
+    });
+
+    const run_compound_tests = b.addRunArtifact(compound_tests);
+    run_compound_tests.step.dependOn(b.getInstallStep());
+    const compound_test_step = b.step("test-compound", "Run compound command integration tests (den -c)");
+    compound_test_step.dependOn(&run_compound_tests.step);
+
     // Scripting integration tests
     const scripting_test_module = b.createModule(.{
         .root_source_file = b.path("tests/test_scripting.zig"),
@@ -971,6 +990,7 @@ pub fn build(b: *std.Build) void {
     all_tests_step.dependOn(&run_completion_tests.step);
     all_tests_step.dependOn(&run_pipeline_tests.step);
     all_tests_step.dependOn(&run_chaining_tests.step);
+    all_tests_step.dependOn(&run_compound_tests.step);
     all_tests_step.dependOn(&run_scripting_tests.step);
     all_tests_step.dependOn(&run_repl_tests.step);
     all_tests_step.dependOn(&run_shell_integration_tests.step);
@@ -1033,7 +1053,7 @@ pub fn build(b: *std.Build) void {
     const profiling_module = b.createModule(.{
         .root_source_file = b.path("src/profiling.zig"),
         .target = target,
-        .optimize = .ReleaseFast,
+        .optimize = .fast,
     });
     profiling_module.addImport("compat", compat_module);
 
@@ -1041,7 +1061,7 @@ pub fn build(b: *std.Build) void {
     const startup_bench_module = b.createModule(.{
         .root_source_file = b.path("bench/startup_bench.zig"),
         .target = target,
-        .optimize = .ReleaseFast,
+        .optimize = .fast,
     });
     startup_bench_module.addImport("profiling", profiling_module);
 
@@ -1056,7 +1076,7 @@ pub fn build(b: *std.Build) void {
     const command_bench_module = b.createModule(.{
         .root_source_file = b.path("bench/command_exec_bench.zig"),
         .target = target,
-        .optimize = .ReleaseFast,
+        .optimize = .fast,
     });
     command_bench_module.addImport("profiling", profiling_module);
 
@@ -1071,7 +1091,7 @@ pub fn build(b: *std.Build) void {
     const completion_bench_module = b.createModule(.{
         .root_source_file = b.path("bench/completion_bench.zig"),
         .target = target,
-        .optimize = .ReleaseFast,
+        .optimize = .fast,
     });
     completion_bench_module.addImport("profiling", profiling_module);
 
@@ -1086,7 +1106,7 @@ pub fn build(b: *std.Build) void {
     const history_bench_module = b.createModule(.{
         .root_source_file = b.path("bench/history_bench.zig"),
         .target = target,
-        .optimize = .ReleaseFast,
+        .optimize = .fast,
     });
     history_bench_module.addImport("profiling", profiling_module);
 
@@ -1101,7 +1121,7 @@ pub fn build(b: *std.Build) void {
     const prompt_bench_module = b.createModule(.{
         .root_source_file = b.path("bench/prompt_bench.zig"),
         .target = target,
-        .optimize = .ReleaseFast,
+        .optimize = .fast,
     });
     prompt_bench_module.addImport("profiling", profiling_module);
 
@@ -1116,13 +1136,13 @@ pub fn build(b: *std.Build) void {
     const memory_module = b.createModule(.{
         .root_source_file = b.path("src/utils/memory.zig"),
         .target = target,
-        .optimize = .ReleaseFast,
+        .optimize = .fast,
     });
 
     const memory_bench_module = b.createModule(.{
         .root_source_file = b.path("bench/memory_bench.zig"),
         .target = target,
-        .optimize = .ReleaseFast,
+        .optimize = .fast,
     });
     memory_bench_module.addImport("profiling", profiling_module);
     memory_bench_module.addImport("memory", memory_module);
@@ -1138,19 +1158,19 @@ pub fn build(b: *std.Build) void {
     const cpu_opt_module = b.createModule(.{
         .root_source_file = b.path("src/utils/cpu_opt.zig"),
         .target = target,
-        .optimize = .ReleaseFast,
+        .optimize = .fast,
     });
 
     const optimized_parser_module = b.createModule(.{
         .root_source_file = b.path("src/parser/optimized_parser.zig"),
         .target = target,
-        .optimize = .ReleaseFast,
+        .optimize = .fast,
     });
 
     const cpu_bench_module = b.createModule(.{
         .root_source_file = b.path("bench/cpu_bench.zig"),
         .target = target,
-        .optimize = .ReleaseFast,
+        .optimize = .fast,
     });
     cpu_bench_module.addImport("profiling", profiling_module);
     cpu_bench_module.addImport("cpu_opt", cpu_opt_module);
@@ -1167,14 +1187,14 @@ pub fn build(b: *std.Build) void {
     const concurrency_module = b.createModule(.{
         .root_source_file = b.path("src/utils/concurrency.zig"),
         .target = target,
-        .optimize = .ReleaseFast,
+        .optimize = .fast,
     });
     concurrency_module.addImport("compat", compat_module);
 
     const parallel_discovery_module = b.createModule(.{
         .root_source_file = b.path("src/utils/parallel_discovery.zig"),
         .target = target,
-        .optimize = .ReleaseFast,
+        .optimize = .fast,
     });
     parallel_discovery_module.addImport("concurrency", concurrency_module);
     parallel_discovery_module.addImport("compat", compat_module);
@@ -1182,7 +1202,7 @@ pub fn build(b: *std.Build) void {
     const concurrency_bench_module = b.createModule(.{
         .root_source_file = b.path("bench/concurrency_bench.zig"),
         .target = target,
-        .optimize = .ReleaseFast,
+        .optimize = .fast,
     });
     concurrency_bench_module.addImport("profiling", profiling_module);
     concurrency_bench_module.addImport("concurrency", concurrency_module);

@@ -8,16 +8,6 @@ const removeQuotes = expansion_mod.removeQuotes;
 const BraceExpander = @import("../utils/brace.zig").BraceExpander;
 const Glob = @import("../utils/glob.zig").Glob;
 
-/// Check if a line is a keyword (possibly followed by |, ;, &, etc.)
-fn isKeyword(line: []const u8, keyword: []const u8) bool {
-    if (std.mem.eql(u8, line, keyword)) return true;
-    if (line.len > keyword.len and std.mem.startsWith(u8, line, keyword)) {
-        const next = line[keyword.len];
-        return next == ' ' or next == '\t' or next == '|' or next == ';' or next == '&' or next == '#';
-    }
-    return false;
-}
-
 /// Control flow statement type
 pub const ControlFlowType = enum {
     if_statement,
@@ -188,6 +178,48 @@ pub const CaseClause = struct {
     terminator: CaseTerminator = .normal,
 };
 
+/// Turn a case pattern (already expanded, quotes still in place) into a glob
+/// for `globMatch`: quotes are removed and every glob character they protected
+/// is backslash-escaped, so it only matches itself.
+pub fn quotedPatternToGlob(allocator: std.mem.Allocator, pattern: []const u8) ![]const u8 {
+    if (std.mem.indexOfAny(u8, pattern, "'\"\\") == null) return pattern;
+    var out: std.ArrayList(u8) = .empty;
+    errdefer out.deinit(allocator);
+    var in_single = false;
+    var in_double = false;
+    var i: usize = 0;
+    while (i < pattern.len) : (i += 1) {
+        const c = pattern[i];
+        if (in_single) {
+            if (c == '\'') {
+                in_single = false;
+                continue;
+            }
+        } else if (c == '\'' and !in_double) {
+            in_single = true;
+            continue;
+        } else if (c == '"') {
+            in_double = !in_double;
+            continue;
+        } else if (c == '\\' and i + 1 < pattern.len) {
+            // Keep an escape as an escape; inside double quotes only \ " $ `
+            // are escapes, anything else is a literal backslash.
+            const next = pattern[i + 1];
+            if (!in_double or next == '\\' or next == '"' or next == '$' or next == '`') {
+                i += 1;
+                try out.append(allocator, '\\');
+                try out.append(allocator, next);
+                continue;
+            }
+        }
+        if ((in_single or in_double) and (c == '*' or c == '?' or c == '[' or c == ']' or c == '\\')) {
+            try out.append(allocator, '\\');
+        }
+        try out.append(allocator, c);
+    }
+    return out.toOwnedSlice(allocator);
+}
+
 /// Control flow executor
 pub const ControlFlowExecutor = struct {
     shell: *Shell,
@@ -233,9 +265,12 @@ pub const ControlFlowExecutor = struct {
     /// Execute while loop
     pub fn executeWhile(self: *ControlFlowExecutor, loop: *WhileLoop) !i32 {
         var last_exit: i32 = 0;
+        self.shell.loop_depth += 1;
+        defer self.shell.loop_depth -= 1;
 
         while (true) {
             const condition_result = self.evaluateCondition(loop.condition);
+            if (self.unwinding()) return last_exit;
 
             // For while: continue if true, for until: continue if false
             const should_continue = if (loop.is_until) !condition_result else condition_result;
@@ -243,6 +278,7 @@ pub const ControlFlowExecutor = struct {
             if (!should_continue) break;
 
             last_exit = self.executeBody(loop.body);
+            if (self.unwinding()) return last_exit;
 
             // Check for break
             if (self.break_levels > 0) {
@@ -271,6 +307,8 @@ pub const ControlFlowExecutor = struct {
     /// Supports: `for i in a b c`, `for i in ${arr[@]}`, `for i in "${arr[@]}"`
     pub fn executeFor(self: *ControlFlowExecutor, loop: *ForLoop) !i32 {
         var last_exit: i32 = 0;
+        self.shell.loop_depth += 1;
+        defer self.shell.loop_depth -= 1;
 
         // Expand each item (handles array variables like ${arr[@]})
         var expanded_items = std.ArrayList([]const u8).empty;
@@ -283,27 +321,12 @@ pub const ControlFlowExecutor = struct {
 
         // Build positional params from function call frame or shell
         var pp_slice: [64][]const u8 = undefined;
-        var pp_count: usize = 0;
-        if (self.shell.function_manager.currentFrame()) |frame| {
-            var pi: usize = 0;
-            while (pi < frame.positional_params_count) : (pi += 1) {
-                if (frame.positional_params[pi]) |param| {
-                    pp_slice[pp_count] = param;
-                    pp_count += 1;
-                }
-            }
-        } else {
-            for (self.shell.positional_params) |maybe_param| {
-                if (maybe_param) |param| {
-                    pp_slice[pp_count] = param;
-                    pp_count += 1;
-                }
-            }
-        }
+        const pp = self.collectPositionalParams(&pp_slice);
+        const pp_count = pp.len;
 
         // Create expansion context with positional params
         var expander = Expansion.init(self.allocator, &self.shell.environment, self.shell.last_exit_code);
-        expander.positional_params = pp_slice[0..pp_count];
+        expander.positional_params = pp;
         expander.arrays = &self.shell.arrays;
         expander.assoc_arrays = &self.shell.assoc_arrays;
 
@@ -425,9 +448,16 @@ pub const ControlFlowExecutor = struct {
             }
         }
 
-        // Glob-expand items that contain glob characters (unquoted)
+        // Glob-expand items that contain glob characters (unquoted). The
+        // matches are owned here; items kept as they are stay owned by
+        // expanded_items, which frees them.
         var glob_expanded: std.ArrayListUnmanaged([]const u8) = .empty;
         defer glob_expanded.deinit(self.allocator);
+        var glob_matches: std.ArrayListUnmanaged([]const u8) = .empty;
+        defer {
+            for (glob_matches.items) |m| self.allocator.free(m);
+            glob_matches.deinit(self.allocator);
+        }
         // Get cwd for glob expansion
         var cwd_buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
         const cwd_ptr = std.c.getcwd(&cwd_buf, cwd_buf.len);
@@ -447,10 +477,13 @@ pub const ControlFlowExecutor = struct {
                     try glob_expanded.append(self.allocator, ei);
                     self.allocator.free(matches[0]);
                 } else {
+                    // `ei` stays in expanded_items and is freed with it; freeing
+                    // it here as well was a double free.
+                    try glob_matches.ensureUnusedCapacity(self.allocator, matches.len);
                     for (matches) |m| {
+                        glob_matches.appendAssumeCapacity(m);
                         try glob_expanded.append(self.allocator, m);
                     }
-                    self.allocator.free(ei);
                 }
             } else {
                 try glob_expanded.append(self.allocator, ei);
@@ -475,6 +508,7 @@ pub const ControlFlowExecutor = struct {
             }
 
             last_exit = self.executeBody(loop.body);
+            if (self.unwinding()) return last_exit;
 
             // Check for break
             if (self.break_levels > 0) {
@@ -502,6 +536,8 @@ pub const ControlFlowExecutor = struct {
     /// Execute C-style for loop: for ((init; condition; update))
     pub fn executeCStyleFor(self: *ControlFlowExecutor, loop: *CStyleForLoop) !i32 {
         var last_exit: i32 = 0;
+        self.shell.loop_depth += 1;
+        defer self.shell.loop_depth -= 1;
 
         // Execute initialization (if present)
         if (loop.init) |init_stmt| {
@@ -518,6 +554,7 @@ pub const ControlFlowExecutor = struct {
 
             // Execute body
             last_exit = self.executeBody(loop.body);
+            if (self.unwinding()) return last_exit;
 
             // Check for break
             if (self.break_levels > 0) {
@@ -550,6 +587,8 @@ pub const ControlFlowExecutor = struct {
     /// Execute select menu for interactive selection
     pub fn executeSelect(self: *ControlFlowExecutor, menu: *SelectMenu) !i32 {
         var last_exit: i32 = 0;
+        self.shell.loop_depth += 1;
+        defer self.shell.loop_depth -= 1;
         const stdin_handle = if (comptime builtin.os.tag == .windows) @import("windows_compat").GetStdHandle(@import("windows_compat").STD_INPUT_HANDLE) orelse return error.Unexpected else std.posix.STDIN_FILENO;
         const stderr_handle = if (comptime builtin.os.tag == .windows) @import("windows_compat").GetStdHandle(@import("windows_compat").STD_ERROR_HANDLE) orelse return error.Unexpected else std.posix.STDERR_FILENO;
         const stdin_file = std.Io.File{ .handle = stdin_handle, .flags = .{ .nonblocking = false } };
@@ -623,6 +662,7 @@ pub const ControlFlowExecutor = struct {
 
             // Execute body
             last_exit = self.executeBody(menu.body);
+            if (self.unwinding()) return last_exit;
 
             // Check for break
             if (self.break_levels > 0) {
@@ -676,7 +716,9 @@ pub const ControlFlowExecutor = struct {
                 for (case_clause.patterns) |pattern| {
                     const expanded_pattern = self.expandValue(pattern) catch pattern;
                     defer if (expanded_pattern.ptr != pattern.ptr) self.allocator.free(expanded_pattern);
-                    const unquoted_pattern = removeQuotes(self.allocator, expanded_pattern) catch expanded_pattern;
+                    // Quoted parts of a pattern match literally: `"a*"` is the
+                    // two characters a and *, not a glob.
+                    const unquoted_pattern = quotedPatternToGlob(self.allocator, expanded_pattern) catch expanded_pattern;
                     defer if (unquoted_pattern.ptr != expanded_pattern.ptr) self.allocator.free(unquoted_pattern);
                     if (try self.matchPattern(expanded_value, unquoted_pattern)) {
                         matched = true;
@@ -817,6 +859,16 @@ pub const ControlFlowExecutor = struct {
         return std.fmt.parseInt(i64, t, 10) catch null;
     }
 
+    /// Whether an `exit`, or a `return` from the running function, is
+    /// unwinding: no further command of the body or iteration may run.
+    fn unwinding(self: *ControlFlowExecutor) bool {
+        if (self.shell.exit_requested) return true;
+        if (self.shell.function_manager.currentFrame()) |frame| {
+            if (frame.return_requested) return true;
+        }
+        return false;
+    }
+
     /// Execute a body of commands
     pub fn executeBody(self: *ControlFlowExecutor, body: [][]const u8) i32 {
         var last_exit: i32 = 0;
@@ -827,25 +879,29 @@ pub const ControlFlowExecutor = struct {
 
             // Check for break (with optional level)
             if (std.mem.eql(u8, trimmed, "break") or std.mem.startsWith(u8, trimmed, "break ")) {
+                // Outside any loop `break` does nothing, as in sh.
+                if (self.shell.loop_depth == 0) continue;
+                var levels: u32 = 1;
                 if (std.mem.startsWith(u8, trimmed, "break ")) {
                     const level_str = std.mem.trim(u8, trimmed[6..], &std.ascii.whitespace);
-                    self.break_levels = std.fmt.parseInt(u32, level_str, 10) catch 1;
-                    if (self.break_levels == 0) self.break_levels = 1;
-                } else {
-                    self.break_levels = 1;
+                    levels = std.fmt.parseInt(u32, level_str, 10) catch 1;
+                    if (levels == 0) levels = 1;
                 }
+                // `break 5` inside two loops leaves both, and nothing more.
+                self.break_levels = @min(levels, self.shell.loop_depth);
                 return 0;
             }
 
             // Check for continue (with optional level)
             if (std.mem.eql(u8, trimmed, "continue") or std.mem.startsWith(u8, trimmed, "continue ")) {
+                if (self.shell.loop_depth == 0) continue;
+                var levels: u32 = 1;
                 if (std.mem.startsWith(u8, trimmed, "continue ")) {
                     const level_str = std.mem.trim(u8, trimmed[9..], &std.ascii.whitespace);
-                    self.continue_levels = std.fmt.parseInt(u32, level_str, 10) catch 1;
-                    if (self.continue_levels == 0) self.continue_levels = 1;
-                } else {
-                    self.continue_levels = 1;
+                    levels = std.fmt.parseInt(u32, level_str, 10) catch 1;
+                    if (levels == 0) levels = 1;
                 }
+                self.continue_levels = @min(levels, self.shell.loop_depth);
                 return 0;
             }
 
@@ -871,6 +927,9 @@ pub const ControlFlowExecutor = struct {
                 return last_exit;
             }
 
+            // `exit`, or `return` from the function this body runs in.
+            if (self.unwinding()) return last_exit;
+
             // Check errexit
             if (self.shell.option_errexit and last_exit != 0) {
                 return last_exit;
@@ -881,10 +940,51 @@ pub const ControlFlowExecutor = struct {
     }
 
     /// Expand a value (variables, command substitution, etc.)
+    /// The positional parameters visible from here: a running function's own
+    /// arguments when there is a frame, the shell's otherwise.
+    ///
+    /// The caller owns `buf` because the returned slice points into it - a
+    /// helper that declared the array itself would hand back a view of its own
+    /// dead stack frame.
+    fn collectPositionalParams(self: *ControlFlowExecutor, buf: *[64][]const u8) []const []const u8 {
+        var count: usize = 0;
+
+        if (self.shell.function_manager.currentFrame()) |frame| {
+            var pi: usize = 0;
+            while (pi < frame.positional_params_count) : (pi += 1) {
+                if (frame.positional_params[pi]) |param| {
+                    buf[count] = param;
+                    count += 1;
+                }
+            }
+        } else {
+            for (self.shell.positional_params) |maybe_param| {
+                if (maybe_param) |param| {
+                    buf[count] = param;
+                    count += 1;
+                }
+            }
+        }
+
+        return buf[0..count];
+    }
+
+    /// Expand a control-flow operand the same way the command path would.
+    ///
+    /// This used to expand against the environment alone, so inside a function
+    /// `$1` had nothing to resolve to and became the empty string. `case "$1"`
+    /// then matched no pattern but `*`, and picked the wrong branch in silence
+    /// - a wrong answer rather than an error, in the construct whose whole job
+    /// is choosing a branch. Arrays were missing for the same reason.
     fn expandValue(self: *ControlFlowExecutor, value: []const u8) ![]const u8 {
+        var pp_buf: [64][]const u8 = undefined;
+
         var expander = Expansion.init(self.allocator, &self.shell.environment, self.shell.last_exit_code);
-        const expanded = try expander.expand(value);
-        return expanded;
+        expander.positional_params = self.collectPositionalParams(&pp_buf);
+        expander.arrays = &self.shell.arrays;
+        expander.assoc_arrays = &self.shell.assoc_arrays;
+
+        return try expander.expand(value);
     }
 
     /// Match a pattern (supports full glob: *, ?, [abc], [a-z])
@@ -941,6 +1041,11 @@ pub const ControlFlowExecutor = struct {
                 if (negate) matched_class = !matched_class;
                 if (!matched_class) return false;
                 s += 1;
+            } else if (pattern[p] == '\\' and p + 1 < pattern.len) {
+                // Escaped character: matches itself only.
+                if (s >= str.len or str[s] != pattern[p + 1]) return false;
+                s += 1;
+                p += 2;
             } else {
                 if (s >= str.len or str[s] != pattern[p]) return false;
                 s += 1;
@@ -980,772 +1085,5 @@ pub const ControlFlowExecutor = struct {
 
         // Non-zero result means true (continue looping), zero means false (stop)
         return result != 0;
-    }
-};
-
-/// Parse control flow statements from script lines
-pub const ControlFlowParser = struct {
-    allocator: std.mem.Allocator,
-
-    pub fn init(allocator: std.mem.Allocator) ControlFlowParser {
-        return .{ .allocator = allocator };
-    }
-
-    /// Parse if statement from lines starting at index
-    pub fn parseIf(self: *ControlFlowParser, lines: [][]const u8, start: usize) !struct { stmt: IfStatement, end: usize } {
-        var then_body_buffer: [1000][]const u8 = undefined;
-        var then_body_count: usize = 0;
-        var elif_buffer: [10]ElifClause = undefined;
-        var elif_count: usize = 0;
-        var else_body_buffer: [1000][]const u8 = undefined;
-        var else_body_count: usize = 0;
-        var has_else = false;
-
-        // Extract condition from "if <condition>; then" or "if <condition>"
-        const first_line = std.mem.trim(u8, lines[start], &std.ascii.whitespace);
-        const condition_start = if (std.mem.startsWith(u8, first_line, "if ")) 3 else return error.InvalidIf;
-        const condition_end = std.mem.indexOf(u8, first_line[condition_start..], ";") orelse
-            std.mem.indexOf(u8, first_line[condition_start..], "\n") orelse
-            first_line[condition_start..].len;
-        const condition = try self.allocator.dupe(u8, std.mem.trim(u8, first_line[condition_start..][0..condition_end], &std.ascii.whitespace));
-
-        var i = start + 1;
-        var current_section: enum { then, elif, @"else" } = .then;
-        var if_depth: u32 = 0; // Track nested if/fi depth
-        var elif_body_buffer: [1000][]const u8 = undefined;
-        var elif_body_count: usize = 0;
-        // Buffer for accumulating nested construct lines to reconstruct as single body entry
-        var nested_buf: [4096]u8 = undefined;
-        var nested_len: usize = 0;
-
-        while (i < lines.len) : (i += 1) {
-            const line = std.mem.trim(u8, lines[i], &std.ascii.whitespace);
-
-            // Track nested if/for/while/case/fi/done/esac depth
-            if (if_depth > 0) {
-                // Check for deeper nesting
-                if (std.mem.startsWith(u8, line, "if ") or
-                    std.mem.startsWith(u8, line, "for ") or
-                    std.mem.startsWith(u8, line, "while ") or
-                    std.mem.startsWith(u8, line, "until ") or
-                    std.mem.startsWith(u8, line, "case "))
-                {
-                    if_depth += 1;
-                } else if (isKeyword(line, "fi") or
-                    isKeyword(line, "done") or
-                    isKeyword(line, "esac"))
-                {
-                    if_depth -= 1;
-                }
-                // Append to nested buffer with "; " separator
-                if (nested_len > 0 and nested_len + 2 < nested_buf.len) {
-                    nested_buf[nested_len] = ';';
-                    nested_buf[nested_len + 1] = ' ';
-                    nested_len += 2;
-                }
-                const copy_len = @min(line.len, nested_buf.len - nested_len);
-                @memcpy(nested_buf[nested_len .. nested_len + copy_len], line[0..copy_len]);
-                nested_len += copy_len;
-
-                // When depth returns to 0, flush accumulated nested construct as single body entry
-                if (if_depth == 0) {
-                    const nested_line = try self.allocator.dupe(u8, nested_buf[0..nested_len]);
-                    nested_len = 0;
-                    switch (current_section) {
-                        .then => {
-                            if (then_body_count >= then_body_buffer.len) return error.TooManyLines;
-                            then_body_buffer[then_body_count] = nested_line;
-                            then_body_count += 1;
-                        },
-                        .elif => {
-                            if (elif_body_count >= elif_body_buffer.len) return error.TooManyLines;
-                            elif_body_buffer[elif_body_count] = nested_line;
-                            elif_body_count += 1;
-                        },
-                        .@"else" => {
-                            if (else_body_count >= else_body_buffer.len) return error.TooManyLines;
-                            else_body_buffer[else_body_count] = nested_line;
-                            else_body_count += 1;
-                        },
-                    }
-                }
-                continue;
-            }
-
-            if (std.mem.eql(u8, line, "then")) {
-                // "then" after "elif" stays in elif section (it's the elif body start)
-                if (current_section != .elif) {
-                    current_section = .then;
-                }
-                continue;
-            }
-
-            if (std.mem.startsWith(u8, line, "elif ")) {
-                // Save current elif body if we had one
-                if (current_section == .elif and elif_count > 0 and elif_body_count > 0) {
-                    const body = try self.allocator.alloc([]const u8, elif_body_count);
-                    @memcpy(body, elif_body_buffer[0..elif_body_count]);
-                    elif_buffer[elif_count - 1].body = body;
-                    elif_body_count = 0;
-                }
-                current_section = .elif;
-                // Parse elif condition
-                const elif_cond_start = 5;
-                const elif_cond_end = std.mem.indexOf(u8, line[elif_cond_start..], ";") orelse line[elif_cond_start..].len;
-                const elif_condition = try self.allocator.dupe(u8, std.mem.trim(u8, line[elif_cond_start..][0..elif_cond_end], &std.ascii.whitespace));
-
-                if (elif_count >= elif_buffer.len) return error.TooManyElifClauses;
-                elif_buffer[elif_count] = ElifClause{
-                    .condition = elif_condition,
-                    .body = &[_][]const u8{},
-                };
-                elif_count += 1;
-                continue;
-            }
-
-            if (std.mem.eql(u8, line, "else")) {
-                // Save current elif body if we had one
-                if (current_section == .elif and elif_count > 0 and elif_body_count > 0) {
-                    const body = try self.allocator.alloc([]const u8, elif_body_count);
-                    @memcpy(body, elif_body_buffer[0..elif_body_count]);
-                    elif_buffer[elif_count - 1].body = body;
-                    elif_body_count = 0;
-                }
-                current_section = .@"else";
-                has_else = true;
-                continue;
-            }
-
-            if (isKeyword(line, "fi")) {
-                // Save current elif body if we had one
-                if (current_section == .elif and elif_count > 0 and elif_body_count > 0) {
-                    const body = try self.allocator.alloc([]const u8, elif_body_count);
-                    @memcpy(body, elif_body_buffer[0..elif_body_count]);
-                    elif_buffer[elif_count - 1].body = body;
-                }
-                break;
-            }
-
-            // Check if this line starts a nested construct - accumulate until matching closer
-            if (std.mem.startsWith(u8, line, "if ") or
-                std.mem.startsWith(u8, line, "for ") or
-                std.mem.startsWith(u8, line, "while ") or
-                std.mem.startsWith(u8, line, "until ") or
-                std.mem.startsWith(u8, line, "case "))
-            {
-                if_depth = 1;
-                nested_len = 0;
-                const copy_len = @min(line.len, nested_buf.len);
-                @memcpy(nested_buf[0..copy_len], line[0..copy_len]);
-                nested_len = copy_len;
-                continue;
-            }
-
-            // Add line to appropriate body
-            if (line.len > 0 and line[0] != '#') {
-                // Check capacity BEFORE allocating to avoid leaking line_copy on
-                // a buffer-full error.
-                switch (current_section) {
-                    .then => if (then_body_count >= then_body_buffer.len) return error.TooManyLines,
-                    .elif => if (elif_body_count >= elif_body_buffer.len) return error.TooManyLines,
-                    .@"else" => if (else_body_count >= else_body_buffer.len) return error.TooManyLines,
-                }
-                const line_copy = try self.allocator.dupe(u8, line);
-                switch (current_section) {
-                    .then => {
-                        then_body_buffer[then_body_count] = line_copy;
-                        then_body_count += 1;
-                    },
-                    .elif => {
-                        elif_body_buffer[elif_body_count] = line_copy;
-                        elif_body_count += 1;
-                    },
-                    .@"else" => {
-                        else_body_buffer[else_body_count] = line_copy;
-                        else_body_count += 1;
-                    },
-                }
-            }
-        }
-
-        // Create slices and copy data
-        const then_body = try self.allocator.alloc([]const u8, then_body_count);
-        errdefer self.allocator.free(then_body);
-        @memcpy(then_body, then_body_buffer[0..then_body_count]);
-
-        const elif_clauses = try self.allocator.alloc(ElifClause, elif_count);
-        errdefer self.allocator.free(elif_clauses);
-        @memcpy(elif_clauses, elif_buffer[0..elif_count]);
-
-        const else_body: ?[][]const u8 = if (has_else) blk: {
-            const body = try self.allocator.alloc([]const u8, else_body_count);
-            @memcpy(body, else_body_buffer[0..else_body_count]);
-            break :blk body;
-        } else null;
-
-        return .{
-            .stmt = IfStatement{
-                .condition = condition,
-                .then_body = then_body,
-                .elif_clauses = elif_clauses,
-                .else_body = else_body,
-                .allocator = self.allocator,
-            },
-            .end = i,
-        };
-    }
-
-    /// Parse while loop
-    pub fn parseWhile(self: *ControlFlowParser, lines: [][]const u8, start: usize, is_until: bool) !struct { loop: WhileLoop, end: usize } {
-        const first_line = std.mem.trim(u8, lines[start], &std.ascii.whitespace);
-        const keyword = if (is_until) "until " else "while ";
-        const keyword_len = keyword.len;
-
-        if (!std.mem.startsWith(u8, first_line, keyword)) return error.InvalidLoop;
-
-        const condition_end = std.mem.indexOf(u8, first_line[keyword_len..], ";") orelse
-            std.mem.indexOf(u8, first_line[keyword_len..], "\n") orelse
-            first_line[keyword_len..].len;
-        const condition = try self.allocator.dupe(u8, std.mem.trim(u8, first_line[keyword_len..][0..condition_end], &std.ascii.whitespace));
-
-        var body_buffer: [1000][]const u8 = undefined;
-        var body_count: usize = 0;
-        var i = start + 1;
-        var nest_depth: u32 = 0;
-        var nest_buf: [4096]u8 = undefined;
-        var nest_len: usize = 0;
-
-        while (i < lines.len) : (i += 1) {
-            const line = std.mem.trim(u8, lines[i], &std.ascii.whitespace);
-
-            if (isKeyword(line, "do") and nest_depth == 0) continue;
-
-            if (nest_depth > 0) {
-                if (std.mem.startsWith(u8, line, "if ") or std.mem.startsWith(u8, line, "for ") or
-                    std.mem.startsWith(u8, line, "while ") or std.mem.startsWith(u8, line, "until ") or
-                    std.mem.startsWith(u8, line, "case ")) nest_depth += 1 else if (isKeyword(line, "fi") or isKeyword(line, "done") or
-                    isKeyword(line, "esac")) nest_depth -= 1;
-                if (nest_len > 0 and nest_len + 2 < nest_buf.len) {
-                    nest_buf[nest_len] = ';';
-                    nest_buf[nest_len + 1] = ' ';
-                    nest_len += 2;
-                }
-                const cl = @min(line.len, nest_buf.len - nest_len);
-                @memcpy(nest_buf[nest_len .. nest_len + cl], line[0..cl]);
-                nest_len += cl;
-                if (nest_depth == 0) {
-                    if (body_count >= body_buffer.len) return error.TooManyLines;
-                    body_buffer[body_count] = try self.allocator.dupe(u8, nest_buf[0..nest_len]);
-                    body_count += 1;
-                    nest_len = 0;
-                }
-                continue;
-            }
-
-            if (isKeyword(line, "done")) break;
-
-            if (std.mem.startsWith(u8, line, "if ") or std.mem.startsWith(u8, line, "for ") or
-                std.mem.startsWith(u8, line, "while ") or std.mem.startsWith(u8, line, "until ") or
-                std.mem.startsWith(u8, line, "case "))
-            {
-                nest_depth = 1;
-                nest_len = 0;
-                const cl = @min(line.len, nest_buf.len);
-                @memcpy(nest_buf[0..cl], line[0..cl]);
-                nest_len = cl;
-                continue;
-            }
-
-            if (line.len > 0 and line[0] != '#') {
-                if (body_count >= body_buffer.len) return error.TooManyLines;
-                body_buffer[body_count] = try self.allocator.dupe(u8, line);
-                body_count += 1;
-            }
-        }
-
-        const body = try self.allocator.alloc([]const u8, body_count);
-        @memcpy(body, body_buffer[0..body_count]);
-
-        return .{
-            .loop = WhileLoop{
-                .condition = condition,
-                .body = body,
-                .is_until = is_until,
-                .allocator = self.allocator,
-            },
-            .end = i,
-        };
-    }
-
-    /// Parse for loop
-    pub fn parseFor(self: *ControlFlowParser, lines: [][]const u8, start: usize) !struct { loop: ForLoop, end: usize } {
-        const first_line = std.mem.trim(u8, lines[start], &std.ascii.whitespace);
-
-        if (!std.mem.startsWith(u8, first_line, "for ")) return error.InvalidFor;
-
-        // Parse: for VAR in ITEM1 ITEM2 ITEM3
-        const parts_start = 4; // After "for "
-        var variable: []const u8 = undefined;
-        var items_str: []const u8 = undefined;
-        if (std.mem.indexOf(u8, first_line[parts_start..], " in ")) |in_pos| {
-            variable = try self.allocator.dupe(u8, std.mem.trim(u8, first_line[parts_start..][0..in_pos], &std.ascii.whitespace));
-
-            const items_start = parts_start + in_pos + 4; // After " in "
-            const items_end = std.mem.indexOf(u8, first_line[items_start..], ";") orelse first_line[items_start..].len;
-            items_str = std.mem.trim(u8, first_line[items_start..][0..items_end], &std.ascii.whitespace);
-        } else {
-            // POSIX `for VAR; do ...` / `for VAR` — iterate the positional
-            // parameters (equivalent to `for VAR in "$@"`).
-            const np = first_line[parts_start..];
-            var ve: usize = 0;
-            while (ve < np.len and np[ve] != ' ' and np[ve] != '\t' and np[ve] != ';') ve += 1;
-            if (ve == 0) return error.InvalidFor;
-            variable = try self.allocator.dupe(u8, np[0..ve]);
-            items_str = "$@";
-        }
-
-        var items_buffer: [100][]const u8 = undefined;
-        var items_count: usize = 0;
-        // Use shell-aware tokenization to respect $(...), `...`, and quotes
-        {
-            var ti: usize = 0;
-            while (ti < items_str.len) {
-                while (ti < items_str.len and (items_str[ti] == ' ' or items_str[ti] == '\t')) ti += 1;
-                if (ti >= items_str.len) break;
-                const word_start = ti;
-                var paren_depth: u32 = 0;
-                var in_sq = false;
-                var in_dq = false;
-                var in_bt = false;
-                while (ti < items_str.len) {
-                    const c = items_str[ti];
-                    if (in_sq) {
-                        if (c == '\'') in_sq = false;
-                        ti += 1;
-                        continue;
-                    }
-                    if (c == '\'' and !in_dq and paren_depth == 0 and !in_bt) {
-                        in_sq = true;
-                        ti += 1;
-                        continue;
-                    }
-                    if (c == '"' and !in_sq) {
-                        in_dq = !in_dq;
-                        ti += 1;
-                        continue;
-                    }
-                    if (c == '`') {
-                        in_bt = !in_bt;
-                        ti += 1;
-                        continue;
-                    }
-                    if (!in_dq and !in_bt and paren_depth == 0 and (c == ' ' or c == '\t')) break;
-                    if (c == '$' and ti + 1 < items_str.len and items_str[ti + 1] == '(') {
-                        paren_depth += 1;
-                        ti += 2;
-                        continue;
-                    }
-                    if (c == '(' and paren_depth > 0) {
-                        paren_depth += 1;
-                        ti += 1;
-                        continue;
-                    }
-                    if (c == ')' and paren_depth > 0) {
-                        paren_depth -= 1;
-                        ti += 1;
-                        continue;
-                    }
-                    ti += 1;
-                }
-                if (ti > word_start) {
-                    if (items_count >= items_buffer.len) return error.TooManyItems;
-                    items_buffer[items_count] = try self.allocator.dupe(u8, items_str[word_start..ti]);
-                    items_count += 1;
-                }
-            }
-        }
-
-        var body_buffer: [1000][]const u8 = undefined;
-        var body_count: usize = 0;
-        var i = start + 1;
-        var nest_depth: u32 = 0;
-        var nest_buf: [4096]u8 = undefined;
-        var nest_len: usize = 0;
-
-        while (i < lines.len) : (i += 1) {
-            const line = std.mem.trim(u8, lines[i], &std.ascii.whitespace);
-
-            if (isKeyword(line, "do") and nest_depth == 0) continue;
-
-            if (nest_depth > 0) {
-                if (std.mem.startsWith(u8, line, "if ") or std.mem.startsWith(u8, line, "for ") or
-                    std.mem.startsWith(u8, line, "while ") or std.mem.startsWith(u8, line, "until ") or
-                    std.mem.startsWith(u8, line, "case ")) nest_depth += 1 else if (isKeyword(line, "fi") or isKeyword(line, "done") or
-                    isKeyword(line, "esac")) nest_depth -= 1;
-                if (nest_len > 0 and nest_len + 2 < nest_buf.len) {
-                    nest_buf[nest_len] = ';';
-                    nest_buf[nest_len + 1] = ' ';
-                    nest_len += 2;
-                }
-                const cl = @min(line.len, nest_buf.len - nest_len);
-                @memcpy(nest_buf[nest_len .. nest_len + cl], line[0..cl]);
-                nest_len += cl;
-                if (nest_depth == 0) {
-                    if (body_count >= body_buffer.len) return error.TooManyLines;
-                    body_buffer[body_count] = try self.allocator.dupe(u8, nest_buf[0..nest_len]);
-                    body_count += 1;
-                    nest_len = 0;
-                }
-                continue;
-            }
-
-            if (isKeyword(line, "done")) break;
-
-            if (std.mem.startsWith(u8, line, "if ") or std.mem.startsWith(u8, line, "for ") or
-                std.mem.startsWith(u8, line, "while ") or std.mem.startsWith(u8, line, "until ") or
-                std.mem.startsWith(u8, line, "case "))
-            {
-                nest_depth = 1;
-                nest_len = 0;
-                const cl = @min(line.len, nest_buf.len);
-                @memcpy(nest_buf[0..cl], line[0..cl]);
-                nest_len = cl;
-                continue;
-            }
-
-            if (line.len > 0 and line[0] != '#') {
-                if (body_count >= body_buffer.len) return error.TooManyLines;
-                body_buffer[body_count] = try self.allocator.dupe(u8, line);
-                body_count += 1;
-            }
-        }
-
-        const items = try self.allocator.alloc([]const u8, items_count);
-        errdefer self.allocator.free(items);
-        @memcpy(items, items_buffer[0..items_count]);
-
-        const body = try self.allocator.alloc([]const u8, body_count);
-        @memcpy(body, body_buffer[0..body_count]);
-
-        return .{
-            .loop = ForLoop{
-                .variable = variable,
-                .items = items,
-                .body = body,
-                .allocator = self.allocator,
-            },
-            .end = i,
-        };
-    }
-
-    /// Parse C-style for loop: for ((init; condition; update))
-    pub fn parseCStyleFor(self: *ControlFlowParser, lines: [][]const u8, start: usize) !struct { loop: CStyleForLoop, end: usize } {
-        const first_line = std.mem.trim(u8, lines[start], &std.ascii.whitespace);
-
-        if (!std.mem.startsWith(u8, first_line, "for ((")) return error.InvalidCStyleFor;
-
-        // Find the closing ))
-        const expr_start = 6; // After "for (("
-        const expr_end = std.mem.indexOf(u8, first_line[expr_start..], "))") orelse return error.InvalidCStyleFor;
-        const expr = first_line[expr_start..][0..expr_end];
-
-        // Split by semicolons: init; condition; update
-        var parts: [3]?[]const u8 = .{ null, null, null };
-        var parts_count: usize = 0;
-        var part_iter = std.mem.splitSequence(u8, expr, ";");
-        while (part_iter.next()) |part| : (parts_count += 1) {
-            if (parts_count >= 3) return error.InvalidCStyleFor;
-            const trimmed = std.mem.trim(u8, part, &std.ascii.whitespace);
-            if (trimmed.len > 0) {
-                parts[parts_count] = try self.allocator.dupe(u8, trimmed);
-            }
-        }
-
-        // Parse body
-        var body_buffer: [1000][]const u8 = undefined;
-        var body_count: usize = 0;
-        var i = start + 1;
-
-        while (i < lines.len) : (i += 1) {
-            const line = std.mem.trim(u8, lines[i], &std.ascii.whitespace);
-
-            if (isKeyword(line, "do")) continue;
-            if (isKeyword(line, "done")) break;
-
-            if (line.len > 0 and line[0] != '#') {
-                if (body_count >= body_buffer.len) return error.TooManyLines;
-                body_buffer[body_count] = try self.allocator.dupe(u8, line);
-                body_count += 1;
-            }
-        }
-
-        const body = try self.allocator.alloc([]const u8, body_count);
-        @memcpy(body, body_buffer[0..body_count]);
-
-        return .{
-            .loop = CStyleForLoop{
-                .init = parts[0],
-                .condition = parts[1],
-                .update = parts[2],
-                .body = body,
-                .allocator = self.allocator,
-            },
-            .end = i,
-        };
-    }
-
-    /// Parse select menu: select VAR in ITEM1 ITEM2 ITEM3
-    pub fn parseSelect(self: *ControlFlowParser, lines: [][]const u8, start: usize) !struct { menu: SelectMenu, end: usize } {
-        const first_line = std.mem.trim(u8, lines[start], &std.ascii.whitespace);
-
-        if (!std.mem.startsWith(u8, first_line, "select ")) return error.InvalidSelect;
-
-        // Parse: select VAR in ITEM1 ITEM2 ITEM3
-        const parts_start = 7; // After "select "
-        const in_pos = std.mem.indexOf(u8, first_line[parts_start..], " in ") orelse return error.InvalidSelect;
-
-        const variable = try self.allocator.dupe(u8, std.mem.trim(u8, first_line[parts_start..][0..in_pos], &std.ascii.whitespace));
-
-        const items_start = parts_start + in_pos + 4; // After " in "
-        const items_end = std.mem.indexOf(u8, first_line[items_start..], ";") orelse first_line[items_start..].len;
-        const items_str = std.mem.trim(u8, first_line[items_start..][0..items_end], &std.ascii.whitespace);
-
-        var items_buffer: [100][]const u8 = undefined;
-        var items_count: usize = 0;
-        var items_iter = std.mem.tokenizeAny(u8, items_str, " \t");
-        while (items_iter.next()) |item| {
-            if (items_count >= items_buffer.len) return error.TooManyItems;
-            items_buffer[items_count] = try self.allocator.dupe(u8, item);
-            items_count += 1;
-        }
-
-        var body_buffer: [1000][]const u8 = undefined;
-        var body_count: usize = 0;
-        var i = start + 1;
-
-        while (i < lines.len) : (i += 1) {
-            const line = std.mem.trim(u8, lines[i], &std.ascii.whitespace);
-
-            if (isKeyword(line, "do")) continue;
-            if (isKeyword(line, "done")) break;
-
-            if (line.len > 0 and line[0] != '#') {
-                if (body_count >= body_buffer.len) return error.TooManyLines;
-                body_buffer[body_count] = try self.allocator.dupe(u8, line);
-                body_count += 1;
-            }
-        }
-
-        const items = try self.allocator.alloc([]const u8, items_count);
-        @memcpy(items, items_buffer[0..items_count]);
-
-        const body = try self.allocator.alloc([]const u8, body_count);
-        @memcpy(body, body_buffer[0..body_count]);
-
-        // Default PS3 prompt
-        const prompt = try self.allocator.dupe(u8, "#? ");
-
-        return .{
-            .menu = SelectMenu{
-                .variable = variable,
-                .items = items,
-                .body = body,
-                .prompt = prompt,
-                .allocator = self.allocator,
-            },
-            .end = i,
-        };
-    }
-
-    /// Parse case statement: case VALUE in pattern1) body;; pattern2) body;; esac
-    /// Supports:
-    ///   ;; - normal termination
-    ///   ;& - fallthrough to next case body
-    ///   ;;& - continue testing patterns
-    pub fn parseCase(self: *ControlFlowParser, lines: [][]const u8, start: usize) !struct { stmt: CaseStatement, end: usize } {
-        const first_line = std.mem.trim(u8, lines[start], &std.ascii.whitespace);
-
-        if (!std.mem.startsWith(u8, first_line, "case ")) return error.InvalidCase;
-
-        // Parse: case VALUE in
-        const value_start = 5; // After "case "
-        const in_pos = std.mem.indexOf(u8, first_line[value_start..], " in") orelse return error.InvalidCase;
-        const value = try self.allocator.dupe(u8, std.mem.trim(u8, first_line[value_start..][0..in_pos], &std.ascii.whitespace));
-
-        var cases_buffer: [100]CaseClause = undefined;
-        var cases_count: usize = 0;
-
-        var current_patterns: [20][]const u8 = undefined;
-        var current_patterns_count: usize = 0;
-        var current_body: [100][]const u8 = undefined;
-        var current_body_count: usize = 0;
-        var in_case_body = false;
-
-        var i = start + 1;
-        while (i < lines.len) : (i += 1) {
-            const line = std.mem.trim(u8, lines[i], &std.ascii.whitespace);
-
-            // Skip empty lines and comments
-            if (line.len == 0 or line[0] == '#') continue;
-
-            // End of case statement
-            if (isKeyword(line, "esac")) break;
-
-            // Check for case pattern line: pattern1|pattern2)
-            if (!in_case_body) {
-                // Look for pattern line ending with )
-                if (std.mem.indexOf(u8, line, ")")) |paren_pos| {
-                    const patterns_str = line[0..paren_pos];
-                    // Split patterns by |
-                    var pattern_iter = std.mem.splitScalar(u8, patterns_str, '|');
-                    while (pattern_iter.next()) |pattern| {
-                        const trimmed_pattern = std.mem.trim(u8, pattern, &std.ascii.whitespace);
-                        if (trimmed_pattern.len > 0) {
-                            if (current_patterns_count >= current_patterns.len) return error.TooManyPatterns;
-                            current_patterns[current_patterns_count] = try self.allocator.dupe(u8, trimmed_pattern);
-                            current_patterns_count += 1;
-                        }
-                    }
-                    in_case_body = true;
-
-                    // Check if there's inline body after the )
-                    const after_paren = line[paren_pos + 1 ..];
-                    const trimmed_after = std.mem.trim(u8, after_paren, &std.ascii.whitespace);
-                    if (trimmed_after.len > 0) {
-                        // Check for inline terminator
-                        const terminator_result = self.detectTerminator(trimmed_after);
-                        if (terminator_result.body.len > 0) {
-                            if (current_body_count >= current_body.len) return error.TooManyLines;
-                            current_body[current_body_count] = try self.allocator.dupe(u8, terminator_result.body);
-                            current_body_count += 1;
-                        }
-                        if (terminator_result.found) {
-                            // Complete this case clause
-                            if (cases_count >= cases_buffer.len) return error.TooManyCases;
-                            const patterns = try self.allocator.alloc([]const u8, current_patterns_count);
-                            @memcpy(patterns, current_patterns[0..current_patterns_count]);
-                            const body = try self.allocator.alloc([]const u8, current_body_count);
-                            @memcpy(body, current_body[0..current_body_count]);
-
-                            cases_buffer[cases_count] = CaseClause{
-                                .patterns = patterns,
-                                .body = body,
-                                .terminator = terminator_result.terminator,
-                            };
-                            cases_count += 1;
-
-                            // Reset for next case
-                            current_patterns_count = 0;
-                            current_body_count = 0;
-                            in_case_body = false;
-                        }
-                    }
-                }
-            } else {
-                // We're in a case body, look for terminator
-                const terminator_result = self.detectTerminator(line);
-                if (terminator_result.body.len > 0) {
-                    if (current_body_count >= current_body.len) return error.TooManyLines;
-                    current_body[current_body_count] = try self.allocator.dupe(u8, terminator_result.body);
-                    current_body_count += 1;
-                }
-                if (terminator_result.found) {
-                    // Complete this case clause
-                    if (cases_count >= cases_buffer.len) return error.TooManyCases;
-                    const patterns = try self.allocator.alloc([]const u8, current_patterns_count);
-                    @memcpy(patterns, current_patterns[0..current_patterns_count]);
-                    const body = try self.allocator.alloc([]const u8, current_body_count);
-                    @memcpy(body, current_body[0..current_body_count]);
-
-                    cases_buffer[cases_count] = CaseClause{
-                        .patterns = patterns,
-                        .body = body,
-                        .terminator = terminator_result.terminator,
-                    };
-                    cases_count += 1;
-
-                    // Reset for next case
-                    current_patterns_count = 0;
-                    current_body_count = 0;
-                    in_case_body = false;
-                } else if (!terminator_result.found and terminator_result.body.len == 0) {
-                    // Regular body line (no terminator detected by detectTerminator means it returned the line as body)
-                    if (current_body_count >= current_body.len) return error.TooManyLines;
-                    current_body[current_body_count] = try self.allocator.dupe(u8, line);
-                    current_body_count += 1;
-                }
-            }
-        }
-
-        const cases = try self.allocator.alloc(CaseClause, cases_count);
-        @memcpy(cases, cases_buffer[0..cases_count]);
-
-        return .{
-            .stmt = CaseStatement{
-                .value = value,
-                .cases = cases,
-                .allocator = self.allocator,
-            },
-            .end = i,
-        };
-    }
-
-    /// Detect case terminator in a line (;;, ;&, or ;;&)
-    /// Returns the body content before the terminator and the terminator type.
-    /// Skips terminators that appear inside single or double quotes.
-    fn detectTerminator(self: *ControlFlowParser, line: []const u8) struct { body: []const u8, terminator: CaseTerminator, found: bool } {
-        _ = self;
-
-        var i: usize = 0;
-        var in_sq = false;
-        var in_dq = false;
-        while (i < line.len) : (i += 1) {
-            const ch = line[i];
-            if (ch == '\\' and !in_sq and i + 1 < line.len) {
-                i += 1; // skip escaped char
-                continue;
-            }
-            if (ch == '\'' and !in_dq) {
-                in_sq = !in_sq;
-                continue;
-            }
-            if (ch == '"' and !in_sq) {
-                in_dq = !in_dq;
-                continue;
-            }
-            if (!in_sq and !in_dq and ch == ';') {
-                // Check for ;;& first (longest match)
-                if (i + 2 < line.len and line[i + 1] == ';' and line[i + 2] == '&') {
-                    return .{
-                        .body = std.mem.trim(u8, line[0..i], &std.ascii.whitespace),
-                        .terminator = .continue_testing,
-                        .found = true,
-                    };
-                }
-                // Check for ;& (fallthrough)
-                if (i + 1 < line.len and line[i + 1] == '&') {
-                    return .{
-                        .body = std.mem.trim(u8, line[0..i], &std.ascii.whitespace),
-                        .terminator = .fallthrough,
-                        .found = true,
-                    };
-                }
-                // Check for ;; (normal termination)
-                if (i + 1 < line.len and line[i + 1] == ';') {
-                    return .{
-                        .body = std.mem.trim(u8, line[0..i], &std.ascii.whitespace),
-                        .terminator = .normal,
-                        .found = true,
-                    };
-                }
-            }
-        }
-
-        // No terminator found
-        return .{
-            .body = line,
-            .terminator = .normal,
-            .found = false,
-        };
     }
 };

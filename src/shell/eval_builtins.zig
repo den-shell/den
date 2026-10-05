@@ -13,6 +13,7 @@ const IO = @import("../utils/io.zig").IO;
 const types = @import("../types/mod.zig");
 const parser_mod = @import("../parser/mod.zig");
 const executor_mod = @import("../executor/mod.zig");
+const misc_builtins = @import("misc_builtins.zig");
 
 // Forward declaration for Shell type
 const Shell = @import("../shell.zig").Shell;
@@ -617,43 +618,23 @@ pub fn builtinEval(self: *Shell, cmd: *types.ParsedCommand) !void {
 
     const command_str = eval_str.items;
 
-    // Execute as if typed at prompt
-    // Tokenize
-    var tokenizer = parser_mod.Tokenizer.init(self.allocator, command_str);
-    const tokens = tokenizer.tokenize() catch |err| {
-        try IO.eprint("den: eval: parse error: {}\n", .{err});
-        self.last_exit_code = 1;
-        return;
-    };
-    defer self.allocator.free(tokens);
-
-    if (tokens.len == 0) {
+    if (std.mem.trim(u8, command_str, &std.ascii.whitespace).len == 0) {
         self.last_exit_code = 0;
         return;
     }
 
-    // Parse
-    var parser = parser_mod.Parser.init(self.allocator, tokens);
-    var chain = parser.parse() catch |err| {
-        try IO.eprint("den: eval: {s}\n", .{formatParseError(err)});
-        self.last_exit_code = 2;
-        return;
-    };
-    defer chain.deinit(self.allocator);
-
-    // Expand variables and aliases
-    try self.expandCommandChain(&chain);
-    try self.expandAliases(&chain);
-
-    // Execute - use initWithShell so variable assignments persist to the shell
-    var executor = executor_mod.Executor.initWithShell(self.allocator, &self.environment, self);
-    const exit_code = executor.executeChain(&chain) catch |err| {
-        try IO.eprint("den: eval: execution error: {}\n", .{err});
-        self.last_exit_code = 1;
-        return;
-    };
-
-    self.last_exit_code = exit_code;
+    // Run the argument as shell input, the way `source` runs a file.
+    //
+    // This used to tokenize and parse into a single command chain, which has
+    // no representation for a function definition - so `eval "$(tool init)"`,
+    // which is how essentially every shell integration is loaded, defined
+    // nothing and reported nothing. A chain also cannot hold a multi-line
+    // construct, and an integration snippet is mostly those.
+    //
+    // POSIX says eval concatenates its arguments and evaluates the result as
+    // shell input, which is what this path does; the argument itself was
+    // already expanded when the eval command line was parsed.
+    misc_builtins.executeScriptContent(self, command_str);
 }
 
 /// Builtin: shift - shift positional parameters

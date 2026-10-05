@@ -49,7 +49,7 @@ fn dateNow(allocator: std.mem.Allocator) !i32 {
 
     const result = try std.fmt.allocPrint(allocator, "{d}-{d:0>2}-{d:0>2} {d:0>2}:{d:0>2}:{d:0>2}", .{
         yd.year,
-        @intFromEnum(month),
+        @backingInt(month),
         day_of_month,
         hours,
         minutes,
@@ -90,7 +90,7 @@ fn dateFormat(allocator: std.mem.Allocator, command: *types.ParsedCommand) !i32 
                     try result.appendSlice(allocator, s);
                 },
                 'm' => {
-                    const s = try std.fmt.allocPrint(allocator, "{d:0>2}", .{@intFromEnum(month)});
+                    const s = try std.fmt.allocPrint(allocator, "{d:0>2}", .{@backingInt(month)});
                     defer allocator.free(s);
                     try result.appendSlice(allocator, s);
                 },
@@ -152,7 +152,7 @@ fn dateToRecord(allocator: std.mem.Allocator) !i32 {
 
     const values = try allocator.alloc(Value, 6);
     values[0] = .{ .int = @intCast(yd.year) };
-    values[1] = .{ .int = @intFromEnum(month) };
+    values[1] = .{ .int = @backingInt(month) };
     values[2] = .{ .int = @intCast(day_of_month) };
     values[3] = .{ .int = @intCast(day.getHoursIntoDay()) };
     values[4] = .{ .int = @intCast(day.getMinutesIntoHour()) };

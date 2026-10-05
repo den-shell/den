@@ -1,6 +1,7 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const env_utils = @import("env.zig");
+const compound = @import("../parser/compound.zig");
 
 /// Typo correction utilities using fuzzy matching (Levenshtein distance)
 pub const TypoCorrection = struct {
@@ -104,8 +105,9 @@ pub const TypoCorrection = struct {
                 // Calculate distance
                 const distance = try self.levenshteinDistance(typo, entry.name);
 
-                // Only consider if within max distance
-                if (distance <= max_distance) {
+                // Only consider if within max distance, and only once: the
+                // same name in two PATH directories is one suggestion.
+                if (distance <= max_distance and !containsCommand(suggestions.items, entry.name)) {
                     const sim = try self.similarity(typo, entry.name);
                     try suggestions.append(self.allocator, .{
                         .command = try self.allocator.dupe(u8, entry.name),
@@ -133,7 +135,7 @@ pub const TypoCorrection = struct {
 
         for (builtins) |builtin_cmd| {
             const distance = try self.levenshteinDistance(typo, builtin_cmd);
-            if (distance <= max_distance) {
+            if (distance <= max_distance and !containsCommand(suggestions.items, builtin_cmd)) {
                 const sim = try self.similarity(typo, builtin_cmd);
                 try suggestions.append(self.allocator, .{
                     .command = try self.allocator.dupe(u8, builtin_cmd),
@@ -188,8 +190,19 @@ pub const TypoCorrection = struct {
         return null;
     }
 
+    fn containsCommand(suggestions: []const Suggestion, name: []const u8) bool {
+        for (suggestions) |s| {
+            if (std.mem.eql(u8, s.command, name)) return true;
+        }
+        return false;
+    }
+
     /// Format a "did you mean" message
     pub fn formatSuggestionMessage(self: *TypoCorrection, typo: []const u8) !?[]const u8 {
+        // `for`, `do`, `done` and the like are shell syntax, not misspelled
+        // programs; offering `sort` or `du` for them only misleads.
+        if (compound.isReservedWord(typo)) return null;
+
         const suggestions = try self.findSuggestions(typo, 3);
         defer {
             for (suggestions) |s| self.allocator.free(s.command);
@@ -282,4 +295,25 @@ test "find suggestions for common typos" {
         }
     }
     try std.testing.expect(found_cd);
+}
+
+test "reserved words get no suggestions" {
+    var tc = TypoCorrection.init(std.testing.allocator);
+    for ([_][]const u8{ "for", "do", "done", "then", "fi", "esac", "}" }) |word| {
+        try std.testing.expect((try tc.formatSuggestionMessage(word)) == null);
+    }
+}
+
+test "suggestions are unique" {
+    var tc = TypoCorrection.init(std.testing.allocator);
+    const suggestions = try tc.findSuggestions("sortt", 10);
+    defer {
+        for (suggestions) |s| std.testing.allocator.free(s.command);
+        std.testing.allocator.free(suggestions);
+    }
+    for (suggestions, 0..) |a, i| {
+        for (suggestions[i + 1 ..]) |b| {
+            try std.testing.expect(!std.mem.eql(u8, a.command, b.command));
+        }
+    }
 }

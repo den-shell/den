@@ -92,7 +92,7 @@ pub const ScopedTimer = struct {
     pub fn init(name: []const u8) ScopedTimer {
         return .{
             .timer = Timer.start(name),
-            .enabled = builtin.mode == .Debug,
+            .enabled = builtin.mode == .debug,
         };
     }
 

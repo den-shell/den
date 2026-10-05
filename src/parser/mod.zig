@@ -3,6 +3,8 @@ pub const parser = @import("parser.zig");
 pub const ast = @import("ast.zig");
 pub const ast_builder = @import("ast_builder.zig");
 pub const optimized_parser = @import("optimized_parser.zig");
+/// Where lists, pipelines and compound commands begin and end.
+pub const compound = @import("compound.zig");
 
 pub const Tokenizer = tokenizer.Tokenizer;
 pub const Token = tokenizer.Token;

@@ -49,7 +49,7 @@ fn writeStderr(msg: []const u8) void {
 
 /// Assert that a condition is true
 pub fn assert(condition: bool, comptime message: []const u8, args: anytype) void {
-    if (builtin.mode == .Debug or builtin.mode == .ReleaseSafe) {
+    if (builtin.mode == .debug or builtin.mode == .safe) {
         if (!condition) {
             assertionFailed(@src(), message, args);
         }
@@ -58,7 +58,7 @@ pub fn assert(condition: bool, comptime message: []const u8, args: anytype) void
 
 /// Assert equality
 pub fn assertEquals(comptime T: type, expected: T, actual: T, comptime message: []const u8) void {
-    if (builtin.mode == .Debug or builtin.mode == .ReleaseSafe) {
+    if (builtin.mode == .debug or builtin.mode == .safe) {
         if (!std.meta.eql(expected, actual)) {
             var buf: [2048]u8 = undefined;
             const result = std.fmt.bufPrint(&buf, "{s}\n  Expected: {any}\n  Actual:   {any}", .{
@@ -74,7 +74,7 @@ pub fn assertEquals(comptime T: type, expected: T, actual: T, comptime message: 
 
 /// Assert not equal
 pub fn assertNotEquals(comptime T: type, not_expected: T, actual: T, comptime message: []const u8) void {
-    if (builtin.mode == .Debug or builtin.mode == .ReleaseSafe) {
+    if (builtin.mode == .debug or builtin.mode == .safe) {
         if (std.meta.eql(not_expected, actual)) {
             var buf: [2048]u8 = undefined;
             const result = std.fmt.bufPrint(&buf, "{s}\n  Did not expect: {any}\n  But got:        {any}", .{
@@ -90,7 +90,7 @@ pub fn assertNotEquals(comptime T: type, not_expected: T, actual: T, comptime me
 
 /// Assert null
 pub fn assertNull(value: anytype, comptime message: []const u8) void {
-    if (builtin.mode == .Debug or builtin.mode == .ReleaseSafe) {
+    if (builtin.mode == .debug or builtin.mode == .safe) {
         if (value != null) {
             var buf: [1024]u8 = undefined;
             const result = std.fmt.bufPrint(&buf, "{s}\n  Expected null, but got: {any}", .{
@@ -105,7 +105,7 @@ pub fn assertNull(value: anytype, comptime message: []const u8) void {
 
 /// Assert not null
 pub fn assertNotNull(value: anytype, comptime message: []const u8) void {
-    if (builtin.mode == .Debug or builtin.mode == .ReleaseSafe) {
+    if (builtin.mode == .debug or builtin.mode == .safe) {
         if (value == null) {
             assertionFailed(@src(), "{s}\n  Expected non-null value, but got null", .{message});
         }
@@ -114,7 +114,7 @@ pub fn assertNotNull(value: anytype, comptime message: []const u8) void {
 
 /// Assert string equality
 pub fn assertStringEquals(expected: []const u8, actual: []const u8, comptime message: []const u8) void {
-    if (builtin.mode == .Debug or builtin.mode == .ReleaseSafe) {
+    if (builtin.mode == .debug or builtin.mode == .safe) {
         if (!std.mem.eql(u8, expected, actual)) {
             var buf: [2048]u8 = undefined;
             const result = std.fmt.bufPrint(&buf, "{s}\n  Expected: \"{s}\"\n  Actual:   \"{s}\"", .{
@@ -130,7 +130,7 @@ pub fn assertStringEquals(expected: []const u8, actual: []const u8, comptime mes
 
 /// Assert string contains substring
 pub fn assertStringContains(haystack: []const u8, needle: []const u8, comptime message: []const u8) void {
-    if (builtin.mode == .Debug or builtin.mode == .ReleaseSafe) {
+    if (builtin.mode == .debug or builtin.mode == .safe) {
         if (std.mem.indexOf(u8, haystack, needle) == null) {
             var buf: [2048]u8 = undefined;
             const result = std.fmt.bufPrint(&buf, "{s}\n  String: \"{s}\"\n  Does not contain: \"{s}\"", .{
@@ -146,7 +146,7 @@ pub fn assertStringContains(haystack: []const u8, needle: []const u8, comptime m
 
 /// Assert greater than
 pub fn assertGreaterThan(comptime T: type, value: T, threshold: T, comptime message: []const u8) void {
-    if (builtin.mode == .Debug or builtin.mode == .ReleaseSafe) {
+    if (builtin.mode == .debug or builtin.mode == .safe) {
         if (value <= threshold) {
             var buf: [1024]u8 = undefined;
             const result = std.fmt.bufPrint(&buf, "{s}\n  Expected {any} > {any}, but {any} <= {any}", .{
@@ -164,7 +164,7 @@ pub fn assertGreaterThan(comptime T: type, value: T, threshold: T, comptime mess
 
 /// Assert less than
 pub fn assertLessThan(comptime T: type, value: T, threshold: T, comptime message: []const u8) void {
-    if (builtin.mode == .Debug or builtin.mode == .ReleaseSafe) {
+    if (builtin.mode == .debug or builtin.mode == .safe) {
         if (value >= threshold) {
             var buf: [1024]u8 = undefined;
             const result = std.fmt.bufPrint(&buf, "{s}\n  Expected {any} < {any}, but {any} >= {any}", .{
@@ -182,7 +182,7 @@ pub fn assertLessThan(comptime T: type, value: T, threshold: T, comptime message
 
 /// Assert array/slice length
 pub fn assertLength(comptime T: type, slice: []const T, expected_len: usize, comptime message: []const u8) void {
-    if (builtin.mode == .Debug or builtin.mode == .ReleaseSafe) {
+    if (builtin.mode == .debug or builtin.mode == .safe) {
         if (slice.len != expected_len) {
             var buf: [1024]u8 = undefined;
             const result = std.fmt.bufPrint(&buf, "{s}\n  Expected length: {d}\n  Actual length:   {d}", .{
@@ -198,7 +198,7 @@ pub fn assertLength(comptime T: type, slice: []const T, expected_len: usize, com
 
 /// Assert that a value is in a range
 pub fn assertInRange(comptime T: type, value: T, min: T, max: T, comptime message: []const u8) void {
-    if (builtin.mode == .Debug or builtin.mode == .ReleaseSafe) {
+    if (builtin.mode == .debug or builtin.mode == .safe) {
         if (value < min or value > max) {
             var buf: [1024]u8 = undefined;
             const result = std.fmt.bufPrint(&buf, "{s}\n  Expected {any} to be in range [{any}, {any}]", .{
@@ -215,7 +215,7 @@ pub fn assertInRange(comptime T: type, value: T, min: T, max: T, comptime messag
 
 /// Assert error
 pub fn assertError(comptime E: type, result: anytype, expected_error: E, comptime message: []const u8) void {
-    if (builtin.mode == .Debug or builtin.mode == .ReleaseSafe) {
+    if (builtin.mode == .debug or builtin.mode == .safe) {
         if (result) |_| {
             assertionFailed(@src(), "{s}\n  Expected error {s}, but got success", .{ message, @errorName(expected_error) });
         } else |err| {

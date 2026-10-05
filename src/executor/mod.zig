@@ -158,6 +158,11 @@ pub const Executor = struct {
         var i: usize = 0;
 
         while (i < chain.commands.len) {
+            // Nothing after an `exit` runs.
+            if (self.shell) |shell| {
+                if (shell.exit_requested) break;
+            }
+
             // Check if we should execute this command based on previous operator
             if (i > 0) {
                 const prev_op = chain.operators[i - 1];
@@ -534,7 +539,7 @@ pub const Executor = struct {
             }
             const raw: u32 = @bitCast(wait_status);
             const status: i32 = if (std.posix.W.IFSIGNALED(raw))
-                128 + @as(i32, @intCast(@intFromEnum(std.posix.W.TERMSIG(raw))))
+                128 + @as(i32, @intCast(@backingInt(std.posix.W.TERMSIG(raw))))
             else
                 @intCast(std.posix.W.EXITSTATUS(raw));
             last_status = status;
@@ -1354,14 +1359,28 @@ pub const Executor = struct {
             return try builtins.interactive_builtins.ifind(self.allocator, command);
         } else if (std.mem.eql(u8, command.name, "coproc")) {
             return try builtins.exec_builtins.coproc(&ctx, command);
+        } else if (std.mem.eql(u8, command.name, "exit")) {
+            // `exit` reached through a chain (`true && exit 3`); a lone `exit`
+            // takes the shell's fast path. Either way the shell stops after it.
+            if (self.shell) |shell| {
+                if (command.args.len > 0) {
+                    shell.last_exit_code = std.fmt.parseInt(i32, command.args[0], 10) catch 0;
+                }
+                shell.running = false;
+                shell.exit_requested = true;
+                return shell.last_exit_code;
+            }
+            return 0;
         } else if (std.mem.eql(u8, command.name, "break")) {
             if (self.shell) |shell| {
                 const levels = if (command.args.len > 0)
                     std.fmt.parseInt(u32, command.args[0], 10) catch 1
                 else
                     1;
-                shell.break_levels = if (levels > 0) levels else 1;
                 shell.last_exit_code = 0;
+                if (shell.loop_depth > 0) {
+                    shell.break_levels = @min(if (levels > 0) levels else 1, shell.loop_depth);
+                }
             }
             return 0;
         } else if (std.mem.eql(u8, command.name, "continue")) {
@@ -1370,8 +1389,10 @@ pub const Executor = struct {
                     std.fmt.parseInt(u32, command.args[0], 10) catch 1
                 else
                     1;
-                shell.continue_levels = if (levels > 0) levels else 1;
                 shell.last_exit_code = 0;
+                if (shell.loop_depth > 0) {
+                    shell.continue_levels = @min(if (levels > 0) levels else 1, shell.loop_depth);
+                }
             }
             return 0;
         } else if (std.mem.eql(u8, command.name, ":")) {
@@ -1761,7 +1782,7 @@ pub const Executor = struct {
                 _ = process.waitpidIntr(pid, &wait_status_exec, 0);
                 const raw: u32 = @bitCast(wait_status_exec);
                 if (std.posix.W.IFSIGNALED(raw)) {
-                    return 128 + @as(i32, @intCast(@intFromEnum(std.posix.W.TERMSIG(raw))));
+                    return 128 + @as(i32, @intCast(@backingInt(std.posix.W.TERMSIG(raw))));
                 } else {
                     return @intCast(std.posix.W.EXITSTATUS(raw));
                 }

@@ -4,4 +4,5 @@
 
 test {
     _ = @import("parser/test_parser.zig");
+    _ = @import("parser/compound.zig");
 }

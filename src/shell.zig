@@ -128,7 +128,6 @@ const Glob = @import("utils/glob.zig").Glob;
 const BraceExpander = @import("utils/brace.zig").BraceExpander;
 const ScriptManager = @import("scripting/script_manager.zig").ScriptManager;
 const FunctionManager = @import("scripting/functions.zig").FunctionManager;
-const ControlFlowParser = @import("scripting/control_flow.zig").ControlFlowParser;
 const ControlFlowExecutor = @import("scripting/control_flow.zig").ControlFlowExecutor;
 const PluginRegistry = @import("plugins/interface.zig").PluginRegistry;
 const PluginManager = @import("plugins/manager.zig").PluginManager;
@@ -167,6 +166,8 @@ const matchRegexAt = regex.matchRegexAt;
 const config_watch = @import("utils/config_watch.zig");
 const getConfigMtime = config_watch.getConfigMtime;
 const shell_mod = @import("shell/mod.zig");
+const compound_exec = @import("shell/compound_execution.zig");
+const compound_parser = @import("parser/compound.zig");
 const dir_hooks = @import("shell/dir_hooks.zig");
 const build_options = @import("build_options");
 
@@ -214,15 +215,6 @@ fn isValidVarName(name: []const u8) bool {
 
 fn getenv(key: []const u8) ?[]const u8 {
     return env_utils.getEnv(key);
-}
-
-/// Flush any pending bytes from stdin (non-blocking)
-extern "c" fn tcflush(fd: c_int, queue_selector: c_int) c_int;
-const TCIFLUSH = 1;
-
-fn flushStdin() void {
-    if (comptime builtin.os.tag == .windows) return;
-    _ = tcflush(std.posix.STDIN_FILENO, TCIFLUSH);
 }
 
 /// Ensure terminal is ready for prompt after a child process exits.
@@ -353,12 +345,17 @@ pub const Shell = struct {
     multiline_count: usize,
     multiline_brace_count: i32,
     multiline_mode: MultilineMode,
-    // Flag to prevent re-entrancy in C-style for loop execution
-    in_cstyle_for_body: bool,
     // Counter for break statement in loops (0 = no break, N = break N levels)
     break_levels: u32,
     // Counter for continue statement in loops (0 = no continue, N = continue N levels)
     continue_levels: u32,
+    // Set by `exit`: whatever list, loop or function is running stops, and
+    // `den -c` / scripts leave with last_exit_code.
+    exit_requested: bool,
+    // How many loops (for/while/until/select) are running. `break` and
+    // `continue` outside any loop do nothing, and `break 5` in two loops
+    // leaves both.
+    loop_depth: u32,
     // Flag: last executed chain was an AND-OR list (&&/||), so errexit should not apply
     last_chain_had_and_or: bool,
     // Coprocess tracking
@@ -644,9 +641,10 @@ pub const Shell = struct {
             .multiline_count = 0,
             .multiline_brace_count = 0,
             .multiline_mode = .none,
-            .in_cstyle_for_body = false,
             .break_levels = 0,
             .continue_levels = 0,
+            .exit_requested = false,
+            .loop_depth = 0,
             .last_chain_had_and_or = false,
             .coproc_pid = null,
             .coproc_read_fd = null,
@@ -1088,7 +1086,19 @@ pub const Shell = struct {
                 } else {
                     // Non-interactive: render simple prompt and use basic readLine
                     try self.renderPrompt();
-                    break :blk try IO.readLine(self.allocator);
+                    const first = (try IO.readLine(self.allocator)) orelse break :blk null;
+                    // A command that goes on over several lines (an open loop,
+                    // `if`, `case`, group, quote, here-document or a trailing
+                    // `&&`/`|`) is read whole before it runs, as when typed.
+                    var joined: std.ArrayList(u8) = .fromOwnedSlice(first);
+                    errdefer joined.deinit(self.allocator);
+                    while (compound_parser.completeness(self.allocator, joined.items) == .incomplete) {
+                        const more = (try IO.readLine(self.allocator)) orelse break;
+                        defer self.allocator.free(more);
+                        try joined.append(self.allocator, '\n');
+                        try joined.appendSlice(self.allocator, more);
+                    }
+                    break :blk try joined.toOwnedSlice(self.allocator);
                 }
             };
 
@@ -1126,8 +1136,12 @@ pub const Shell = struct {
                 continue;
             }
 
-            // Expand history references (!, !!, !N, !-N, !string, ^old^new)
-            const maybe_expanded = self.history_expander.expand(trimmed, &self.history, self.history_count) catch |err| {
+            // Expand history references (!, !!, !N, !-N, !string, ^old^new).
+            // Pasted text is literal input and is left alone: a `!` in a
+            // pasted command is part of the command, not a history reference.
+            const was_pasted = if (self.line_editor) |*editor| self.is_interactive and editor.pasted else false;
+            const history_source: []const ?[]const u8 = if (was_pasted) &.{} else &self.history;
+            const maybe_expanded = self.history_expander.expand(trimmed, history_source, if (was_pasted) 0 else self.history_count) catch |err| {
                 IO.eprint("History expansion error: {}\n", .{err}) catch {};
                 // On error, continue with original command
                 if (!keep_private) try self.addToHistory(trimmed);
@@ -1167,9 +1181,10 @@ pub const Shell = struct {
                     var iter = std.mem.tokenizeAny(u8, command, " \t");
                     break :blk iter.next() orelse command;
                 };
-                // Check if it was an external command (not a builtin)
+                // Check if it was an external command (not a builtin). Input
+                // typed (or pasted) while it ran is kept for the next prompt,
+                // as every shell does; it is not flushed.
                 if (!executor_mod.Executor.isBuiltinName(first_word) and !self.aliases.contains(first_word)) {
-                    flushStdin();
                     resetTerminalAfterChild();
                 }
             }
@@ -1232,9 +1247,11 @@ pub const Shell = struct {
             }
         }
 
-        // Split on unquoted semicolons and execute each part separately.
-        // This ensures variables set by earlier parts are visible to later parts.
-        if (self.splitAndExecuteSemicolons(input)) return;
+        // Lists, and-or lists and pipelines that contain compound commands
+        // (`cd x && for ...; done`, `for ...; done | sort`, `if ...; fi > f`),
+        // and every list separated by `;` or newlines. Plain commands fall
+        // through to the paths below.
+        if (try compound_exec.tryExecute(self, input)) return;
 
         // Handle ! negation prefix (negate exit code)
         const neg_trimmed = std.mem.trim(u8, input, &std.ascii.whitespace);
@@ -1424,373 +1441,6 @@ pub const Shell = struct {
                     const new_cmd = try std.fmt.allocPrint(self.allocator, "{s} {s}", .{ replacement, rest });
                     defer self.allocator.free(new_cmd);
                     self.executeCommand(new_cmd) catch {};
-                    return;
-                }
-            }
-        }
-
-        // Check for compound command group: { command; } [redirections]
-        if (fn_trimmed.len > 2 and fn_trimmed[0] == '{' and
-            (fn_trimmed[1] == ' ' or fn_trimmed[1] == '\t' or fn_trimmed[1] == '\n'))
-        {
-            // Find matching } considering nesting and quotes
-            var bg_depth: i32 = 1;
-            var bg_sq = false;
-            var bg_dq = false;
-            var bg_close: ?usize = null;
-            var bg_i: usize = 1;
-            while (bg_i < fn_trimmed.len) {
-                const ch = fn_trimmed[bg_i];
-                if (ch == '\\' and bg_i + 1 < fn_trimmed.len and !bg_sq) {
-                    bg_i += 2;
-                    continue;
-                }
-                if (!bg_dq and ch == '\'') {
-                    bg_sq = !bg_sq;
-                } else if (!bg_sq and ch == '"') {
-                    bg_dq = !bg_dq;
-                } else if (!bg_sq and !bg_dq) {
-                    if (ch == '{') bg_depth += 1;
-                    if (ch == '}') {
-                        bg_depth -= 1;
-                        if (bg_depth == 0) {
-                            bg_close = bg_i;
-                            break;
-                        }
-                    }
-                }
-                bg_i += 1;
-            }
-
-            if (bg_close) |close_pos| {
-                const inner = std.mem.trim(u8, fn_trimmed[1..close_pos], &std.ascii.whitespace);
-                const after_brace = std.mem.trim(u8, fn_trimmed[close_pos + 1 ..], &std.ascii.whitespace);
-
-                if (inner.len > 0) {
-                    // Check for pipe after }
-                    if (after_brace.len > 0 and after_brace[0] == '|') {
-                        const pipe_cmd = std.mem.trim(u8, after_brace[1..], &std.ascii.whitespace);
-                        if (pipe_cmd.len > 0) {
-                            if (comptime builtin.os.tag != .windows) {
-                                // Fork with pipe: brace group stdout → pipe command stdin
-                                var pipe_fds: [2]std.posix.fd_t = undefined;
-                                if (std.c.pipe(&pipe_fds) != 0) return error.Unexpected;
-                                const read_fd = pipe_fds[0];
-                                const write_fd = pipe_fds[1];
-
-                                const fork_ret = std.c.fork();
-                                if (fork_ret < 0) {
-                                    _ = std.c.close(read_fd);
-                                    _ = std.c.close(write_fd);
-                                    return error.Unexpected;
-                                }
-                                if (fork_ret == 0) {
-                                    _ = std.c.close(read_fd);
-                                    _ = std.c.dup2(write_fd, std.posix.STDOUT_FILENO);
-                                    _ = std.c.close(write_fd);
-                                    self.executeCommand(inner) catch {
-                                        std.c._exit(1);
-                                    };
-                                    std.c._exit(@as(u8, @intCast(@as(u32, @bitCast(self.last_exit_code)) & 0xff)));
-                                    unreachable;
-                                }
-                                _ = std.c.close(write_fd);
-                                const saved_stdin = std.c.dup(std.posix.STDIN_FILENO);
-                                _ = std.c.dup2(read_fd, std.posix.STDIN_FILENO);
-                                _ = std.c.close(read_fd);
-
-                                var wait_status_bg: c_int = 0;
-                                _ = process_util.waitpidIntr(@intCast(fork_ret), &wait_status_bg, 0);
-
-                                const execFn2: *const fn (*Shell, []const u8) anyerror!void = &Shell.executeCommand;
-                                execFn2(self, pipe_cmd) catch {};
-
-                                if (saved_stdin >= 0) {
-                                    _ = std.c.dup2(saved_stdin, std.posix.STDIN_FILENO);
-                                    _ = std.c.close(saved_stdin);
-                                }
-                            } else {
-                                self.executeCommand(inner) catch {};
-                                self.executeCommand(pipe_cmd) catch {};
-                            }
-                            return;
-                        }
-                    }
-
-                    // Check for redirections after }
-                    if (after_brace.len > 0 and (after_brace[0] == '>' or after_brace[0] == '<' or
-                        (after_brace.len > 1 and after_brace[0] >= '0' and after_brace[0] <= '9' and
-                            (after_brace[1] == '>' or after_brace[1] == '<')) or
-                        (after_brace.len > 2 and after_brace[0] >= '0' and after_brace[0] <= '9' and
-                            after_brace[1] == '>' and after_brace[2] == '&')))
-                    {
-                        if (comptime builtin.os.tag != .windows) {
-                            // Parse and apply redirections
-                            var saved_fds: [3]c_int = .{ -1, -1, -1 }; // stdin, stdout, stderr
-                            var redir_ok = true;
-                            var redir_str = after_brace;
-
-                            while (redir_str.len > 0 and redir_ok) {
-                                redir_str = std.mem.trimStart(u8, redir_str, &std.ascii.whitespace);
-                                if (redir_str.len == 0) break;
-
-                                var src_fd: std.posix.fd_t = -1;
-                                var mode: enum { write, append, read, dup_out, dup_in } = .write;
-
-                                // Parse optional fd number
-                                if (redir_str.len > 1 and redir_str[0] >= '0' and redir_str[0] <= '9') {
-                                    src_fd = @as(std.posix.fd_t, @intCast(redir_str[0] - '0'));
-                                    redir_str = redir_str[1..];
-                                }
-
-                                if (redir_str.len == 0) break;
-
-                                if (redir_str[0] == '>') {
-                                    if (src_fd == -1) src_fd = std.posix.STDOUT_FILENO;
-                                    redir_str = redir_str[1..];
-                                    if (redir_str.len > 0 and redir_str[0] == '>') {
-                                        mode = .append;
-                                        redir_str = redir_str[1..];
-                                    } else if (redir_str.len > 0 and redir_str[0] == '&') {
-                                        mode = .dup_out;
-                                        redir_str = redir_str[1..];
-                                    }
-                                } else if (redir_str[0] == '<') {
-                                    if (src_fd == -1) src_fd = std.posix.STDIN_FILENO;
-                                    mode = .read;
-                                    redir_str = redir_str[1..];
-                                } else {
-                                    break;
-                                }
-
-                                redir_str = std.mem.trimStart(u8, redir_str, &std.ascii.whitespace);
-                                // Get the target (filename or fd number)
-                                var target_end: usize = 0;
-                                while (target_end < redir_str.len and
-                                    redir_str[target_end] != ' ' and redir_str[target_end] != '\t' and
-                                    redir_str[target_end] != '>' and redir_str[target_end] != '<') : (target_end += 1)
-                                {}
-                                if (target_end == 0) {
-                                    redir_ok = false;
-                                    break;
-                                }
-                                const target = redir_str[0..target_end];
-                                redir_str = redir_str[target_end..];
-
-                                // Save original fd. Guard against negative fds
-                                // (@intCast would wrap to MAX_USIZE) and against
-                                // dup() failures which return -1 — storing -1
-                                // here would cause dup2(-1, fd) later during
-                                // restoration.
-                                if (src_fd >= 0) {
-                                    const ufd: usize = @intCast(src_fd);
-                                    if (ufd < saved_fds.len and saved_fds[ufd] == -1) {
-                                        const dup_fd = std.c.dup(src_fd);
-                                        if (dup_fd >= 0) saved_fds[ufd] = dup_fd;
-                                    }
-                                }
-
-                                switch (mode) {
-                                    .dup_out, .dup_in => {
-                                        // >&N or <&N
-                                        if (std.mem.eql(u8, target, "-")) {
-                                            _ = std.c.close(src_fd);
-                                        } else if (std.fmt.parseInt(std.posix.fd_t, target, 10)) |dest_fd| {
-                                            _ = std.c.dup2(dest_fd, src_fd);
-                                        } else |_| {
-                                            redir_ok = false;
-                                        }
-                                    },
-                                    .write, .append => {
-                                        var path_buf: [std.fs.max_path_bytes]u8 = undefined;
-                                        if (target.len >= path_buf.len) {
-                                            redir_ok = false;
-                                            break;
-                                        }
-                                        @memcpy(path_buf[0..target.len], target);
-                                        path_buf[target.len] = 0;
-                                        const path_z: [*:0]const u8 = @ptrCast(&path_buf);
-
-                                        const flags: std.c.O = if (mode == .append)
-                                            .{ .ACCMODE = .WRONLY, .CREAT = true, .APPEND = true }
-                                        else
-                                            .{ .ACCMODE = .WRONLY, .CREAT = true, .TRUNC = true };
-                                        const fd = std.c.open(path_z, flags, @as(std.c.mode_t, 0o644));
-                                        if (fd >= 0) {
-                                            _ = std.c.dup2(fd, src_fd);
-                                            // fd is already c_int — std.c.close accepts c_int directly.
-                                            _ = std.c.close(fd);
-                                        } else {
-                                            redir_ok = false;
-                                        }
-                                    },
-                                    .read => {
-                                        var path_buf: [std.fs.max_path_bytes]u8 = undefined;
-                                        if (target.len >= path_buf.len) {
-                                            redir_ok = false;
-                                            break;
-                                        }
-                                        @memcpy(path_buf[0..target.len], target);
-                                        path_buf[target.len] = 0;
-                                        const path_z: [*:0]const u8 = @ptrCast(&path_buf);
-
-                                        const fd = std.c.open(path_z, .{ .ACCMODE = .RDONLY }, @as(std.c.mode_t, 0));
-                                        if (fd >= 0) {
-                                            _ = std.c.dup2(fd, src_fd);
-                                            _ = std.c.close(fd);
-                                        } else {
-                                            redir_ok = false;
-                                        }
-                                    },
-                                }
-                            }
-
-                            // Execute the group body with redirections applied
-                            self.executeCommand(inner) catch |err| {
-                                if (err == error.Exit) {
-                                    // Restore fds before propagating
-                                    for (saved_fds, 0..) |sfd, fi| {
-                                        if (sfd != -1) {
-                                            _ = std.c.dup2(sfd, @intCast(fi));
-                                            _ = std.c.close(sfd);
-                                        }
-                                    }
-                                    return err;
-                                }
-                            };
-
-                            // Restore saved fds
-                            for (saved_fds, 0..) |sfd, fi| {
-                                if (sfd != -1) {
-                                    _ = std.c.dup2(sfd, @intCast(fi));
-                                    _ = std.c.close(sfd);
-                                }
-                            }
-                            return;
-                        }
-                    }
-
-                    // No redirections — execute in current shell context
-                    self.executeCommand(inner) catch |err| {
-                        if (err == error.Exit) return err;
-                    };
-                    return;
-                }
-            }
-        }
-
-        // Check for subshell: (command) or (command) | pipeline
-        if (fn_trimmed.len > 2 and fn_trimmed[0] == '(') {
-            // Find the matching closing paren
-            var paren_depth: i32 = 0;
-            var in_sq = false;
-            var in_dq = false;
-            var close_pos: ?usize = null;
-            for (fn_trimmed, 0..) |ch, ci| {
-                if (ch == '\\' and ci + 1 < fn_trimmed.len) continue;
-                if (!in_dq and ch == '\'') {
-                    in_sq = !in_sq;
-                    continue;
-                }
-                if (!in_sq and ch == '"') {
-                    in_dq = !in_dq;
-                    continue;
-                }
-                if (in_sq or in_dq) continue;
-                if (ch == '(') paren_depth += 1;
-                if (ch == ')') {
-                    paren_depth -= 1;
-                    if (paren_depth == 0) {
-                        close_pos = ci;
-                        break;
-                    }
-                }
-            }
-
-            if (close_pos) |cp| {
-                const inner = std.mem.trim(u8, fn_trimmed[1..cp], &std.ascii.whitespace);
-                // Check for pipe suffix after the closing paren
-                const after_paren = std.mem.trim(u8, fn_trimmed[cp + 1 ..], &std.ascii.whitespace);
-                const subshell_pipe_cmd = if (after_paren.len > 0 and after_paren[0] == '|')
-                    std.mem.trim(u8, after_paren[1..], &std.ascii.whitespace)
-                else
-                    null;
-
-                if (inner.len > 0) {
-                    if (comptime builtin.os.tag == .windows) {
-                        // Windows: no fork, execute in current process (limited isolation)
-                        self.executeCommand(inner) catch {
-                            self.last_exit_code = 1;
-                        };
-                        if (subshell_pipe_cmd) |pipe_cmd| {
-                            self.executeCommand(pipe_cmd) catch {};
-                        }
-                    } else {
-                        if (subshell_pipe_cmd) |pipe_cmd| {
-                            // Subshell piped to another command: fork with stdout redirect
-                            var pipe_fds: [2]std.posix.fd_t = undefined;
-                            if (std.c.pipe(&pipe_fds) != 0) return error.Unexpected;
-                            const read_fd = pipe_fds[0];
-                            const write_fd = pipe_fds[1];
-
-                            const fork_ret = std.c.fork();
-                            if (fork_ret < 0) {
-                                _ = std.c.close(read_fd);
-                                _ = std.c.close(write_fd);
-                                return error.Unexpected;
-                            }
-                            if (fork_ret == 0) {
-                                // Child: redirect stdout to pipe, execute subshell
-                                _ = std.c.close(read_fd);
-                                _ = std.c.dup2(write_fd, std.posix.STDOUT_FILENO);
-                                _ = std.c.close(write_fd);
-                                self.executeCommand(inner) catch {
-                                    std.c._exit(1);
-                                };
-                                std.c._exit(@as(u8, @intCast(@as(u32, @bitCast(self.last_exit_code)) & 0xff)));
-                                unreachable;
-                            }
-                            // Parent: pipe child stdout to the pipe command
-                            _ = std.c.close(write_fd);
-                            const saved_stdin = std.c.dup(std.posix.STDIN_FILENO);
-                            _ = std.c.dup2(read_fd, std.posix.STDIN_FILENO);
-                            _ = std.c.close(read_fd);
-
-                            var wait_status_sub: c_int = 0;
-                            _ = process_util.waitpidIntr(@intCast(fork_ret), &wait_status_sub, 0);
-
-                            const execFn: *const fn (*Shell, []const u8) anyerror!void = &Shell.executeCommand;
-                            execFn(self, pipe_cmd) catch {};
-
-                            if (saved_stdin >= 0) {
-                                _ = std.c.dup2(saved_stdin, std.posix.STDIN_FILENO);
-                                _ = std.c.close(saved_stdin);
-                            }
-                        } else {
-                            const fork_ret = std.c.fork();
-                            if (fork_ret < 0) {
-                                try IO.eprint("den: fork failed\n", .{});
-                                self.last_exit_code = 1;
-                                return;
-                            }
-                            if (fork_ret == 0) {
-                                // Child: execute command and exit
-                                self.executeCommand(inner) catch {
-                                    std.c._exit(1);
-                                };
-                                std.c._exit(@as(u8, @intCast(@as(u32, @bitCast(self.last_exit_code)) & 0xff)));
-                                unreachable;
-                            }
-                            // Parent: wait for child (retry on EINTR)
-                            var wait_status: c_int = 0;
-                            _ = process_util.waitpidIntr(@intCast(fork_ret), &wait_status, 0);
-                            if (wait_status & 0x7f == 0) {
-                                self.last_exit_code = @as(i32, @intCast((wait_status >> 8) & 0xff));
-                            } else {
-                                self.last_exit_code = 128 + @as(i32, @intCast(wait_status & 0x7f));
-                            }
-                        }
-                    }
                     return;
                 }
             }
@@ -2414,13 +2064,6 @@ pub const Shell = struct {
             }
         }
 
-        // Check for C-style for loop: for ((init; cond; update)); do ... done
-        // Skip this check if we're already inside a C-style for loop body to avoid recursion
-        if (!self.in_cstyle_for_body and std.mem.startsWith(u8, trimmed_input, "for ((")) {
-            try shell_mod.executeCStyleForLoopOneline(self, input);
-            return;
-        }
-
         // Check for select loop: select VAR in ITEM1 ITEM2; do ... done
         if (std.mem.startsWith(u8, trimmed_input, "select ")) {
             try shell_mod.executeSelectLoop(self, input);
@@ -2454,34 +2097,6 @@ pub const Shell = struct {
                 try IO.eprint("den: match error: {}\n", .{err});
                 self.last_exit_code = 1;
             };
-            return;
-        }
-
-        // Check for one-liner control flow: for/while/until/if/case
-        if (std.mem.startsWith(u8, trimmed_input, "for ") or
-            std.mem.startsWith(u8, trimmed_input, "while ") or
-            std.mem.startsWith(u8, trimmed_input, "until ") or
-            std.mem.startsWith(u8, trimmed_input, "if ") or
-            std.mem.startsWith(u8, trimmed_input, "case "))
-        {
-            self.executeControlFlowOneliner(trimmed_input) catch |err| {
-                try IO.eprint("den: control flow error: {}\n", .{err});
-                self.last_exit_code = 1;
-            };
-            return;
-        }
-
-        // Check for pipeline into control flow: cmd | while/for/if/until/case ...
-        // The parser can't handle this because it splits on semicolons inside while/for/etc.
-        // We handle it here by manually setting up the pipe and executing both sides.
-        if (std.mem.indexOf(u8, trimmed_input, "|") != null) {
-            if (self.handlePipeToControlFlow(trimmed_input)) return;
-        }
-
-        // Check if input contains a C-style for loop after other commands (e.g., "total=0; for ((...")
-        // This handles cases like: total=0; for ((i=1; i<=5; i++)); do total=$((total + i)); done; echo $total
-        if (!self.in_cstyle_for_body and std.mem.indexOf(u8, trimmed_input, "for ((") != null) {
-            try shell_mod.executeWithCStyleForLoop(self, input);
             return;
         }
 
@@ -3587,511 +3202,6 @@ pub const Shell = struct {
         if (!matched) {
             self.last_exit_code = 0;
         }
-    }
-
-    /// Execute a one-liner control flow statement (for/while/until/if/case).
-    /// Converts semicolons to line breaks and feeds to the ControlFlowParser/Executor.
-    fn executeControlFlowOneliner(self: *Shell, input: []const u8) !void {
-        // Convert one-liner to multi-line by splitting on semicolons,
-        // but respecting quotes, $() substitutions, and nested constructs.
-        var lines_buf: [256][]const u8 = undefined;
-        var line_count: usize = 0;
-        var start: usize = 0;
-        var in_single_quote = false;
-        var in_double_quote = false;
-        var paren_depth: u32 = 0;
-        var i: usize = 0;
-
-        while (i < input.len) : (i += 1) {
-            const c = input[i];
-            if (c == '\\' and !in_single_quote and i + 1 < input.len) {
-                i += 1;
-                continue;
-            }
-            if (c == '\'' and !in_double_quote) {
-                in_single_quote = !in_single_quote;
-            } else if (c == '"' and !in_single_quote) {
-                in_double_quote = !in_double_quote;
-            } else if (!in_single_quote and !in_double_quote) {
-                if (c == '(' and (paren_depth > 0 or (i > 0 and input[i - 1] == '$'))) {
-                    paren_depth += 1;
-                } else if (c == ')' and paren_depth > 0) {
-                    paren_depth -= 1;
-                } else if (c == ';' and paren_depth == 0) {
-                    // Check for case terminators - keep them with the preceding part
-                    // so the case parser's detectTerminator can recognize them.
-                    if (i + 2 < input.len and input[i + 1] == ';' and input[i + 2] == '&') {
-                        // ;;& - continue testing subsequent patterns (longest match)
-                        const part = std.mem.trim(u8, input[start .. i + 3], &std.ascii.whitespace);
-                        if (part.len > 0 and line_count < lines_buf.len) {
-                            lines_buf[line_count] = part;
-                            line_count += 1;
-                        }
-                        i += 2; // skip second ; and &
-                        start = i + 1;
-                    } else if (i + 1 < input.len and input[i + 1] == '&') {
-                        // ;& - fallthrough to next case body
-                        const part = std.mem.trim(u8, input[start .. i + 2], &std.ascii.whitespace);
-                        if (part.len > 0 and line_count < lines_buf.len) {
-                            lines_buf[line_count] = part;
-                            line_count += 1;
-                        }
-                        i += 1; // skip &
-                        start = i + 1;
-                    } else if (i + 1 < input.len and input[i + 1] == ';') {
-                        // Include the ;; in the current part, split after it
-                        const part = std.mem.trim(u8, input[start .. i + 2], &std.ascii.whitespace);
-                        if (part.len > 0 and line_count < lines_buf.len) {
-                            lines_buf[line_count] = part;
-                            line_count += 1;
-                        }
-                        i += 1; // skip second ;
-                        start = i + 1;
-                    } else {
-                        const part = std.mem.trim(u8, input[start..i], &std.ascii.whitespace);
-                        if (part.len > 0 and line_count < lines_buf.len) {
-                            lines_buf[line_count] = part;
-                            line_count += 1;
-                        }
-                        start = i + 1;
-                    }
-                }
-            }
-        }
-        // Last part
-        const last_part = std.mem.trim(u8, input[start..], &std.ascii.whitespace);
-        if (last_part.len > 0 and line_count < lines_buf.len) {
-            lines_buf[line_count] = last_part;
-            line_count += 1;
-        }
-
-        if (line_count == 0) return;
-
-        // Post-process: split lines that start with "do ", "then ", "else "
-        // into separate lines, since the parser expects these as standalone keywords.
-        // Also handle "case ... in PATTERN)" by splitting after " in ".
-        var expanded_buf: [512][]const u8 = undefined;
-        var expanded_count: usize = 0;
-        for (lines_buf[0..line_count]) |line| {
-            if (expanded_count >= expanded_buf.len) break;
-            // Handle "case VALUE in PATTERN)" - split after " in "
-            if (std.mem.startsWith(u8, line, "case ")) {
-                if (std.mem.indexOf(u8, line[5..], " in ")) |in_off| {
-                    const in_pos = 5 + in_off;
-                    // "case VALUE in" part
-                    expanded_buf[expanded_count] = line[0 .. in_pos + 3]; // up to and including " in"
-                    expanded_count += 1;
-                    if (expanded_count < expanded_buf.len) {
-                        const rest = std.mem.trim(u8, line[in_pos + 4 ..], &std.ascii.whitespace);
-                        if (rest.len > 0) {
-                            expanded_buf[expanded_count] = rest;
-                            expanded_count += 1;
-                        }
-                    }
-                    continue;
-                }
-            }
-            const keywords = [_][]const u8{ "do ", "then ", "else " };
-            var found_keyword = false;
-            for (keywords) |kw| {
-                if (std.mem.startsWith(u8, line, kw)) {
-                    expanded_buf[expanded_count] = line[0 .. kw.len - 1]; // "do" or "then" or "else"
-                    expanded_count += 1;
-                    if (expanded_count < expanded_buf.len) {
-                        const rest = std.mem.trim(u8, line[kw.len..], &std.ascii.whitespace);
-                        if (rest.len > 0) {
-                            expanded_buf[expanded_count] = rest;
-                            expanded_count += 1;
-                        }
-                    }
-                    found_keyword = true;
-                    break;
-                }
-            }
-            if (!found_keyword) {
-                expanded_buf[expanded_count] = line;
-                expanded_count += 1;
-            }
-        }
-
-        // Check if the last expanded line ends with a pipe after done/fi/esac
-        // e.g., "done | tr a-z A-Z" or "fi | wc -l"
-        var pipe_suffix: ?[]const u8 = null;
-        if (expanded_count > 0) {
-            const last_line = expanded_buf[expanded_count - 1];
-            const terminators = [_][]const u8{ "done", "fi", "esac" };
-            for (terminators) |term| {
-                if (last_line.len > term.len and std.mem.startsWith(u8, last_line, term)) {
-                    const after_term = last_line[term.len..];
-                    const trimmed_after = std.mem.trim(u8, after_term, &std.ascii.whitespace);
-                    if (trimmed_after.len > 0 and trimmed_after[0] == '|') {
-                        pipe_suffix = std.mem.trim(u8, trimmed_after[1..], &std.ascii.whitespace);
-                        // Replace the last line with just the terminator
-                        expanded_buf[expanded_count - 1] = term;
-                        break;
-                    }
-                }
-            }
-        }
-
-        const lines = expanded_buf[0..expanded_count];
-
-        // If there's a pipe suffix, run the control flow in a subshell with
-        // stdout redirected to a pipe, then pipe into the suffix command.
-        if (pipe_suffix) |pipe_cmd| {
-            if (comptime builtin.os.tag != .windows) {
-                var pipe_fds: [2]std.posix.fd_t = undefined;
-                if (std.c.pipe(&pipe_fds) != 0) return error.Unexpected;
-                const read_fd = pipe_fds[0];
-                const write_fd = pipe_fds[1];
-
-                const fork_ret = std.c.fork();
-                if (fork_ret < 0) {
-                    _ = std.c.close(read_fd);
-                    _ = std.c.close(write_fd);
-                    return error.Unexpected;
-                }
-
-                if (fork_ret == 0) {
-                    // Child: redirect stdout to write end, execute control flow
-                    _ = std.c.close(read_fd);
-                    _ = std.c.dup2(write_fd, std.posix.STDOUT_FILENO);
-                    _ = std.c.close(write_fd);
-
-                    var cf_parser = ControlFlowParser.init(self.allocator);
-                    var cf_executor = ControlFlowExecutor.init(self);
-                    self.executeCfBlock(lines, &cf_parser, &cf_executor) catch {};
-                    std.c._exit(@intCast(@as(u32, @bitCast(self.last_exit_code))));
-                    unreachable;
-                }
-
-                // Parent: redirect stdin to read end, execute pipe command
-                _ = std.c.close(write_fd);
-                const saved_stdin = std.c.dup(std.posix.STDIN_FILENO);
-                _ = std.c.dup2(read_fd, std.posix.STDIN_FILENO);
-                _ = std.c.close(read_fd);
-
-                // Wait for control flow child to finish writing (retry on EINTR)
-                var wait_status_cf: c_int = 0;
-                _ = process_util.waitpidIntr(@intCast(fork_ret), &wait_status_cf, 0);
-
-                // Execute the pipe command(s) — use function pointer to
-                // break the inferred error set cycle (executeCommand →
-                // executeControlFlowOneliner → executeCfBlock → executeCommand).
-                const execFn: *const fn (*Shell, []const u8) anyerror!void = &Shell.executeCommand;
-                execFn(self, pipe_cmd) catch {};
-
-                // Restore stdin
-                if (saved_stdin >= 0) {
-                    _ = std.c.dup2(saved_stdin, std.posix.STDIN_FILENO);
-                    _ = std.c.close(saved_stdin);
-                }
-                return;
-            } else {
-                // Windows: execute control flow then pipe command sequentially
-                var cf_parser = ControlFlowParser.init(self.allocator);
-                var cf_executor = ControlFlowExecutor.init(self);
-                self.executeCfBlock(lines, &cf_parser, &cf_executor) catch {};
-                const execFn: *const fn (*Shell, []const u8) anyerror!void = &Shell.executeCommand;
-                execFn(self, pipe_cmd) catch {};
-                return;
-            }
-        }
-
-        var cf_parser = ControlFlowParser.init(self.allocator);
-        var cf_executor = ControlFlowExecutor.init(self);
-        self.executeCfBlock(lines, &cf_parser, &cf_executor) catch |err| return err;
-
-        // Propagate break/continue from executor to shell so outer loops can see them
-        if (cf_executor.break_levels > 0) {
-            self.break_levels = cf_executor.break_levels;
-        }
-        if (cf_executor.continue_levels > 0) {
-            self.continue_levels = cf_executor.continue_levels;
-        }
-    }
-
-    /// Execute a control flow block (for/while/until/if/case) from parsed lines.
-    fn executeCfBlock(self: *Shell, lines: [][]const u8, cf_parser: *ControlFlowParser, cf_executor: *ControlFlowExecutor) anyerror!void {
-        const first = if (lines.len > 0) lines[0] else return;
-        if (std.mem.startsWith(u8, first, "for ")) {
-            const result = try cf_parser.parseFor(lines, 0);
-            var loop = result.loop;
-            defer loop.deinit();
-            self.last_exit_code = try cf_executor.executeFor(&loop);
-        } else if (std.mem.startsWith(u8, first, "while ")) {
-            const result = try cf_parser.parseWhile(lines, 0, false);
-            var loop = result.loop;
-            defer loop.deinit();
-            self.last_exit_code = try cf_executor.executeWhile(&loop);
-        } else if (std.mem.startsWith(u8, first, "until ")) {
-            const result = try cf_parser.parseWhile(lines, 0, true);
-            var loop = result.loop;
-            defer loop.deinit();
-            self.last_exit_code = try cf_executor.executeWhile(&loop);
-        } else if (std.mem.startsWith(u8, first, "if ")) {
-            const result = try cf_parser.parseIf(lines, 0);
-            var stmt = result.stmt;
-            defer stmt.deinit();
-            self.last_exit_code = try cf_executor.executeIf(&stmt);
-        } else if (std.mem.startsWith(u8, first, "case ")) {
-            const result = try cf_parser.parseCase(lines, 0);
-            var stmt = result.stmt;
-            defer stmt.deinit();
-            self.last_exit_code = try cf_executor.executeCase(&stmt);
-        }
-    }
-
-    /// Handle pipeline into control flow: cmd | while/for/if/until/case ...
-    /// Returns true if the pattern was detected and handled, false otherwise.
-    fn handlePipeToControlFlow(self: *Shell, input: []const u8) bool {
-        // Find the last top-level pipe that leads into a control flow keyword
-        var pipe_pos: ?usize = null;
-        var in_sq = false;
-        var in_dq = false;
-        var paren_d: u32 = 0;
-        var i: usize = 0;
-        while (i < input.len) : (i += 1) {
-            const c = input[i];
-            if (c == '\\' and !in_sq and i + 1 < input.len) {
-                i += 1;
-                continue;
-            }
-            if (c == '\'' and !in_dq) {
-                in_sq = !in_sq;
-            } else if (c == '"' and !in_sq) {
-                in_dq = !in_dq;
-            } else if (!in_sq and !in_dq) {
-                if (c == '(') paren_d += 1;
-                if (c == ')' and paren_d > 0) paren_d -= 1;
-                if (c == '|' and paren_d == 0 and (i + 1 >= input.len or input[i + 1] != '|')) {
-                    // Single | (not ||)
-                    pipe_pos = i;
-                }
-            }
-        }
-
-        const pp = pipe_pos orelse return false;
-        if (pp + 1 >= input.len) return false;
-
-        // Check if the part after the last pipe starts with a control flow keyword or brace group
-        const right = std.mem.trim(u8, input[pp + 1 ..], &std.ascii.whitespace);
-        const cf_keywords = [_][]const u8{ "while ", "for ", "until ", "if ", "case ", "{ " };
-        var is_cf = false;
-        for (cf_keywords) |kw| {
-            if (std.mem.startsWith(u8, right, kw)) {
-                is_cf = true;
-                break;
-            }
-        }
-        if (!is_cf) return false;
-
-        // Split: left side is everything before the last pipe, right side is control flow
-        const left = std.mem.trim(u8, input[0..pp], &std.ascii.whitespace);
-        if (left.len == 0) return false;
-
-        if (comptime builtin.os.tag == .windows) {
-            // Windows: execute sequentially without pipe isolation
-            self.executeCommand(left) catch {};
-            self.executeCommand(right) catch {};
-            return true;
-        } else {
-            // Set up a pipe, fork for the left side, execute right side with piped stdin
-            var fds: [2]std.posix.fd_t = undefined;
-            if (std.c.pipe(&fds) != 0) return false;
-
-            const fork_ret = std.c.fork();
-            if (fork_ret < 0) {
-                _ = std.c.close(fds[0]);
-                _ = std.c.close(fds[1]);
-                return false;
-            }
-            const pid: std.posix.pid_t = @intCast(fork_ret);
-
-            if (pid == 0) {
-                // Child: execute left side, stdout -> pipe write end
-                _ = std.c.close(fds[0]);
-                _ = std.c.dup2(fds[1], std.posix.STDOUT_FILENO);
-                _ = std.c.close(fds[1]);
-                self.executeCommand(left) catch {};
-                std.c._exit(@intCast(if (self.last_exit_code >= 0) @as(u32, @intCast(self.last_exit_code)) else 1));
-            }
-
-            // Parent: execute right side (control flow) with stdin <- pipe read end
-            _ = std.c.close(fds[1]);
-            const saved_stdin = std.c.dup(std.posix.STDIN_FILENO);
-            _ = std.c.dup2(fds[0], std.posix.STDIN_FILENO);
-            _ = std.c.close(fds[0]);
-
-            // Execute the control flow command
-            self.executeCommand(right) catch {};
-
-            // Restore stdin
-            if (saved_stdin >= 0) {
-                _ = std.c.dup2(saved_stdin, std.posix.STDIN_FILENO);
-                _ = std.c.close(saved_stdin);
-            }
-
-            // Wait for child (retry on EINTR)
-            var wait_status_pipe: c_int = 0;
-            _ = process_util.waitpidIntr(pid, &wait_status_pipe, 0);
-
-            return true;
-        }
-    }
-
-    /// Check if a word at position is a control flow opener keyword.
-    /// The word must be at a word boundary (start of string or after whitespace/semicolon).
-    fn isControlFlowOpener(input: []const u8, pos: usize) bool {
-        const openers = [_][]const u8{ "for ", "while ", "until ", "if ", "case ", "select " };
-        for (openers) |kw| {
-            if (pos + kw.len <= input.len and std.mem.eql(u8, input[pos..][0..kw.len], kw)) {
-                return true;
-            }
-        }
-        return false;
-    }
-
-    /// Check if a word at position is a control flow closer keyword.
-    fn isControlFlowCloser(input: []const u8, pos: usize) bool {
-        const closers = [_]struct { word: []const u8, for_kw: []const u8 }{
-            .{ .word = "done", .for_kw = "done" },
-            .{ .word = "fi", .for_kw = "fi" },
-            .{ .word = "esac", .for_kw = "esac" },
-        };
-        for (closers) |c| {
-            const wlen = c.word.len;
-            if (pos + wlen <= input.len and std.mem.eql(u8, input[pos..][0..wlen], c.word)) {
-                // Must be at end of string or followed by whitespace/semicolon
-                if (pos + wlen == input.len or
-                    input[pos + wlen] == ' ' or input[pos + wlen] == ';' or
-                    input[pos + wlen] == '\t' or input[pos + wlen] == '\n')
-                {
-                    return true;
-                }
-            }
-        }
-        return false;
-    }
-
-    /// Split input on unquoted semicolons and execute each part separately.
-    /// Returns true if input was split and executed, false if no splitting needed.
-    /// Tracks control flow depth so semicolons inside for/while/if/case constructs
-    /// are NOT treated as split points.
-    fn splitAndExecuteSemicolons(self: *Shell, input: []const u8) bool {
-        // Quick check: if no semicolons, skip
-        if (std.mem.indexOfScalar(u8, input, ';') == null) return false;
-
-        // Find semicolons that are not inside quotes, $(), or control flow constructs
-        var parts_buf: [64][]const u8 = undefined;
-        var part_count: usize = 0;
-        var start: usize = 0;
-        var in_single_quote = false;
-        var in_double_quote = false;
-        var paren_depth: u32 = 0;
-        var brace_depth: u32 = 0; // { } nesting depth (function bodies)
-        var cf_depth: u32 = 0; // control flow nesting depth
-        var i: usize = 0;
-        var at_word_start = true; // track word boundaries for keyword detection
-
-        while (i < input.len) : (i += 1) {
-            const c = input[i];
-            if (c == '\\' and !in_single_quote and i + 1 < input.len) {
-                i += 1; // skip escaped char
-                at_word_start = false;
-                continue;
-            }
-            if (c == '\'' and !in_double_quote) {
-                in_single_quote = !in_single_quote;
-                at_word_start = false;
-            } else if (c == '"' and !in_single_quote) {
-                in_double_quote = !in_double_quote;
-                at_word_start = false;
-            } else if (!in_single_quote and !in_double_quote) {
-                if (c == '(') {
-                    paren_depth += 1;
-                    at_word_start = false;
-                } else if (c == ')' and paren_depth > 0) {
-                    paren_depth -= 1;
-                    at_word_start = false;
-                } else if (c == '{' and (at_word_start or (i > 0 and input[i - 1] == ')')) and (i + 1 >= input.len or input[i + 1] == ' ' or input[i + 1] == '\t' or input[i + 1] == '\n')) {
-                    // Brace-group opener at a word boundary (`{ …; }`) or a function
-                    // body brace right after `)` (`name(){ …; }`). The `)` case keeps
-                    // the body's semicolons out of the top-level split, so the whole
-                    // `f(){ echo hi; }` reaches the function-definition parser intact.
-                    brace_depth += 1;
-                    at_word_start = false;
-                } else if (c == '}' and brace_depth > 0 and at_word_start) {
-                    brace_depth -= 1;
-                    at_word_start = false;
-                } else if (paren_depth == 0) {
-                    // Track control flow nesting at word boundaries
-                    if (at_word_start and isControlFlowOpener(input, i)) {
-                        cf_depth += 1;
-                        at_word_start = false;
-                    } else if (at_word_start and cf_depth > 0 and isControlFlowCloser(input, i)) {
-                        cf_depth -= 1;
-                        at_word_start = false;
-                    } else if (c == ';') {
-                        // Skip double semicolons (;;) used in case statements
-                        if (i + 1 < input.len and input[i + 1] == ';') {
-                            i += 1;
-                            at_word_start = true;
-                            continue;
-                        }
-                        if (cf_depth == 0 and brace_depth == 0) {
-                            const part = std.mem.trim(u8, input[start..i], &std.ascii.whitespace);
-                            if (part.len > 0 and part_count < parts_buf.len) {
-                                parts_buf[part_count] = part;
-                                part_count += 1;
-                            }
-                            start = i + 1;
-                        }
-                        at_word_start = true;
-                        continue;
-                    } else if (c == ' ' or c == '\t' or c == '\n') {
-                        at_word_start = true;
-                        continue;
-                    } else {
-                        at_word_start = false;
-                    }
-                } else {
-                    at_word_start = false;
-                }
-            } else {
-                at_word_start = false;
-            }
-        }
-        // Last part
-        const last_part = std.mem.trim(u8, input[start..], &std.ascii.whitespace);
-        if (last_part.len > 0 and part_count < parts_buf.len) {
-            parts_buf[part_count] = last_part;
-            part_count += 1;
-        }
-
-        // If we only have 1 part but the input had semicolons (trailing semicolons),
-        // still handle it so it doesn't fall through to the parser with a dangling ';'
-        if (part_count == 0) return false;
-        if (part_count == 1) {
-            // Only handle if the part is different from the original input
-            // (i.e., we actually stripped a trailing semicolon).
-            // If the part IS the full input, semicolons were inside control flow/quotes
-            // and we must return false to avoid infinite recursion.
-            const trimmed_orig = std.mem.trim(u8, input, &std.ascii.whitespace);
-            if (std.mem.eql(u8, parts_buf[0], trimmed_orig)) return false;
-            self.executeCommand(parts_buf[0]) catch {};
-            return true;
-        }
-
-        // Execute each part separately
-        for (parts_buf[0..part_count]) |part| {
-            self.executeCommand(part) catch {};
-            // Honor set -e (errexit): stop if a command fails.
-            // Per POSIX, errexit should not apply when the last command was part
-            // of an AND-OR list (&&/||) — those operators handle errors themselves.
-            if (self.option_errexit and self.last_exit_code != 0 and !self.last_chain_had_and_or) break;
-        }
-        return true;
     }
 
     pub fn expandCommandChain(self: *Shell, chain: *types.CommandChain) !void {

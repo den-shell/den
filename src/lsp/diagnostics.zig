@@ -20,7 +20,7 @@ pub const DiagnosticSeverity = enum(u8) {
     hint = 4,
 
     pub fn toInt(self: DiagnosticSeverity) u8 {
-        return @intFromEnum(self);
+        return @backingInt(self);
     }
 };
 

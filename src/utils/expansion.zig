@@ -1961,7 +1961,6 @@ pub const Expansion = struct {
     }
 
     /// Replace pattern in string with replacement
-
     /// Expand `$NAME` and `${NAME}` references in a substitution pattern or
     /// replacement, leaving everything else alone.
     ///

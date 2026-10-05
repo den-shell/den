@@ -79,6 +79,7 @@ pub fn tryFastPath(self: *Shell, input: []const u8) ?i32 {
             self.last_exit_code = std.fmt.parseInt(i32, args[0], 10) catch 0;
         }
         self.running = false;
+        self.exit_requested = true;
         return self.last_exit_code;
     }
 

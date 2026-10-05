@@ -1,3 +1,11 @@
+/// Whether a CSI parameter/intermediate run has reached its final byte.
+fn csiFinished(rest: []const u8) bool {
+    for (rest) |b| {
+        if (b >= 0x40 and b <= 0x7E) return true;
+    }
+    return false;
+}
+
 /// Escape sequence parser for arrow keys, function keys, etc.
 pub const EscapeSequence = enum {
     up_arrow,
@@ -72,8 +80,10 @@ pub const EscapeSequence = enum {
                 if (bytes[idx] == ';') {
                     var modifier_end = idx + 1;
                     while (modifier_end < bytes.len and bytes[modifier_end] >= '0' and bytes[modifier_end] <= '9') : (modifier_end += 1) {}
-                    if (modifier_end == idx + 1) return .unknown;
+                    // Still reading the modifier (the editor parses after every
+                    // byte, so `ESC[1;` must wait for its `5C`).
                     if (modifier_end >= bytes.len) return null;
+                    if (modifier_end == idx + 1) return if (csiFinished(bytes[idx + 1 ..])) .unknown else null;
 
                     var modifier: u32 = 0;
                     for (bytes[idx + 1 .. modifier_end]) |d| modifier = modifier * 10 + (d - '0');
@@ -89,8 +99,15 @@ pub const EscapeSequence = enum {
                     };
                 }
 
-                return .unknown;
+                // Some other parameterised sequence (a cursor position
+                // report, ...): not a key, but it is not over until its final
+                // byte, and none of it may be taken as typed text.
+                return if (csiFinished(bytes[2..])) .unknown else null;
             }
+
+            // Private-parameter sequences such as ESC[?1;2c (a terminal's
+            // device-attributes reply): likewise consumed up to the final byte.
+            return if (csiFinished(bytes[2..])) .unknown else null;
         }
 
         // SS3 sequences are emitted by some terminals for cursor and home/end
@@ -137,4 +154,15 @@ test "EscapeSequence.parse recognizes arrows and back-tab" {
     try std.testing.expectEqual(EscapeSequence.home, EscapeSequence.parse("\x1bOH").?);
     // Incomplete sequences return null until fully read.
     try std.testing.expectEqual(@as(?EscapeSequence, null), EscapeSequence.parse("\x1b["));
+    // Replies from the terminal are consumed whole, never cut short.
+    try std.testing.expectEqual(@as(?EscapeSequence, null), EscapeSequence.parse("\x1b[?1;2"));
+    try std.testing.expectEqual(EscapeSequence.unknown, EscapeSequence.parse("\x1b[?1;2c").?);
+    try std.testing.expectEqual(@as(?EscapeSequence, null), EscapeSequence.parse("\x1b[12;4"));
+    try std.testing.expectEqual(EscapeSequence.unknown, EscapeSequence.parse("\x1b[12;40R").?);
+    // Parsed a byte at a time, as the editor does, Ctrl+Right is still one key.
+    const ctrl_right = "\x1b[1;5C";
+    for (2..ctrl_right.len) |n| {
+        try std.testing.expectEqual(@as(?EscapeSequence, null), EscapeSequence.parse(ctrl_right[0..n]));
+    }
+    try std.testing.expectEqual(EscapeSequence.ctrl_right, EscapeSequence.parse(ctrl_right).?);
 }

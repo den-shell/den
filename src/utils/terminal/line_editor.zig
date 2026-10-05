@@ -32,6 +32,7 @@ const Widget = keymap.Widget;
 const SyntaxHighlighter = @import("../syntax_highlight.zig").SyntaxHighlighter;
 const cpu_opt = @import("../cpu_opt.zig");
 const signals = @import("../signals.zig");
+const compound = @import("../../parser/compound.zig");
 
 fn historyEntryMatches(entry: []const u8, query: ?[]const u8, current_line: []const u8) bool {
     if (std.mem.eql(u8, entry, current_line)) return false;
@@ -316,14 +317,24 @@ pub const LineEditor = struct {
     macro_stored_len: usize = 0,
     // Transient prompt support
     transient_prompt: ?[]const u8 = null, // Minimal prompt to replace full prompt after Enter
+    // Set when the line being returned contains bracketed-paste text. Pasted
+    // text is literal input: the shell skips history expansion (`!`) for it.
+    pasted: bool = false,
+    // An inline suggestion was skipped because more input was already waiting
+    // (fast typing, or a paste from a terminal without bracketed paste); it is
+    // computed once the input goes idle.
+    suggestion_pending: bool = false,
+    // Discarding the rest of an escape sequence the editor has no use for
+    // (a long CSI, or an OSC/DCS string such as a terminal's reply to a
+    // query), so none of its bytes become typed text.
+    discard_escape: DiscardEscape = .none,
+    // When set, everything the editor draws is appended here instead of being
+    // written to the terminal (tests inspect what would have been shown).
+    output: ?*std.ArrayList(u8) = null,
 
-    // Test seams. Every existing test here is a pure function because output
-    // goes straight to the tty and input straight from it; these two fields are
-    // what let the editing actions themselves be asserted. Both are inert in
-    // production.
-    /// When set, writeBytes appends here instead of writing to the terminal.
-    write_sink: ?*std.ArrayList(u8) = null,
-    /// When true, input is never read from the terminal.
+    /// When true, input is never read from the terminal, so a test can drive the
+    /// editor from pushBack alone. Inert in production; the matching output seam
+    /// is `output` above.
     no_terminal: bool = false,
 
     /// Bytes to consume before reading the terminal again.
@@ -357,6 +368,8 @@ pub const LineEditor = struct {
     /// until the sequence is complete.
     escape_seq: keymap.KeySeq = .{},
     in_escape: bool = false,
+
+    const DiscardEscape = enum { none, csi, string, string_esc };
 
     const UndoState = struct {
         buffer: [4096]u8,
@@ -553,7 +566,13 @@ pub const LineEditor = struct {
         }
 
         // Input is incomplete if any quotes are unclosed or brackets unbalanced
-        return in_single_quote or in_double_quote or paren_depth > 0 or brace_depth > 0 or bracket_depth > 0;
+        if (in_single_quote or in_double_quote or paren_depth > 0 or brace_depth > 0 or bracket_depth > 0) return true;
+
+        // ...or if the shell grammar says more must follow: an open `for`,
+        // `while`, `if` or `case`, a trailing `&&`/`||`/`|`, a here-document
+        // without its terminator. Enter then continues on a PS2 line rather
+        // than running half a command.
+        return compound.completeness(std.heap.page_allocator, input) == .incomplete;
     }
 
     /// Read a line with editing support
@@ -876,12 +895,6 @@ pub const LineEditor = struct {
     /// the built-in path below -- which is every byte that begins no binding, so
     /// ordinary typing costs one lookup and nothing else.
     fn keymapProbe(self: *LineEditor, byte: u8) !?Flow {
-        // With no keymaps at all -- a bare editor in a test, or before the shell
-        // hands its own over -- every key is unbound. Typing still has to work,
-        // since this is the only dispatch there is.
-        const maps = self.keymaps orelse return try self.dispatchUnbound(&.{byte});
-        const map = maps.getConst(self.activeKeymapId());
-
         var probe = self.pending;
         if (!probe.push(byte)) {
             // Longer than any bindable sequence; give up on it.
@@ -889,7 +902,17 @@ pub const LineEditor = struct {
             return null;
         }
 
-        switch (map.lookup(probe.slice())) {
+        // With no KeymapSet -- a bare editor in a test, or before the shell hands
+        // its keymaps over -- fall back to the compiled-in defaults, which are
+        // static data. Without this the editor would have nothing but
+        // self-insert, so Enter would not even submit.
+        const id = self.activeKeymapId();
+        const found = if (self.keymaps) |maps|
+            maps.getConst(id).lookup(probe.slice())
+        else
+            keymap.lookupDefaults(id, probe.slice());
+
+        switch (found) {
             .exact => |binding| {
                 self.clearPending();
                 if (try self.menuGuard(binding.widget)) return .cont;
@@ -927,6 +950,19 @@ pub const LineEditor = struct {
     /// Resume the built-in escape handling for a sequence the keymap rejected.
     fn handOffToEscapeParser(self: *LineEditor, seq: keymap.KeySeq) void {
         if (seq.len == 0 or seq.bytes[0] != 0x1B) return; // nothing else to try
+
+        // OSC, DCS, APC and PM strings -- a terminal answering a colour or
+        // device query -- run until BEL or ESC \ and are never input. They are
+        // longer than any key, so discard the rest rather than accumulating it
+        // and then letting the tail, including whatever key follows, be read as
+        // part of a sequence.
+        if (seq.len >= 2 and (seq.bytes[1] == ']' or seq.bytes[1] == 'P' or
+            seq.bytes[1] == '_' or seq.bytes[1] == '^'))
+        {
+            self.discard_escape = .string;
+            return;
+        }
+
         self.escape_seq = seq;
         self.in_escape = true;
     }
@@ -1168,6 +1204,7 @@ pub const LineEditor = struct {
 
             self.length = 0;
             self.cursor = 0;
+            self.resetRenderedRowToPrompt();
             return .cont;
         }
 
@@ -1225,6 +1262,9 @@ pub const LineEditor = struct {
         // Reset state
         self.cursor = 0;
         self.length = 0;
+        self.pasted = false;
+        self.suggestion_pending = false;
+        self.discard_escape = .none;
         // Fresh line: the prompt was just printed. For a multi-line prompt the
         // cursor sits on the prompt's last row, so seed the tracked row with how
         // many rows the prompt spans (0 for a single-line prompt) — otherwise the
@@ -1290,22 +1330,50 @@ pub const LineEditor = struct {
                     self.escape_seq.clear();
                 }
 
+                // Input went idle: show the suggestion a burst of input skipped.
+                if (self.suggestion_pending) {
+                    self.suggestion_pending = false;
+                    if (self.autosuggestions and self.cursor == self.length and self.length >= self.suggestion_min_chars and !self.reverse_search_mode) {
+                        try self.updateSuggestion();
+                        try self.displaySuggestion();
+                    }
+                }
+
                 // No data, sleep briefly (10ms)
                 std.Io.sleep(std.Options.debug_io, std.Io.Duration.fromNanoseconds(@as(i96, 10_000_000)), .awake) catch {};
                 continue;
             }
             const byte = maybe_byte.?;
             self.idle_polls = 0;
+
+            // Swallow the tail of an escape sequence we do not handle. This has
+            // to come before anything that could act on the byte, including the
+            // keymap and macro recording: these bytes are a terminal talking
+            // back, not keys.
+            switch (self.discard_escape) {
+                .none => {},
+                .csi => {
+                    if (byte >= 0x40 and byte <= 0x7E) self.discard_escape = .none;
+                    continue;
+                },
+                .string => {
+                    if (byte == 0x07) self.discard_escape = .none else if (byte == 0x1B) self.discard_escape = .string_esc;
+                    continue;
+                },
+                .string_esc => {
+                    self.discard_escape = if (byte == '\\') .none else .string;
+                    continue;
+                },
+            }
+
             // Record before dispatching, so a macro captures the keys as typed.
             // The sequence that stops recording is trimmed by end-kbd-macro, and
             // the one that starts it is discarded when the buffer resets.
             if (self.macro_recording) self.recordKey(byte);
 
-            // Keymap first, so a bound key wins over the built-in handling
-            // below. Skipped while the escape parser is mid-sequence, and while
-            // a completion menu is open: the menu owns the arrow keys and Enter,
-            // so bindings do not fire until it is dismissed.
-            if (!self.in_escape and self.completion_list == null) {
+            // Every key goes through the keymap. Skipped only while the escape
+            // parser is mid-sequence on something the tables do not enumerate.
+            if (!self.in_escape) {
                 if (try self.keymapProbe(byte)) |flow| switch (flow) {
                     .cont => continue,
                     .accepted => |line| {
@@ -1327,12 +1395,25 @@ pub const LineEditor = struct {
             if (self.in_escape) {
                 _ = self.escape_seq.push(byte);
 
+                // OSC, DCS, APC and PM strings (e.g. a terminal answering a
+                // colour query) run until BEL or ESC \ and are never input.
+                if (self.escape_seq.len == 2 and (byte == ']' or byte == 'P' or byte == '_' or byte == '^')) {
+                    self.discard_escape = .string;
+                    self.in_escape = false;
+                    self.escape_seq.clear();
+                    continue;
+                }
+
                 if (EscapeSequence.parse(self.escape_seq.slice())) |seq| {
                     try self.handleEscapeSequence(seq);
                     self.in_escape = false;
                     self.escape_seq.clear();
                 } else if (self.escape_seq.len >= keymap.max_key_seq_len) {
-                    // Invalid sequence, ignore
+                    // Longer than any key we know: drop the rest of it too,
+                    // rather than inserting its tail as text.
+                    if (self.escape_seq.bytes[1] == '[' and !(byte >= 0x40 and byte <= 0x7E)) {
+                        self.discard_escape = .csi;
+                    }
                     self.in_escape = false;
                     self.escape_seq.clear();
                 }
@@ -1706,9 +1787,26 @@ pub const LineEditor = struct {
 
         // Update and display suggestion only if cursor is at end and threshold met
         if (self.autosuggestions and self.cursor == self.length and self.length >= self.suggestion_min_chars) {
-            try self.updateSuggestion();
-            try self.displaySuggestion();
+            try self.refreshSuggestionUnlessBusy();
         }
+    }
+
+    /// Recompute the inline suggestion, unless more input is already queued.
+    ///
+    /// Bytes that arrive faster than a person types are a paste from a
+    /// terminal without bracketed paste (or keys typed ahead). Offering ghost
+    /// text between them is wasted work at best, and at worst lets a cursor
+    /// key in that stream accept a history entry into the middle of the pasted
+    /// text. The suggestion is computed when the input goes idle instead.
+    fn refreshSuggestionUnlessBusy(self: *LineEditor) !void {
+        if (self.terminal.hasPendingInput()) {
+            self.clearSuggestion();
+            self.suggestion_pending = true;
+            return;
+        }
+        self.suggestion_pending = false;
+        try self.updateSuggestion();
+        try self.displaySuggestion();
     }
 
     fn backspace(self: *LineEditor) !void {
@@ -1802,18 +1900,29 @@ pub const LineEditor = struct {
         try self.redrawLine();
 
         if (self.autosuggestions and self.cursor == self.length and self.length >= self.suggestion_min_chars) {
-            try self.updateSuggestion();
-            try self.displaySuggestion();
+            try self.refreshSuggestionUnlessBusy();
         }
     }
 
-    /// Consume a bracketed paste: after ESC[200~ we read raw bytes until the
-    /// ESC[201~ terminator and insert them as literal text. Embedded newlines are
-    /// inserted (normalized to spaces) rather than submitting the line, so
-    /// pasting a multi-line block never auto-executes — the footgun this prevents.
+    /// Consume a bracketed paste: after ESC[200~, every byte up to ESC[201~ is
+    /// literal text. Nothing in it is a key: no completion, no suggestion
+    /// acceptance, no editing command, and the shell skips history expansion
+    /// for the line (see `pasted`). A paste never submits itself; the user
+    /// presses Enter, as in bash, zsh and fish.
     fn handlePaste(self: *LineEditor) !void {
         self.saveUndoState();
         self.clearHistorySearch();
+        self.clearCompletionState();
+        // Ghost text computed before the paste describes a different line, and
+        // accepting it afterwards (Right, End) would overwrite what was pasted.
+        if (self.suggestion != null) {
+            try self.writeBytes("\x1b[0K");
+            self.clearSuggestion();
+        }
+        self.suggestion_pending = false;
+
+        var pasted: std.ArrayList(u8) = .empty;
+        defer pasted.deinit(self.allocator);
 
         // Terminator state machine for ESC [ 2 0 1 ~
         const term = [_]u8{ 0x1B, '[', '2', '0', '1', '~' };
@@ -1835,11 +1944,9 @@ pub const LineEditor = struct {
             }
 
             // Mismatch: bytes tentatively consumed as a partial terminator were
-            // actually pasted content — flush them, then reconsider this byte.
+            // actually pasted content — keep them, then reconsider this byte.
             if (matched > 0) {
-                for (term[0..matched]) |pending| {
-                    self.insertPasteByte(pending);
-                }
+                try pasted.appendSlice(self.allocator, term[0..matched]);
                 matched = 0;
                 if (byte == term[0]) {
                     matched = 1;
@@ -1847,28 +1954,93 @@ pub const LineEditor = struct {
                 }
             }
 
-            self.insertPasteByte(byte);
+            try pasted.append(self.allocator, byte);
         }
 
+        try self.insertPastedText(pasted.items);
+    }
+
+    /// Insert `text` at the cursor as typed text, with line breaks kept.
+    ///
+    /// Each pasted newline ends a row the way Enter ends an unfinished command:
+    /// the row moves into the multi-line buffer and editing continues on a PS2
+    /// row. Nothing runs until Enter, and then the lines run exactly as if they
+    /// had been typed one after another. (This used to turn newlines into
+    /// spaces, which changed what a multi-line paste meant: `for x in a b`
+    /// newline `do` became `for x in a b do`.)
+    pub fn insertPastedText(self: *LineEditor, text: []const u8) !void {
+        var clean: std.ArrayList(u8) = .empty;
+        defer clean.deinit(self.allocator);
+        var i: usize = 0;
+        while (i < text.len) : (i += 1) {
+            const c = text[i];
+            switch (c) {
+                '\r' => {
+                    // CRLF and lone CR are line breaks too.
+                    if (i + 1 < text.len and text[i + 1] == '\n') continue;
+                    try clean.append(self.allocator, '\n');
+                },
+                '\n' => try clean.append(self.allocator, '\n'),
+                // A tab would move the terminal cursor to a tab stop the
+                // redraw cannot account for.
+                '\t' => try clean.append(self.allocator, ' '),
+                // Other control bytes (including ESC) are not text; inserting
+                // them would put raw terminal commands into the buffer.
+                0...0x08, 0x0B...0x0C, 0x0E...0x1F, 0x7F => {},
+                else => try clean.append(self.allocator, c),
+            }
+        }
+        // A copied line usually ends with its newline; that must not leave an
+        // empty continuation row behind.
+        const body = std.mem.trimEnd(u8, clean.items, "\n");
+        if (body.len == 0) return;
+        self.pasted = true;
+
+        // Text after the cursor stays after the pasted text.
+        const tail = try self.allocator.dupe(u8, self.buffer[self.cursor..self.length]);
+        defer self.allocator.free(tail);
+        self.length = self.cursor;
+
+        var rows = std.mem.splitScalar(u8, body, '\n');
+        var first = true;
+        while (rows.next()) |row| {
+            if (!first) try self.pasteLineBreak();
+            first = false;
+            self.appendLiteral(row);
+        }
+        const cursor = self.length;
+        self.appendLiteral(tail);
+        self.cursor = cursor;
         try self.redrawLine();
     }
 
-    /// Insert one pasted byte WITHOUT redrawing (handlePaste redraws once at the
-    /// end). Newline/CR/tab become a space so the paste stays on one editable
-    /// line and cannot submit itself.
-    fn insertPasteByte(self: *LineEditor, byte: u8) void {
-        if (self.length >= self.buffer.len) return;
-        const ch: u8 = switch (byte) {
-            '\n', '\r', '\t' => ' ',
-            else => byte,
-        };
-        var i: usize = self.length;
-        while (i > self.cursor) : (i -= 1) {
-            self.buffer[i] = self.buffer[i - 1];
+    /// Append bytes at the end of the buffer without interpreting or drawing
+    /// them; the caller redraws once.
+    fn appendLiteral(self: *LineEditor, bytes: []const u8) void {
+        const n = @min(bytes.len, self.buffer.len - self.length);
+        @memcpy(self.buffer[self.length .. self.length + n], bytes[0..n]);
+        self.length += n;
+        self.cursor = self.length;
+    }
+
+    /// Finish the current row of a paste and continue on a PS2 row.
+    fn pasteLineBreak(self: *LineEditor) !void {
+        self.cursor = self.length;
+        try self.redrawLine();
+        const row = self.buffer[0..self.length];
+        if (self.multiline_buffer) |*mlb| {
+            try mlb.append(self.allocator, '\n');
+            try mlb.appendSlice(self.allocator, row);
+        } else {
+            self.multiline_buffer = .empty;
+            try self.multiline_buffer.?.appendSlice(self.allocator, row);
         }
-        self.buffer[self.cursor] = ch;
-        self.cursor += 1;
-        self.length += 1;
+        self.in_multiline = true;
+        try self.writeBytes("\r\n");
+        try self.writeBytes(self.ps2_prompt);
+        self.length = 0;
+        self.cursor = 0;
+        self.resetRenderedRowToPrompt();
     }
 
     fn deleteChar(self: *LineEditor) !void {
@@ -2463,8 +2635,8 @@ pub const LineEditor = struct {
     }
 
     fn writeBytes(self: *LineEditor, bytes: []const u8) !void {
-        if (self.write_sink) |sink| {
-            try sink.appendSlice(self.allocator, bytes);
+        if (self.output) |out| {
+            try out.appendSlice(self.allocator, bytes);
             return;
         }
 
@@ -2963,7 +3135,7 @@ pub const LineEditor = struct {
     fn promptVisibleWidth(self: *LineEditor) usize {
         var cols: usize = 0;
         var i: usize = 0;
-        const p = self.prompt;
+        const p = self.activePrompt();
         while (i < p.len) {
             if (p[i] == 0x1B) {
                 i += 1;
@@ -3004,7 +3176,7 @@ pub const LineEditor = struct {
         var row: usize = 0;
         var col: usize = 0;
         var i: usize = 0;
-        const p = self.prompt;
+        const p = self.activePrompt();
         while (i < p.len) {
             if (p[i] == 0x1B) {
                 i += 1;
@@ -3055,16 +3227,24 @@ pub const LineEditor = struct {
     }
 
     fn writePromptCrlf(self: *LineEditor) !void {
+        const prompt = self.activePrompt();
         var start: usize = 0;
         var i: usize = 0;
-        while (i < self.prompt.len) : (i += 1) {
-            if (self.prompt[i] == '\n') {
-                try self.writeBytes(self.prompt[start..i]);
+        while (i < prompt.len) : (i += 1) {
+            if (prompt[i] == '\n') {
+                try self.writeBytes(prompt[start..i]);
                 try self.writeBytes("\r\n");
                 start = i + 1;
             }
         }
-        try self.writeBytes(self.prompt[start..]);
+        try self.writeBytes(prompt[start..]);
+    }
+
+    /// The prompt in front of the row being edited: PS2 on the continuation
+    /// rows of a multi-line command, the main prompt otherwise. A repaint of a
+    /// continuation row must not redraw (or measure) the main prompt there.
+    fn activePrompt(self: *const LineEditor) []const u8 {
+        return if (self.in_multiline) self.ps2_prompt else self.prompt;
     }
 
     /// Wrap-aware full-line repaint. Repaints the prompt + buffer and positions
@@ -3720,7 +3900,7 @@ fn testEditor(sink: *std.ArrayList(u8), text: []const u8) LineEditor {
     @memcpy(editor.buffer[0..text.len], text);
     editor.length = text.len;
     editor.cursor = text.len;
-    editor.write_sink = sink;
+    editor.output = sink;
     editor.no_terminal = true;
     // The highlighter and the history-backed suggestions are not under test
     // here, and both do real work on every repaint.
@@ -3906,7 +4086,7 @@ test "insertUtf8 hands a stray byte back instead of inserting it" {
 
     var sink: std.ArrayList(u8) = .empty;
     defer sink.deinit(std.testing.allocator);
-    editor.write_sink = &sink;
+    editor.output = &sink;
 
     // 0xC3 starts a two-byte codepoint; 0x09 (Tab) is not a continuation byte.
     editor.pushBack(&.{0x09});
@@ -4511,4 +4691,139 @@ test "a count does nothing in emacs mode" {
     try std.testing.expectEqual(@as(usize, 1), editor.takeCount());
     _ = try editor.invokeWidget(.backward_char, "\x02");
     try std.testing.expectEqual(@as(usize, 3), editor.cursor);
+}
+
+// ---------------------------------------------------------------------------
+// Scripted sessions: readLine driven byte by byte, as a terminal would.
+// ---------------------------------------------------------------------------
+
+const PASTE_START = "\x1b[200~";
+const PASTE_END = "\x1b[201~";
+const ONE_LINER = "cd /tmp && for u in HELLO CHRIS PAWEL GLENN; do printf '%s@hq.training  ' \"$(echo $u | tr A-Z a-z)\"; echo MAIL_PASSWORD_$u 2>/dev/null | tail -1; done";
+
+const Session = struct {
+    editor: LineEditor,
+    screen: std.ArrayList(u8) = .empty,
+    history: [1000]?[]const u8 = @splat(null),
+    history_count: usize = 0,
+
+    fn init(self: *Session, script: []const u8) void {
+        self.* = .{ .editor = LineEditor.init(std.testing.allocator, "$ ") };
+        self.editor.terminal.script = script;
+        self.editor.output = &self.screen;
+        self.editor.setHistory(&self.history, &self.history_count);
+    }
+
+    fn deinit(self: *Session) void {
+        self.editor.deinit();
+        self.screen.deinit(std.testing.allocator);
+    }
+
+    fn remember(self: *Session, entry: []const u8) void {
+        self.history[self.history_count] = entry;
+        self.history_count += 1;
+    }
+
+    /// Run readLine and return what it submitted (caller frees).
+    fn submit(self: *Session) ![]u8 {
+        return (try self.editor.readLine()) orelse error.UnexpectedEof;
+    }
+};
+
+test "bracketed paste inserts the text exactly and does not submit it" {
+    var s: Session = undefined;
+    s.init(PASTE_START ++ ONE_LINER ++ PASTE_END ++ "\r");
+    defer s.deinit();
+    const line = try s.submit();
+    defer std.testing.allocator.free(line);
+    try std.testing.expectEqualStrings(ONE_LINER, line);
+    try std.testing.expect(s.editor.pasted);
+    // What was drawn is the text itself, not a copy with `$u` doubled.
+    try std.testing.expect(std.mem.indexOf(u8, s.screen.items, "$uMAIL") == null);
+}
+
+test "a paste without Enter runs nothing" {
+    var s: Session = undefined;
+    s.init(PASTE_START ++ "echo hi\n" ++ PASTE_END);
+    defer s.deinit();
+    try std.testing.expectError(error.EndOfStream, s.editor.readLine());
+}
+
+test "a multi-line paste becomes one multi-line command, submitted by Enter" {
+    var s: Session = undefined;
+    s.init(PASTE_START ++ "for i in 1 2\r\ndo\n  echo $i\ndone\n" ++ PASTE_END ++ "\r");
+    defer s.deinit();
+    const line = try s.submit();
+    defer std.testing.allocator.free(line);
+    try std.testing.expectEqualStrings("for i in 1 2\ndo\n  echo $i\ndone", line);
+}
+
+test "pasting in the middle keeps the text after the cursor" {
+    var s: Session = undefined;
+    s.init("echo  end" ++ "\x1b[D\x1b[D\x1b[D\x1b[D" ++ PASTE_START ++ "middle" ++ PASTE_END ++ "\r");
+    defer s.deinit();
+    const line = try s.submit();
+    defer std.testing.allocator.free(line);
+    try std.testing.expectEqualStrings("echo middle end", line);
+}
+
+test "a pasted escape sequence or tab is not a key" {
+    var s: Session = undefined;
+    // ESC O C is Right arrow in application cursor mode.
+    s.init(PASTE_START ++ "echo a\tb\x1bOC" ++ PASTE_END ++ "\r");
+    defer s.deinit();
+    const line = try s.submit();
+    defer std.testing.allocator.free(line);
+    try std.testing.expectEqualStrings("echo a bOC", line);
+}
+
+test "ghost text is never accepted into a burst of input" {
+    // A terminal without bracketed paste delivers the paste as fast keys. A
+    // stray Right arrow in that stream used to accept the history entry's
+    // remainder mid-word: `do` + accepted `ne` + typed `ne` = `donene`.
+    var s: Session = undefined;
+    s.init(ONE_LINER[0 .. ONE_LINER.len - 2] ++ "\x1b[C" ++ ONE_LINER[ONE_LINER.len - 2 ..] ++ "\r");
+    defer s.deinit();
+    s.remember(ONE_LINER);
+    const line = try s.submit();
+    defer std.testing.allocator.free(line);
+    try std.testing.expectEqualStrings(ONE_LINER, line);
+}
+
+test "after a pause the suggestion is shown and Right accepts it" {
+    var s: Session = undefined;
+    s.init("echo he" ++ [_]u8{Terminal.script_idle} ++ "\x1b[C\r");
+    defer s.deinit();
+    s.remember("echo hello world");
+    const line = try s.submit();
+    defer std.testing.allocator.free(line);
+    try std.testing.expectEqualStrings("echo hello world", line);
+}
+
+test "terminal replies and unknown escape sequences are not typed" {
+    var s: Session = undefined;
+    s.init("echo ok" ++ "\x1b]11;rgb:1e1e/1e1e/1e1e\x07" ++ "\x1b[?1;2c" ++ "\x1b]0;title\x1b\\" ++ "\r");
+    defer s.deinit();
+    const line = try s.submit();
+    defer std.testing.allocator.free(line);
+    try std.testing.expectEqualStrings("echo ok", line);
+}
+
+test "Enter on an open loop continues on a PS2 line" {
+    var s: Session = undefined;
+    s.init("for i in a b; do\recho $i\rdone\r");
+    defer s.deinit();
+    const line = try s.submit();
+    defer std.testing.allocator.free(line);
+    try std.testing.expectEqualStrings("for i in a b; do\necho $i\ndone", line);
+}
+
+test "isIncomplete follows the shell grammar" {
+    try std.testing.expect(LineEditor.isIncomplete("for i in 1 2; do"));
+    try std.testing.expect(LineEditor.isIncomplete("cd /tmp &&"));
+    try std.testing.expect(LineEditor.isIncomplete("if true; then echo y"));
+    try std.testing.expect(LineEditor.isIncomplete("case $x in"));
+    try std.testing.expect(!LineEditor.isIncomplete("for i in 1 2; do echo $i; done"));
+    try std.testing.expect(!LineEditor.isIncomplete("echo done"));
+    try std.testing.expect(!LineEditor.isIncomplete("echo a; done"));
 }

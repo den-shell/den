@@ -144,7 +144,7 @@ pub fn DuplicateHandle(
         target_process,
         target_handle,
         desired_access,
-        @enumFromInt(@intFromBool(inherit_handle)),
+        @fromBackingInt(@intCast(@intFromBool(inherit_handle))),
         options,
     ).toBool());
 }

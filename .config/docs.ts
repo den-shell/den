@@ -1,7 +1,7 @@
-import type { BunPressConfig } from 'bunpress'
+import type { BunPressConfig } from '@stacksjs/bunpress'
 
 const config: BunPressConfig = {
-  name: 'Den Shell',
+  title: 'Den Shell',
   description: 'A modern, high-performance shell written in Zig with native speed and memory safety',
   url: 'https://den.sh',
 

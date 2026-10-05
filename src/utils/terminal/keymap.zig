@@ -668,6 +668,16 @@ fn defaultsFor(id: KeymapId) []const Entry {
     };
 }
 
+/// Look a sequence up in a keymap's compiled-in defaults, ignoring any user
+/// bindings.
+///
+/// This is what an editor with no KeymapSet uses. The defaults are static data,
+/// so a bare editor -- one built in a test, or before the shell hands its
+/// keymaps over -- still has the standard bindings rather than only self-insert.
+pub fn lookupDefaults(id: KeymapId, seq: []const u8) Lookup {
+    return lookupIn(defaultsFor(id), seq);
+}
+
 /// What an unbound single byte does in a given keymap. This is how zsh's
 /// keymaps bind the printable range, rather than the dispatcher special-casing
 /// byte values.

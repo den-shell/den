@@ -27,7 +27,7 @@ test "PluginRegistry - register hook" {
     try registry.registerHook("test_plugin", .pre_command, example_plugins.counterPreCommand, 0);
 
     // Verify hook was registered
-    const index = @intFromEnum(HookType.pre_command);
+    const index = @backingInt(HookType.pre_command);
     try std.testing.expectEqual(@as(usize, 1), registry.hooks[index].items.len);
 
     const hook = registry.hooks[index].items[0];
@@ -48,7 +48,7 @@ test "PluginRegistry - register multiple hooks with priority" {
     try registry.registerHook("plugin_mid", .pre_command, example_plugins.loggerPreCommand, 50);
 
     // Verify hooks are sorted by priority
-    const index = @intFromEnum(HookType.pre_command);
+    const index = @backingInt(HookType.pre_command);
     try std.testing.expectEqual(@as(usize, 3), registry.hooks[index].items.len);
 
     // Should be sorted: high (0) < mid (50) < low (100)
@@ -69,8 +69,8 @@ test "PluginRegistry - unregister hooks" {
     try registry.registerHook("plugin_a", .post_command, example_plugins.counterPostCommand, 0);
 
     // Verify initial state
-    const pre_index = @intFromEnum(HookType.pre_command);
-    const post_index = @intFromEnum(HookType.post_command);
+    const pre_index = @backingInt(HookType.pre_command);
+    const post_index = @backingInt(HookType.post_command);
     try std.testing.expectEqual(@as(usize, 2), registry.hooks[pre_index].items.len);
     try std.testing.expectEqual(@as(usize, 1), registry.hooks[post_index].items.len);
 

@@ -108,7 +108,7 @@ fn spawnAndWaitPosix(allocator: std.mem.Allocator, opts: SpawnOptions) !i32 {
     if (posix.W.IFEXITED(status_u32)) {
         return @intCast(posix.W.EXITSTATUS(status_u32));
     } else if (posix.W.IFSIGNALED(status_u32)) {
-        const sig: i32 = @intCast(@intFromEnum(posix.W.TERMSIG(status_u32)));
+        const sig: i32 = @intCast(@backingInt(posix.W.TERMSIG(status_u32)));
         return 128 + sig;
     }
     return 1;

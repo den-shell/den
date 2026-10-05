@@ -1,22 +1,6 @@
 const std = @import("std");
 const Shell = @import("../shell.zig").Shell;
-const control_flow = @import("control_flow.zig");
-const ControlFlowParser = control_flow.ControlFlowParser;
-const ControlFlowExecutor = control_flow.ControlFlowExecutor;
-
-/// Check if input contains a word (surrounded by word boundaries: start/end/space/semicolon)
-fn containsWord(input: []const u8, word: []const u8) bool {
-    var pos: usize = 0;
-    while (pos + word.len <= input.len) {
-        if (std.mem.eql(u8, input[pos..][0..word.len], word)) {
-            const at_start = pos == 0 or input[pos - 1] == ' ' or input[pos - 1] == ';' or input[pos - 1] == '\t';
-            const at_end = pos + word.len == input.len or input[pos + word.len] == ' ' or input[pos + word.len] == ';' or input[pos + word.len] == '\t' or input[pos + word.len] == '\n';
-            if (at_start and at_end) return true;
-        }
-        pos += 1;
-    }
-    return false;
-}
+const compound = @import("../parser/compound.zig");
 
 /// Typed parameter for custom commands (Phase 5.2)
 pub const TypedParam = struct {
@@ -251,103 +235,24 @@ pub const FunctionManager = struct {
 
         var exit_code: i32 = 0;
 
-        // Execute function body with control flow support
+        // Execute the body one complete command at a time. A line that opens
+        // a loop, `if`, `case` or group, or ends in `&&` or `|`, is joined with
+        // the lines that complete it; the shell runs compound commands
+        // wherever they appear in the command.
         var line_num: usize = 0;
-        var cf_parser = ControlFlowParser.init(self.allocator);
-        var cf_executor = ControlFlowExecutor.init(shell);
-
         while (line_num < func.body.len) {
-            const line = func.body[line_num];
-            const trimmed = std.mem.trim(u8, line, &std.ascii.whitespace);
-
+            const trimmed = std.mem.trim(u8, func.body[line_num], &std.ascii.whitespace);
             if (trimmed.len == 0 or trimmed[0] == '#') {
                 line_num += 1;
                 continue;
             }
 
-            // Check for control flow constructs
-            // One-liner detection: if the line contains both opener and closer
-            // (e.g., "for...done" or "if...fi"), treat as one-liner via executeCommand
-            const is_oneliner = (std.mem.startsWith(u8, trimmed, "for ") and
-                (containsWord(trimmed, "done") or containsWord(trimmed, "fi"))) or
-                (std.mem.startsWith(u8, trimmed, "while ") and containsWord(trimmed, "done")) or
-                (std.mem.startsWith(u8, trimmed, "until ") and containsWord(trimmed, "done")) or
-                (std.mem.startsWith(u8, trimmed, "if ") and containsWord(trimmed, "fi")) or
-                (std.mem.startsWith(u8, trimmed, "case ") and containsWord(trimmed, "esac"));
+            const collected = try compound.collectCommand(self.allocator, func.body, line_num);
+            defer if (collected.owned) self.allocator.free(collected.text);
+            line_num = collected.end + 1;
 
-            if (!is_oneliner) {
-                if (std.mem.startsWith(u8, trimmed, "if ") or std.mem.eql(u8, trimmed, "if")) {
-                    if (cf_parser.parseIf(func.body, line_num)) |result| {
-                        var stmt = result.stmt;
-                        exit_code = cf_executor.executeIf(&stmt) catch 1;
-                        line_num = result.end + 1;
-
-                        if (self.currentFrame()) |frame| {
-                            if (frame.return_requested) {
-                                return frame.return_code;
-                            }
-                        }
-                        continue;
-                    } else |_| {}
-                } else if (std.mem.startsWith(u8, trimmed, "while ") or std.mem.eql(u8, trimmed, "while")) {
-                    if (cf_parser.parseWhile(func.body, line_num, false)) |result| {
-                        var loop = result.loop;
-                        exit_code = cf_executor.executeWhile(&loop) catch 1;
-                        line_num = result.end + 1;
-
-                        if (self.currentFrame()) |frame| {
-                            if (frame.return_requested) {
-                                return frame.return_code;
-                            }
-                        }
-                        continue;
-                    } else |_| {}
-                } else if (std.mem.startsWith(u8, trimmed, "until ") or std.mem.eql(u8, trimmed, "until")) {
-                    if (cf_parser.parseWhile(func.body, line_num, true)) |result| {
-                        var loop = result.loop;
-                        exit_code = cf_executor.executeWhile(&loop) catch 1;
-                        line_num = result.end + 1;
-
-                        if (self.currentFrame()) |frame| {
-                            if (frame.return_requested) {
-                                return frame.return_code;
-                            }
-                        }
-                        continue;
-                    } else |_| {}
-                } else if (std.mem.startsWith(u8, trimmed, "for ") or std.mem.eql(u8, trimmed, "for")) {
-                    if (cf_parser.parseFor(func.body, line_num)) |result| {
-                        var loop = result.loop;
-                        exit_code = cf_executor.executeFor(&loop) catch 1;
-                        line_num = result.end + 1;
-
-                        if (self.currentFrame()) |frame| {
-                            if (frame.return_requested) {
-                                return frame.return_code;
-                            }
-                        }
-                        continue;
-                    } else |_| {}
-                } else if (std.mem.startsWith(u8, trimmed, "case ")) {
-                    if (cf_parser.parseCase(func.body, line_num)) |result| {
-                        var stmt = result.stmt;
-                        exit_code = cf_executor.executeCase(&stmt) catch 1;
-                        line_num = result.end + 1;
-
-                        if (self.currentFrame()) |frame| {
-                            if (frame.return_requested) {
-                                return frame.return_code;
-                            }
-                        }
-                        continue;
-                    } else |_| {}
-                }
-            }
-
-            // Execute as regular command
-            shell.executeCommand(trimmed) catch {};
+            shell.executeCommand(collected.text) catch {};
             exit_code = shell.last_exit_code;
-            line_num += 1;
 
             // Check for return
             if (self.currentFrame()) |frame| {
@@ -355,6 +260,7 @@ pub const FunctionManager = struct {
                     return frame.return_code;
                 }
             }
+            if (shell.exit_requested) return exit_code;
 
             // Check errexit
             if (shell.option_errexit and exit_code != 0) {
@@ -434,6 +340,119 @@ pub const FunctionParser = struct {
     }
 
     /// Parse function definition: function name { ... } or name() { ... }
+    /// Does this line both open and close the function body by itself?
+    ///
+    /// Quote-aware, so a `{` or `}` inside a string does not count towards the
+    /// nesting - `hi() { echo "}"; }` closes at the last brace, not the quoted
+    /// one.
+    fn isSingleLineDefinition(line: []const u8) bool {
+        var depth: i32 = 0;
+        var opened = false;
+        var in_sq = false;
+        var in_dq = false;
+        var i: usize = 0;
+
+        while (i < line.len) : (i += 1) {
+            const c = line[i];
+            if (c == '\\' and !in_sq and i + 1 < line.len) {
+                i += 1;
+                continue;
+            }
+            if (c == '\'' and !in_dq) {
+                in_sq = !in_sq;
+            } else if (c == '"' and !in_sq) {
+                in_dq = !in_dq;
+            } else if (!in_sq and !in_dq) {
+                if (c == '{') {
+                    depth += 1;
+                    opened = true;
+                } else if (c == '}') {
+                    depth -= 1;
+                }
+            }
+        }
+
+        return opened and depth == 0;
+    }
+
+    /// Split one line of shell into statements on its top-level `;`.
+    ///
+    /// Quotes, nested braces and control-flow words all suppress the split, so
+    /// `for x in a b; do echo $x; done` stays one statement and `case` clause
+    /// separators (`;;`) are not mistaken for two empty ones.
+    fn splitStatements(
+        allocator: std.mem.Allocator,
+        body: []const u8,
+        out: *[1000][]const u8,
+    ) !usize {
+        var count: usize = 0;
+        var cf_depth: u32 = 0;
+        var br_depth: u32 = 0;
+        var seg_start: usize = 0;
+        var in_sq = false;
+        var in_dq = false;
+        var i: usize = 0;
+
+        while (i < body.len) : (i += 1) {
+            const c = body[i];
+            if (c == '\\' and !in_sq and i + 1 < body.len) {
+                i += 1;
+                continue;
+            }
+            if (c == '\'' and !in_dq) {
+                in_sq = !in_sq;
+                continue;
+            }
+            if (c == '"' and !in_sq) {
+                in_dq = !in_dq;
+                continue;
+            }
+            if (in_sq or in_dq) continue;
+
+            if (c == '{') {
+                br_depth += 1;
+            } else if (c == '}' and br_depth > 0) {
+                br_depth -= 1;
+            }
+
+            if (isControlFlowWord(body, i, "for ") or
+                isControlFlowWord(body, i, "while ") or
+                isControlFlowWord(body, i, "until ") or
+                isControlFlowWord(body, i, "if ") or
+                isControlFlowWord(body, i, "case "))
+            {
+                cf_depth += 1;
+            } else if (isControlFlowEnd(body, i, "done") or
+                isControlFlowEnd(body, i, "fi") or
+                isControlFlowEnd(body, i, "esac"))
+            {
+                if (cf_depth > 0) cf_depth -= 1;
+            }
+
+            if (c == ';' and cf_depth == 0 and br_depth == 0) {
+                // `;;` ends a case clause; it is not a statement separator.
+                if (i + 1 < body.len and body[i + 1] == ';') {
+                    i += 1;
+                    continue;
+                }
+                const part = std.mem.trim(u8, body[seg_start..i], &std.ascii.whitespace);
+                if (part.len > 0 and count < out.len) {
+                    out[count] = try allocator.dupe(u8, part);
+                    count += 1;
+                }
+                seg_start = i + 1;
+            }
+        }
+
+        const last = std.mem.trim(u8, body[seg_start..], &std.ascii.whitespace);
+        if (last.len > 0 and count < out.len) {
+            out[count] = try allocator.dupe(u8, last);
+            count += 1;
+        }
+
+        return count;
+    }
+
     pub fn parseFunction(self: *FunctionParser, lines: [][]const u8, start: usize) !struct { name: []const u8, body: [][]const u8, end: usize } {
         const first_line = std.mem.trim(u8, lines[start], &std.ascii.whitespace);
 
@@ -476,6 +495,25 @@ pub const FunctionParser = struct {
         var brace_count: i32 = 0;
         var found_opening = false;
         var i = start_line;
+
+        // A definition that opens and closes on its own line has its whole
+        // body between those braces, and the loop below cannot see it: the
+        // line carrying `{` is excluded from the body, so `hi() { echo x; }`
+        // parsed to a function with no body at all - defined, callable,
+        // silent. `source` avoided it by routing one-liners elsewhere; `-c`
+        // and a script file argument came straight here.
+        if (isSingleLineDefinition(first_line)) {
+            const open = std.mem.indexOfScalar(u8, first_line, '{').?;
+            const close = std.mem.lastIndexOfScalar(u8, first_line, '}').?;
+            const inner = std.mem.trim(u8, first_line[open + 1 .. close], &std.ascii.whitespace);
+
+            body_count = try splitStatements(self.allocator, inner, &body_buffer);
+
+            const body = try self.allocator.alloc([]const u8, body_count);
+            @memcpy(body, body_buffer[0..body_count]);
+
+            return .{ .name = name, .body = body, .end = start };
+        }
 
         while (i < lines.len) : (i += 1) {
             const line = lines[i];
@@ -723,4 +761,27 @@ test "FunctionManager listFunctions is heap-allocated with no truncation" {
 
     // Empty manager returns empty slice, but it's properly heap-allocated
     try std.testing.expectEqual(@as(usize, 0), names.len);
+}
+
+/// Is a control-flow keyword starting here, at a word boundary?
+///
+/// Lives here rather than in the shell layer because both the single-line
+/// function parser above and `shell/function_definition.zig` split a body on
+/// its top-level semicolons and must agree about what a top level is.
+pub fn isControlFlowWord(input: []const u8, pos: usize, keyword: []const u8) bool {
+    if (pos > 0 and input[pos - 1] != ' ' and input[pos - 1] != '\t' and input[pos - 1] != ';') return false;
+    if (pos + keyword.len > input.len) return false;
+    return std.mem.eql(u8, input[pos..][0..keyword.len], keyword);
+}
+
+/// Is a control-flow closing word (`done`, `fi`, `esac`) at this position?
+pub fn isControlFlowEnd(input: []const u8, pos: usize, word: []const u8) bool {
+    if (pos > 0 and input[pos - 1] != ' ' and input[pos - 1] != '\t' and input[pos - 1] != ';') return false;
+    if (pos + word.len > input.len) return false;
+    if (!std.mem.eql(u8, input[pos..][0..word.len], word)) return false;
+    if (pos + word.len < input.len) {
+        const next = input[pos + word.len];
+        return next == ' ' or next == '\t' or next == ';' or next == '\n';
+    }
+    return true;
 }

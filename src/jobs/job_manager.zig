@@ -138,7 +138,7 @@ pub const JobManager = struct {
                     } else {
                         // Job completed or was signaled
                         const exit_status = if (std.posix.W.IFSIGNALED(raw))
-                            128 + @as(i32, @intCast(@intFromEnum(std.posix.W.TERMSIG(raw))))
+                            128 + @as(i32, @intCast(@backingInt(std.posix.W.TERMSIG(raw))))
                         else
                             getExitStatus(raw);
                         if (self.interactive) {
@@ -395,9 +395,9 @@ pub const JobManager = struct {
                     self.jobs[slot].?.status = .stopped;
                 }
                 try IO.print("\n", .{});
-                exit_status = 128 + @as(i32, @intCast(@intFromEnum(std.posix.W.STOPSIG(raw))));
+                exit_status = 128 + @as(i32, @intCast(@backingInt(std.posix.W.STOPSIG(raw))));
             } else if (std.posix.W.IFSIGNALED(raw)) {
-                exit_status = 128 + @as(i32, @intCast(@intFromEnum(std.posix.W.TERMSIG(raw))));
+                exit_status = 128 + @as(i32, @intCast(@backingInt(std.posix.W.TERMSIG(raw))));
                 if (job_slot) |slot| self.remove(slot);
             } else {
                 exit_status = getExitStatus(@as(u32, @bitCast(fg_wait_status)));

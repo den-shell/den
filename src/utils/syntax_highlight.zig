@@ -49,7 +49,15 @@ pub const SyntaxHighlighter = struct {
         return .{ .allocator = allocator };
     }
 
-    /// Apply syntax highlighting to a command line
+    /// Apply syntax highlighting to a command line.
+    ///
+    /// The result is the input with color codes inserted and nothing else:
+    /// stripped of escape sequences it is byte-for-byte the input. The line
+    /// editor places the cursor by measuring the plain buffer, so any extra or
+    /// missing character here shows the user a different command than the one
+    /// that will run. (An earlier version emitted a `$var` inside a word when
+    /// it reached the `$`, then the whole word again at its end, so
+    /// `MAIL_PASSWORD_$u` was displayed as `$uMAIL_PASSWORD_$u`.)
     pub fn highlight(self: *SyntaxHighlighter, line: []const u8) ![]const u8 {
         if (line.len == 0) return try self.allocator.dupe(u8, line);
 
@@ -57,157 +65,180 @@ pub const SyntaxHighlighter = struct {
         errdefer result.deinit(self.allocator);
 
         var pos: usize = 0;
-        var in_string: bool = false;
-        var string_char: u8 = 0;
-        var in_comment: bool = false;
-        var word_start: ?usize = null;
-        var is_first_word: bool = true;
+        // Whether the next word is in command position (start of a command).
+        var command_position = true;
 
         while (pos < line.len) {
             const c = line[pos];
 
-            // Handle comments
-            if (c == '#' and !in_string) {
-                in_comment = true;
+            if (c == ' ' or c == '\t' or c == '\n' or c == '\r') {
+                try result.append(self.allocator, c);
+                if (c == '\n') command_position = true;
+                pos += 1;
+                continue;
+            }
+
+            // A `#` that starts a word starts a comment.
+            if (c == '#') {
+                const end = std.mem.indexOfScalarPos(u8, line, pos, '\n') orelse line.len;
                 try result.appendSlice(self.allocator, Color.GRAY);
-                try result.append(self.allocator, c);
-                pos += 1;
-                continue;
-            }
-
-            if (in_comment) {
-                try result.append(self.allocator, c);
-                pos += 1;
-                continue;
-            }
-
-            // Handle strings
-            if ((c == '"' or c == '\'') and !in_string) {
-                in_string = true;
-                string_char = c;
-                try result.appendSlice(self.allocator, Color.YELLOW);
-                try result.append(self.allocator, c);
-                pos += 1;
-                continue;
-            } else if (in_string and c == string_char) {
-                try result.append(self.allocator, c);
+                try result.appendSlice(self.allocator, line[pos..end]);
                 try result.appendSlice(self.allocator, Color.RESET);
-                in_string = false;
-                pos += 1;
+                pos = end;
                 continue;
-            } else if (in_string) {
+            }
+
+            if (isOperatorChar(c)) {
                 try result.append(self.allocator, c);
+                if (c == '|' or c == '&' or c == ';' or c == '(') command_position = true;
                 pos += 1;
                 continue;
             }
 
-            // Handle variables
-            if (c == '$') {
-                try result.appendSlice(self.allocator, Color.MAGENTA);
-                try result.append(self.allocator, c);
-                pos += 1;
+            const end = wordEnd(line, pos);
+            const word = line[pos..end];
+            pos = end;
 
-                // Read variable name
-                if (pos < line.len and line[pos] == '{') {
-                    try result.append(self.allocator, line[pos]);
-                    pos += 1;
-                    while (pos < line.len and line[pos] != '}') {
-                        try result.append(self.allocator, line[pos]);
-                        pos += 1;
-                    }
-                    if (pos < line.len) {
-                        try result.append(self.allocator, line[pos]);
-                        pos += 1;
-                    }
+            if (command_position) {
+                if (self.isKeyword(word)) {
+                    try self.appendColored(&result, Color.BLUE, word);
+                    // `for x`, `case w`, `select x`, `function f`: a name or a
+                    // word follows, not a command.
+                    command_position = !(std.mem.eql(u8, word, "for") or std.mem.eql(u8, word, "case") or
+                        std.mem.eql(u8, word, "select") or std.mem.eql(u8, word, "function") or
+                        std.mem.eql(u8, word, "in"));
+                } else if (isAssignment(word)) {
+                    // `VAR=value cmd`: the command is still to come.
+                    try self.appendWord(&result, word);
+                } else if (self.isBuiltin(word)) {
+                    try self.appendColored(&result, Color.BLUE, word);
+                    command_position = false;
                 } else {
-                    while (pos < line.len and (std.ascii.isAlphanumeric(line[pos]) or line[pos] == '_')) {
-                        try result.append(self.allocator, line[pos]);
-                        pos += 1;
-                    }
+                    try self.appendColored(&result, Color.BOLD_GREEN, word);
+                    command_position = false;
                 }
-                try result.appendSlice(self.allocator, Color.RESET);
-                continue;
-            }
-
-            // Handle flags (- or --)
-            if (c == '-' and word_start == null) {
-                word_start = pos;
-                try result.appendSlice(self.allocator, Color.CYAN);
-                try result.append(self.allocator, c);
-                pos += 1;
-
-                // Read the rest of the flag
-                while (pos < line.len and !std.ascii.isWhitespace(line[pos])) {
-                    try result.append(self.allocator, line[pos]);
-                    pos += 1;
-                }
-                try result.appendSlice(self.allocator, Color.RESET);
-                word_start = null;
-                continue;
-            }
-
-            // Handle word boundaries
-            if (std.ascii.isWhitespace(c) or c == '|' or c == '&' or c == ';' or c == '(' or c == ')') {
-                // End of word - check if it was a command/keyword/builtin
-                if (word_start) |start| {
-                    const word = line[start..pos];
-                    if (is_first_word) {
-                        if (self.isBuiltin(word)) {
-                            try result.appendSlice(self.allocator, Color.BLUE);
-                        } else if (self.isKeyword(word)) {
-                            try result.appendSlice(self.allocator, Color.BLUE);
-                        } else {
-                            try result.appendSlice(self.allocator, Color.BOLD_GREEN);
-                        }
-                        try result.appendSlice(self.allocator, word);
-                        try result.appendSlice(self.allocator, Color.RESET);
-                        is_first_word = false;
-                    } else {
-                        try result.appendSlice(self.allocator, word);
-                    }
-                    word_start = null;
-                }
-
-                try result.append(self.allocator, c);
-                if (c == '|' or c == '&' or c == ';') {
-                    is_first_word = true;
-                }
-                pos += 1;
-                continue;
-            }
-
-            // Start of a new word
-            if (word_start == null) {
-                word_start = pos;
-            }
-
-            pos += 1;
-        }
-
-        // Handle final word
-        if (word_start) |start| {
-            const word = line[start..];
-            if (is_first_word) {
-                if (self.isBuiltin(word)) {
-                    try result.appendSlice(self.allocator, Color.BLUE);
-                } else if (self.isKeyword(word)) {
-                    try result.appendSlice(self.allocator, Color.BLUE);
-                } else {
-                    try result.appendSlice(self.allocator, Color.BOLD_GREEN);
-                }
-                try result.appendSlice(self.allocator, word);
-                try result.appendSlice(self.allocator, Color.RESET);
+            } else if (word[0] == '-') {
+                try self.appendColored(&result, Color.CYAN, word);
             } else {
-                try result.appendSlice(self.allocator, word);
+                try self.appendWord(&result, word);
             }
-        }
-
-        // Add final reset if still in comment
-        if (in_comment) {
-            try result.appendSlice(self.allocator, Color.RESET);
         }
 
         return result.toOwnedSlice(self.allocator);
+    }
+
+    fn appendColored(self: *SyntaxHighlighter, result: *std.ArrayList(u8), color: []const u8, text: []const u8) !void {
+        try result.appendSlice(self.allocator, color);
+        try result.appendSlice(self.allocator, text);
+        try result.appendSlice(self.allocator, Color.RESET);
+    }
+
+    /// An argument word: quoted parts yellow, expansions magenta, the rest
+    /// plain, each byte emitted exactly once.
+    fn appendWord(self: *SyntaxHighlighter, result: *std.ArrayList(u8), word: []const u8) !void {
+        var i: usize = 0;
+        while (i < word.len) {
+            const c = word[i];
+            if (c == '\'' or c == '"') {
+                const close = quoteEnd(word, i);
+                try self.appendColored(result, Color.YELLOW, word[i..close]);
+                i = close;
+            } else if (c == '$' and i + 1 < word.len) {
+                const close = expansionEnd(word, i);
+                try self.appendColored(result, Color.MAGENTA, word[i..close]);
+                i = close;
+            } else if (c == '\\' and i + 1 < word.len) {
+                try result.appendSlice(self.allocator, word[i .. i + 2]);
+                i += 2;
+            } else {
+                try result.append(self.allocator, c);
+                i += 1;
+            }
+        }
+    }
+
+    fn isOperatorChar(c: u8) bool {
+        return switch (c) {
+            '|', '&', ';', '(', ')', '<', '>' => true,
+            else => false,
+        };
+    }
+
+    fn isAssignment(word: []const u8) bool {
+        const eq = std.mem.indexOfScalar(u8, word, '=') orelse return false;
+        if (eq == 0) return false;
+        if (!std.ascii.isAlphabetic(word[0]) and word[0] != '_') return false;
+        for (word[1..eq]) |ch| {
+            if (!std.ascii.isAlphanumeric(ch) and ch != '_') return false;
+        }
+        return true;
+    }
+
+    /// End of the word starting at `start`: the first unquoted blank or
+    /// operator character. Quotes, `$(...)`, `${...}` and backquotes are part
+    /// of the word even when they contain blanks or operators.
+    fn wordEnd(line: []const u8, start: usize) usize {
+        var i = start;
+        while (i < line.len) {
+            const c = line[i];
+            if (c == ' ' or c == '\t' or c == '\n' or c == '\r' or isOperatorChar(c)) break;
+            if (c == '\'' or c == '"') {
+                i = quoteEnd(line, i);
+            } else if (c == '$' and i + 1 < line.len) {
+                i = expansionEnd(line, i);
+            } else if (c == '`') {
+                i = if (std.mem.indexOfScalarPos(u8, line, i + 1, '`')) |close| close + 1 else line.len;
+            } else if (c == '\\') {
+                i = @min(i + 2, line.len);
+            } else {
+                i += 1;
+            }
+        }
+        return i;
+    }
+
+    /// Index just past the quote opened at `start` (or the end of the line).
+    fn quoteEnd(line: []const u8, start: usize) usize {
+        const q = line[start];
+        var i = start + 1;
+        while (i < line.len) {
+            if (q == '"' and line[i] == '\\') {
+                i += 2;
+                continue;
+            }
+            if (line[i] == q) return i + 1;
+            i += 1;
+        }
+        return line.len;
+    }
+
+    /// Index just past the expansion starting with the `$` at `start`.
+    fn expansionEnd(line: []const u8, start: usize) usize {
+        var i = start + 1;
+        if (i >= line.len) return i;
+        const open = line[i];
+        if (open == '(' or open == '{') {
+            const close: u8 = if (open == '(') ')' else '}';
+            var depth: usize = 0;
+            while (i < line.len) : (i += 1) {
+                const c = line[i];
+                if (c == '\'' or c == '"') {
+                    i = quoteEnd(line, i) - 1;
+                } else if (c == open) {
+                    depth += 1;
+                } else if (c == close) {
+                    depth -= 1;
+                    if (depth == 0) return i + 1;
+                }
+            }
+            return line.len;
+        }
+        if (std.ascii.isAlphabetic(open) or open == '_') {
+            while (i < line.len and (std.ascii.isAlphanumeric(line[i]) or line[i] == '_')) i += 1;
+            return i;
+        }
+        // $?, $#, $1, $@, ...
+        return i + 1;
     }
 
     fn isBuiltin(self: *SyntaxHighlighter, word: []const u8) bool {
@@ -463,8 +494,8 @@ pub const SyntaxHighlighter = struct {
                 in_error = false;
             }
 
-            // Handle comments
-            if (c == '#' and !in_string) {
+            // Handle comments (a `#` inside a word is not one)
+            if (c == '#' and !in_string and word_start == null) {
                 in_comment = true;
                 if (!in_error) try result.appendSlice(self.allocator, Color.GRAY);
                 try result.append(self.allocator, c);
@@ -476,6 +507,16 @@ pub const SyntaxHighlighter = struct {
                 try result.append(self.allocator, c);
                 pos += 1;
                 continue;
+            }
+
+            // A quote or `$` inside a word: emit the word so far first, or it
+            // would be written again when the word ends.
+            if ((c == '"' or c == '\'' or c == '$') and !in_string) {
+                if (word_start) |start| {
+                    try result.appendSlice(self.allocator, line[start..pos]);
+                    word_start = null;
+                    is_first_word = false;
+                }
             }
 
             // Handle strings
@@ -534,7 +575,7 @@ pub const SyntaxHighlighter = struct {
                 pos += 1;
 
                 // Read the rest of the flag
-                while (pos < line.len and !std.ascii.isWhitespace(line[pos])) {
+                while (pos < line.len and !std.ascii.isWhitespace(line[pos]) and !isOperatorChar(line[pos])) {
                     try result.append(self.allocator, line[pos]);
                     pos += 1;
                 }
@@ -735,4 +776,42 @@ test "highlightWithErrors - error positions get red" {
 
     // Should contain the underline red escape code
     try std.testing.expect(std.mem.indexOf(u8, output, "\x1b[4;31m") != null);
+}
+
+fn stripAnsi(allocator: std.mem.Allocator, text: []const u8) ![]u8 {
+    var out = std.ArrayList(u8).empty;
+    var i: usize = 0;
+    while (i < text.len) : (i += 1) {
+        if (text[i] == 0x1b) {
+            while (i < text.len and text[i] != 'm') i += 1;
+            continue;
+        }
+        try out.append(allocator, text[i]);
+    }
+    return out.toOwnedSlice(allocator);
+}
+
+test "highlighting only adds colors, never characters" {
+    const allocator = std.testing.allocator;
+    var h = SyntaxHighlighter.init(allocator);
+    const lines = [_][]const u8{
+        "cd ~/Code/Apps/hq.training && for u in HELLO CHRIS PAWEL GLENN; do printf '%s@hq.training  ' \"$(echo $u | tr A-Z a-z)\"; ./buddy env:get MAIL_PASSWORD_$u --file .env.production 2>/dev/null | tail -1; done",
+        "echo pre\"quoted $x\"post a'b'c ${x:-d}e $(cmd | tr a b)f",
+        "X=1 Y=$HOME/bin cmd -a --b=c #comment",
+        "echo a#b 'unterminated",
+        "ls -la;done|cat",
+    };
+    for (lines) |line| {
+        const out = try h.highlight(line);
+        defer allocator.free(out);
+        const plain = try stripAnsi(allocator, out);
+        defer allocator.free(plain);
+        try std.testing.expectEqualStrings(line, plain);
+
+        const out2 = try h.highlightWithErrors(line);
+        defer allocator.free(out2);
+        const plain2 = try stripAnsi(allocator, out2);
+        defer allocator.free(plain2);
+        try std.testing.expectEqualStrings(line, plain2);
+    }
 }

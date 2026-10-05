@@ -8,7 +8,7 @@ const cli = @import("cli.zig");
 // 1ms of startup. Den builds its own environment from C `environ` and uses the
 // libc allocator, so it needs none of that; Minimal gives just the args.
 pub fn main(init: std.process.Init.Minimal) !void {
-    if (builtin.mode == .Debug) {
+    if (builtin.mode == .debug) {
         // Keep leak detection in Debug builds.
         var gpa: std.heap.DebugAllocator(.{}) = .{};
         defer _ = gpa.deinit();
@@ -27,4 +27,8 @@ fn run(allocator: std.mem.Allocator, args: std.process.Args) !void {
 
 test {
     std.testing.refAllDecls(@This());
+    // Modules whose tests no other step pulls in.
+    _ = @import("parser/compound.zig");
+    _ = @import("utils/syntax_highlight.zig");
+    _ = @import("utils/typo_correction.zig");
 }

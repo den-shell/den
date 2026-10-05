@@ -1,7 +1,7 @@
 {
   "name": "den",
   "type": "module",
-  "version": "0.2.2",
+  "version": "0.2.3",
   "description": "A performant & customizable, cross-platform shell for your terminal.",
   "author": "Chris Breuer <chris@stacksjs.org>",
   "license": "MIT",
@@ -73,8 +73,9 @@
     "bench": "bun --bun benchmark/index.ts"
   },
   "devDependencies": {
-    "typescript": "^5.9.2",
-    "better-dx": "^0.2.15"
+    "@stacksjs/bunpress": "^0.2.11",
+    "better-dx": "^0.2.15",
+    "typescript": "^7.0.2"
   },
   "git-hooks": {
     "pre-commit": {

@@ -1,5 +1,50 @@
 # Changelog
 
+[Compare changes](https://github.com/den-shell/den/compare/v0.2.2...v0.2.3)
+
+## 🚀 Features
+
+- **prompt**: default {path} back to the full home-relative path ([083bf2c](https://github.com/den-shell/den/commit/083bf2c)) _(by glennmichael123 <gtorregosa@gmail.com>)_
+- **prompt**: show working-tree counts in the compact git segment ([925bf1b](https://github.com/den-shell/den/commit/925bf1b)) _(by glennmichael123 <gtorregosa@gmail.com>)_
+- **prompt**: robbyrussell-style git segment and leading arrow ([2e21c7c](https://github.com/den-shell/den/commit/2e21c7c)) _(by glennmichael123 <gtorregosa@gmail.com>)_
+- **prompt**: single-line prompt with basename-only path ([e88ff97](https://github.com/den-shell/den/commit/e88ff97)) _(by glennmichael123 <gtorregosa@gmail.com>)_
+- export DEN_VERSION ([23e6a6e](https://github.com/den-shell/den/commit/23e6a6e)) _(by Chris <chrisbreuer93@gmail.com>)_
+- chpwd and precmd hooks ([8afc3e6](https://github.com/den-shell/den/commit/8afc3e6)) _(by Chris <chrisbreuer93@gmail.com>)_
+
+## 🐛 Bug Fixes
+
+- **shell**: a one-line function definition keeps its body ([adf78d5](https://github.com/den-shell/den/commit/adf78d5)) _(by Chris <chrisbreuer93@gmail.com>)_
+- **shell**: a function's arguments reach its case, and eval carries functions ([740c73b](https://github.com/den-shell/den/commit/740c73b)) _(by Chris <chrisbreuer93@gmail.com>)_
+- **prompt**: use the bun mascot instead of a dumpling ([d5287e4](https://github.com/den-shell/den/commit/d5287e4)) _(by glennmichael123 <gtorregosa@gmail.com>)_
+- **line-editor**: handle standalone escape ([eac756c](https://github.com/den-shell/den/commit/eac756c)) _(by Chris <chrisbreuer93@gmail.com>)_
+- **line-editor**: recognize modified navigation keys ([55958f1](https://github.com/den-shell/den/commit/55958f1)) _(by Chris <chrisbreuer93@gmail.com>)_
+- **line-editor**: support option-delete ([a08a4e6](https://github.com/den-shell/den/commit/a08a4e6)) _(by Chris <chrisbreuer93@gmail.com>)_
+- **test-runner**: spawn through the shell's own helper ([bc14e50](https://github.com/den-shell/den/commit/bc14e50)) _(by Chris <chrisbreuer93@gmail.com>)_
+- **grep**: hand regex patterns to the real grep ([e854ac1](https://github.com/den-shell/den/commit/e854ac1)) _(by Chris <chrisbreuer93@gmail.com>)_
+- export DEN_VERSION to child processes ([a9ca9b8](https://github.com/den-shell/den/commit/a9ca9b8)) _(by Chris <chrisbreuer93@gmail.com>)_
+- set PWD to this shell's working directory ([96dc11c](https://github.com/den-shell/den/commit/96dc11c)) _(by Chris <chrisbreuer93@gmail.com>)_
+- stop a same-named directory from swallowing a command ([a436b1e](https://github.com/den-shell/den/commit/a436b1e)) _(by Chris <chrisbreuer93@gmail.com>)_
+- run one-line control flow in sourced files ([86e9d20](https://github.com/den-shell/den/commit/86e9d20)) _(by Chris <chrisbreuer93@gmail.com>)_
+- expand variables in substitution patterns ([cad7a67](https://github.com/den-shell/den/commit/cad7a67)) _(by Chris <chrisbreuer93@gmail.com>)_
+
+## 📚 Documentation
+
+- link the community as stacksjs.com/discord ([219f1a2](https://github.com/den-shell/den/commit/219f1a2)) _(by Chris <chrisbreuer93@gmail.com>)_
+
+## 🧪 Tests
+
+- **grep**: exercise the builtin rather than the alias ([da7b43b](https://github.com/den-shell/den/commit/da7b43b)) _(by Chris <chrisbreuer93@gmail.com>)_
+- cover the auto-cd and PWD regressions ([3b653bd](https://github.com/den-shell/den/commit/3b653bd)) _(by Chris <chrisbreuer93@gmail.com>)_
+
+## 🧹 Chores
+
+- release v0.2.3 ([6d84189](https://github.com/den-shell/den/commit/6d84189)) _(by Chris <chrisbreuer93@gmail.com>)_
+
+## Contributors
+
+- _Chris <chrisbreuer93@gmail.com>_
+- _glennmichael123 <gtorregosa@gmail.com>_
+
 [Compare changes](https://github.com/den-shell/den/compare/v0.2.1...v0.2.2)
 
 ## 🚀 Features

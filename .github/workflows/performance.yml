@@ -11,7 +11,7 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  ZIG_VERSION: '0.17.0-dev.956+2dca73595'
+  ZIG_VERSION: '0.17.0-dev.2313+5b9147ed5'
   # Performance budgets
   MAX_STARTUP_MS: 10
   MAX_COMMAND_EXEC_MS: 15

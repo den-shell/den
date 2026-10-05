@@ -244,7 +244,7 @@ pub const ExecutionTrace = struct {
 /// Macro to add a trace point
 pub fn trace(comptime src: std.builtin.SourceLocation, name: []const u8) TracePoint {
     const point = TracePoint.init(src, name);
-    if (builtin.mode == .Debug) {
+    if (builtin.mode == .debug) {
         point.print();
     }
     return point;

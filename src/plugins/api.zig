@@ -362,7 +362,7 @@ pub const Logger = struct {
     }
 
     pub fn log(self: *Logger, level: LogLevel, comptime format: []const u8, args: anytype) !void {
-        if (@intFromEnum(level) < @intFromEnum(self.min_level)) {
+        if (@backingInt(level) < @backingInt(self.min_level)) {
             return;
         }
 
@@ -433,8 +433,8 @@ pub const PluginContext = struct {
 // ============================================================================
 
 test "LogLevel enum values" {
-    try std.testing.expectEqual(@as(u32, 0), @intFromEnum(LogLevel.debug));
-    try std.testing.expectEqual(@as(u32, 1), @intFromEnum(LogLevel.info));
-    try std.testing.expectEqual(@as(u32, 2), @intFromEnum(LogLevel.warn));
-    try std.testing.expectEqual(@as(u32, 3), @intFromEnum(LogLevel.err));
+    try std.testing.expectEqual(@as(u32, 0), @backingInt(LogLevel.debug));
+    try std.testing.expectEqual(@as(u32, 1), @backingInt(LogLevel.info));
+    try std.testing.expectEqual(@as(u32, 2), @backingInt(LogLevel.warn));
+    try std.testing.expectEqual(@as(u32, 3), @backingInt(LogLevel.err));
 }

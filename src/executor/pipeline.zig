@@ -121,7 +121,7 @@ pub fn executePosix(
         if (comptime builtin.os.tag != .windows) {
             if (std.posix.W.IFSIGNALED(raw_status)) {
                 // Process was killed by a signal: exit code = 128 + signal_number (bash convention)
-                status = 128 + @as(i32, @intCast(@intFromEnum(std.posix.W.TERMSIG(raw_status))));
+                status = 128 + @as(i32, @intCast(@backingInt(std.posix.W.TERMSIG(raw_status))));
             } else {
                 status = @intCast(std.posix.W.EXITSTATUS(raw_status));
             }

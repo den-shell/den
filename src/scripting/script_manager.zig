@@ -1,9 +1,9 @@
 const std = @import("std");
 const Shell = @import("../shell.zig").Shell;
-const ControlFlowParser = @import("control_flow.zig").ControlFlowParser;
-const ControlFlowExecutor = @import("control_flow.zig").ControlFlowExecutor;
+const compound = @import("../parser/compound.zig");
 const FunctionParser = @import("functions.zig").FunctionParser;
 const IO = @import("../utils/io.zig").IO;
+const function_definition = @import("../shell/function_definition.zig");
 
 /// Cached script entry
 const CachedScript = struct {
@@ -450,8 +450,6 @@ pub const ScriptManager = struct {
 
         // Execute with control flow support
         var line_num: usize = 0;
-        var parser = ControlFlowParser.init(self.allocator);
-        var executor = ControlFlowExecutor.init(shell);
         var func_parser = FunctionParser.init(self.allocator);
 
         while (line_num < lines.len) : (line_num += 1) {
@@ -466,8 +464,11 @@ pub const ScriptManager = struct {
             const is_function_keyword = std.mem.startsWith(u8, trimmed, "function ");
 
             // For name() syntax, check if line contains () followed by { (either same line or next)
+            // The parens have to belong to this line rather than sit inside an
+            // argument: `eval "hi() { echo hi; }"` was read as defining a
+            // function called `eval "hi`, so eval never ran.
             var is_paren_syntax = false;
-            if (std.mem.indexOf(u8, trimmed, "()")) |_| {
+            if (function_definition.isFunctionDefinitionStart(trimmed)) {
                 // Has (), now check for { on same line or next line
                 if (std.mem.indexOf(u8, trimmed, "{") != null) {
                     is_paren_syntax = true;
@@ -500,169 +501,17 @@ pub const ScriptManager = struct {
                 continue;
             }
 
-            // Check for control flow keywords
-            if (std.mem.startsWith(u8, trimmed, "if ")) {
-                // One-liner if (has fi on same line) - delegate to executeCommand
-                if (std.mem.indexOf(u8, trimmed, "fi") != null) {
-                    _ = shell.executeCommand(trimmed) catch {};
-                } else {
-                    var result = parser.parseIf(lines, line_num) catch {
-                        shell.last_exit_code = 1;
-                        shell.executeErrTrap();
-                        break;
-                    };
-                    defer result.stmt.deinit();
-                    shell.last_exit_code = executor.executeIf(&result.stmt) catch 1;
-                    if (shell.last_exit_code != 0) {
-                        shell.executeErrTrap();
-                    }
-                    line_num = result.end;
-                }
-                continue;
-            }
-
-            if (std.mem.startsWith(u8, trimmed, "while ")) {
-                // One-liner while (has done on same line) - delegate to executeCommand
-                if (std.mem.indexOf(u8, trimmed, "done") != null) {
-                    _ = shell.executeCommand(trimmed) catch {};
-                } else {
-                    var result = parser.parseWhile(lines, line_num, false) catch {
-                        shell.last_exit_code = 1;
-                        shell.executeErrTrap();
-                        break;
-                    };
-                    defer result.loop.deinit();
-                    shell.last_exit_code = executor.executeWhile(&result.loop) catch 1;
-                    if (shell.last_exit_code != 0) {
-                        shell.executeErrTrap();
-                    }
-                    line_num = result.end;
-                }
-                continue;
-            }
-
-            if (std.mem.startsWith(u8, trimmed, "until ")) {
-                // One-liner until (has done on same line) - delegate to executeCommand
-                if (std.mem.indexOf(u8, trimmed, "done") != null) {
-                    _ = shell.executeCommand(trimmed) catch {};
-                } else {
-                    var result = parser.parseWhile(lines, line_num, true) catch {
-                        shell.last_exit_code = 1;
-                        shell.executeErrTrap();
-                        break;
-                    };
-                    defer result.loop.deinit();
-                    shell.last_exit_code = executor.executeWhile(&result.loop) catch 1;
-                    if (shell.last_exit_code != 0) {
-                        shell.executeErrTrap();
-                    }
-                    line_num = result.end;
-                }
-                continue;
-            }
-
-            if (std.mem.startsWith(u8, trimmed, "for ((")) {
-                // Collect multi-line C-style for loop and delegate to executeCommand
-                // which has proper arithmetic handling via shell/loop_execution.zig
-                if (std.mem.indexOf(u8, trimmed, "done") != null) {
-                    // One-liner - pass directly
-                    _ = shell.executeCommand(trimmed) catch {};
-                } else {
-                    // Collect lines until matching 'done', tracking nesting depth
-                    var combined: std.ArrayListUnmanaged(u8) = .empty;
-                    defer combined.deinit(self.allocator);
-                    combined.appendSlice(self.allocator, trimmed) catch {};
-                    var do_done_depth: i32 = 1; // We already have one 'do' from the for line
-                    while (line_num + 1 < lines.len) {
-                        line_num += 1;
-                        const body_line = std.mem.trim(u8, lines[line_num], &std.ascii.whitespace);
-                        combined.append(self.allocator, '\n') catch {};
-                        combined.appendSlice(self.allocator, body_line) catch {};
-                        // Track nested do/done depth
-                        if (std.mem.indexOf(u8, body_line, "; do") != null or
-                            std.mem.endsWith(u8, body_line, " do") or
-                            std.mem.eql(u8, body_line, "do"))
-                        {
-                            do_done_depth += 1;
-                        }
-                        if (std.mem.eql(u8, body_line, "done") or
-                            std.mem.startsWith(u8, body_line, "done;") or
-                            std.mem.startsWith(u8, body_line, "done "))
-                        {
-                            do_done_depth -= 1;
-                            if (do_done_depth <= 0) break;
-                        }
-                    }
-                    _ = shell.executeCommand(combined.items) catch {};
-                }
-                continue;
-            }
-
-            if (std.mem.startsWith(u8, trimmed, "for ")) {
-                // One-liner for loop (has done on same line) - delegate to executeCommand
-                // which handles semicolon-to-newline conversion via executeControlFlowOneliner
-                if (std.mem.indexOf(u8, trimmed, "done") != null) {
-                    _ = shell.executeCommand(trimmed) catch {};
-                } else {
-                    var result = parser.parseFor(lines, line_num) catch {
-                        shell.last_exit_code = 1;
-                        shell.executeErrTrap();
-                        break;
-                    };
-                    defer result.loop.deinit();
-                    shell.last_exit_code = executor.executeFor(&result.loop) catch 1;
-                    if (shell.last_exit_code != 0) {
-                        shell.executeErrTrap();
-                    }
-                    line_num = result.end;
-                }
-                continue;
-            }
-
-            if (std.mem.startsWith(u8, trimmed, "case ")) {
-                // One-liner case (has esac on same line) - delegate to executeCommand
-                if (std.mem.indexOf(u8, trimmed, "esac") != null) {
-                    _ = shell.executeCommand(trimmed) catch {};
-                } else {
-                    var result = parser.parseCase(lines, line_num) catch {
-                        shell.last_exit_code = 1;
-                        shell.executeErrTrap();
-                        break;
-                    };
-                    defer result.stmt.deinit();
-                    shell.last_exit_code = executor.executeCase(&result.stmt) catch 1;
-                    if (shell.last_exit_code != 0) {
-                        shell.executeErrTrap();
-                    }
-                    line_num = result.end;
-                }
-                continue;
-            }
-
-            // Collect heredoc content: join current line with subsequent lines until delimiter
-            if (std.mem.indexOf(u8, trimmed, "<<") != null) {
-                if (extractHeredocDelimiter(trimmed)) |delimiter| {
-                    var combined: std.ArrayListUnmanaged(u8) = .empty;
-                    defer combined.deinit(self.allocator);
-                    combined.appendSlice(self.allocator, trimmed) catch {};
-                    combined.append(self.allocator, '\n') catch {};
-                    // Collect lines until we find the delimiter
-                    while (line_num + 1 < lines.len) {
-                        line_num += 1;
-                        const heredoc_line = lines[line_num];
-                        combined.appendSlice(self.allocator, heredoc_line) catch {};
-                        combined.append(self.allocator, '\n') catch {};
-                        const htrimmed = std.mem.trim(u8, heredoc_line, &std.ascii.whitespace);
-                        if (std.mem.eql(u8, htrimmed, delimiter)) break;
-                    }
-                    _ = shell.executeCommand(combined.items) catch {};
-                    continue;
-                }
-            }
-
-            // Execute regular command (ignoring errors - exit code set in shell)
+            // Everything else runs one complete command at a time: a line that
+            // opens a loop, `if`, `case`, group or here-document, or that ends
+            // in `&&` or `|`, is joined with the lines that complete it. The
+            // shell then runs the whole command, compound parts included,
+            // wherever they sit in a list or pipeline.
             // Note: executeCommand already handles ERR trap execution
-            _ = shell.executeCommand(trimmed) catch {};
+            const collected = try compound.collectCommand(self.allocator, lines, line_num);
+            defer if (collected.owned) self.allocator.free(collected.text);
+            line_num = collected.end;
+            _ = shell.executeCommand(collected.text) catch {};
+            if (shell.exit_requested) break;
 
             // Check if we should exit due to errexit
             if (shell.option_errexit and shell.last_exit_code != 0) {

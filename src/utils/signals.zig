@@ -25,9 +25,9 @@ pub const Signal = enum {
         }
 
         // On macOS/BSD, SIG constants are enums. Convert to integer for comparison.
-        const sig_int = @intFromEnum(std.posix.SIG.INT);
-        const sig_term = @intFromEnum(std.posix.SIG.TERM);
-        const sig_winch = @intFromEnum(std.posix.SIG.WINCH);
+        const sig_int = @backingInt(std.posix.SIG.INT);
+        const sig_term = @backingInt(std.posix.SIG.TERM);
+        const sig_winch = @backingInt(std.posix.SIG.WINCH);
 
         return if (sig == sig_int)
             .interrupt
@@ -126,7 +126,7 @@ pub fn installHandlers() !void {
 
 /// Signal handler function - accept the platform-appropriate signal type
 fn handleSignal(sig: std.posix.SIG) callconv(.c) void {
-    const sig_val: u32 = @intFromEnum(sig);
+    const sig_val: u32 = @backingInt(sig);
     const signal = Signal.fromPosix(sig_val);
 
     switch (signal) {
