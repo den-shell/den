@@ -345,7 +345,7 @@ pub const LineEditor = struct {
     /// Widget to run if `pending` stops growing: the sequence matched exactly,
     /// but a longer binding also starts with it, so the longer one gets first
     /// refusal. This is how `^X` coexists with `^X(`.
-    pending_fallback: ?Widget = null,
+    pending_fallback: ?keymap.Binding = null,
     pending_fallback_len: u8 = 0,
     /// Empty reads since the last byte arrived.
     idle_polls: u8 = 0,
@@ -968,14 +968,14 @@ pub const LineEditor = struct {
         }
 
         switch (map.lookup(probe.slice())) {
-            .exact => |widget| {
+            .exact => |binding| {
                 self.clearPending();
-                return try self.invokeWidget(widget, probe.slice());
+                return try self.invokeBinding(binding, probe.slice());
             },
-            .exact_prefix => |widget| {
+            .exact_prefix => |binding| {
                 // Wait for the longer binding, remembering this one.
                 self.pending = probe;
-                self.pending_fallback = widget;
+                self.pending_fallback = binding;
                 self.pending_fallback_len = probe.len;
                 return .cont;
             },
@@ -1015,13 +1015,24 @@ pub const LineEditor = struct {
         const fallback_len = self.pending_fallback_len;
         self.clearPending();
 
-        if (fallback) |widget| {
+        if (fallback) |binding| {
             // Run the shorter binding and re-dispatch whatever followed it.
             if (seq.len > fallback_len) self.pushBack(seq.slice()[fallback_len..]);
-            return try self.invokeWidget(widget, seq.slice()[0..fallback_len]);
+            return try self.invokeBinding(binding, seq.slice()[0..fallback_len]);
         }
         self.handOffToEscapeParser(seq);
         return .cont;
+    }
+
+    /// Run a binding. Macro bindings (`bindkey -s`) push their text into the
+    /// input to be dispatched as if typed; everything else is a widget.
+    pub fn invokeBinding(self: *LineEditor, binding: keymap.Binding, key: []const u8) !Flow {
+        if (binding.widget == .push_input) {
+            const maps = self.keymaps orelse return .cont;
+            if (maps.getString(binding.index)) |text| self.pushBack(text);
+            return .cont;
+        }
+        return self.invokeWidget(binding.widget, key);
     }
 
     /// Run a widget. `key` is the byte sequence that triggered it, which the
@@ -1136,6 +1147,10 @@ pub const LineEditor = struct {
 
             .den_escape => try self.handleStandaloneEscape(),
             .bracketed_paste => try self.handlePaste(),
+
+            // Macro bindings are resolved by invokeBinding, which has the
+            // index they need.
+            .push_input => {},
 
             // `zle -N` is not implemented, so nothing ever binds these. The
             // builtin rejects the attempt with an explanation rather than
@@ -4663,4 +4678,60 @@ test "activeKeymapId follows the editing and search modes" {
     // Incremental search wins over the editing mode.
     editor.reverse_search_mode = true;
     try std.testing.expectEqual(keymap.KeymapId.isearch, editor.activeKeymapId());
+}
+
+test "a string binding pushes its text into the input" {
+    var sink: std.ArrayList(u8) = .empty;
+    defer sink.deinit(std.testing.allocator);
+    var maps = keymap.KeymapSet.init();
+    defer maps.deinit(std.testing.allocator);
+    var editor = testKeyEditor(&sink, &maps, "");
+    defer editor.deinit();
+
+    // bindkey -s '^X^Z' 'fg\n'
+    const body = try std.testing.allocator.dupe(u8, "fg\n");
+    const index = try maps.addString(std.testing.allocator, body);
+    try maps.get(.emacs).bind(std.testing.allocator, "\x18\x1a", .push_input, index);
+
+    // The text is queued rather than typed directly, so the read loop
+    // dispatches it exactly as if the user had hit those keys.
+    const flow = try editor.invokeBinding(.{ .widget = .push_input, .index = index }, "\x18\x1a");
+    try std.testing.expectEqual(Flow.cont, flow);
+    try std.testing.expectEqual(@as(usize, 3), editor.input_queue_len);
+    try std.testing.expectEqual(@as(?u8, 'f'), try editor.nextByte());
+    try std.testing.expectEqual(@as(?u8, 'g'), try editor.nextByte());
+    try std.testing.expectEqual(@as(?u8, '\n'), try editor.nextByte());
+}
+
+test "a string binding's text is dispatched as real keys" {
+    var sink: std.ArrayList(u8) = .empty;
+    defer sink.deinit(std.testing.allocator);
+    var maps = keymap.KeymapSet.init();
+    defer maps.deinit(std.testing.allocator);
+    var editor = testKeyEditor(&sink, &maps, "echo hi");
+    defer editor.deinit();
+
+    // Bind Ctrl+T to a macro that is itself Ctrl+A, and check the cursor moves:
+    // the pushed byte has to go back through key dispatch, not into the buffer.
+    const body = try std.testing.allocator.dupe(u8, "\x01");
+    const index = try maps.addString(std.testing.allocator, body);
+    try maps.get(.emacs).bind(std.testing.allocator, "\x14", .push_input, index);
+
+    try std.testing.expectEqual(@as(usize, 7), editor.cursor);
+    _ = try editor.feedKeys("\x14");
+    try std.testing.expectEqual(@as(usize, 0), editor.cursor);
+}
+
+test "a string binding with a missing string does nothing" {
+    var sink: std.ArrayList(u8) = .empty;
+    defer sink.deinit(std.testing.allocator);
+    var maps = keymap.KeymapSet.init();
+    defer maps.deinit(std.testing.allocator);
+    var editor = testKeyEditor(&sink, &maps, "");
+    defer editor.deinit();
+
+    try maps.get(.emacs).bind(std.testing.allocator, "\x18\x1a", .push_input, 7);
+    _ = try editor.feedKeys("\x18\x1a");
+    try std.testing.expectEqual(@as(usize, 0), editor.input_queue_len);
+    try std.testing.expectEqual(@as(usize, 0), editor.length);
 }

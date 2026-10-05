@@ -126,6 +126,9 @@ pub const Widget = enum(u8) {
     // Den-specific
     den_escape,
     bracketed_paste,
+    /// `bindkey -s`: push a literal string into the input, as if typed.
+    /// `Binding.index` selects which string.
+    push_input,
 
     /// Reserved for `zle -N` shell-function widgets, which are not implemented.
     /// Declared now so that adding them later is a new dispatch arm rather than
@@ -239,6 +242,7 @@ pub fn resolveWidget(name: []const u8) Widget {
         .{ "vi-replace", .overwrite_mode },
 
         .{ "bracketed-paste", .bracketed_paste },
+        .{ "den-push-input", .push_input },
 
         // Composite and Den-specific widgets. These have no zsh equivalent
         // because Den's editor overloads the keys by context, but they must be
@@ -327,6 +331,7 @@ pub fn widgetName(w: Widget) []const u8 {
         .overwrite_mode => "overwrite-mode",
         .den_escape => "den-escape",
         .bracketed_paste => "bracketed-paste",
+        .push_input => "den-push-input",
         .user_widget => "den-user-widget",
         .unknown => "undefined-key",
     };
@@ -365,13 +370,21 @@ fn entryLess(a: Entry, b: Entry) bool {
     return a.len < b.len;
 }
 
+/// What a key is bound to.
+pub const Binding = struct {
+    widget: Widget,
+    /// For `.push_input`, which of the keymap set's strings to push. For
+    /// `.user_widget`, reserved for `zle -N`. Unused otherwise.
+    index: u16 = 0,
+};
+
 /// What a lookup of a partially-typed sequence found.
 pub const Lookup = union(enum) {
     /// Exact match and nothing extends it. Fire now.
-    exact: Widget,
+    exact: Binding,
     /// Exact match, but a longer binding starts with this. Wait for more input;
     /// if nothing arrives before the key timeout, fire this.
-    exact_prefix: Widget,
+    exact_prefix: Binding,
     /// No exact match, but a longer binding starts with this. Wait.
     prefix,
     /// Nothing matches and nothing will.
@@ -405,9 +418,9 @@ pub fn lookupIn(table: []const Entry, seq: []const u8) Lookup {
     const needle = Entry{ .key = key, .len = len, .widget = .unknown };
 
     var i = lowerBound(table, needle);
-    var hit: ?Widget = null;
+    var hit: ?Binding = null;
     if (i < table.len and table[i].key == key and table[i].len == len) {
-        hit = table[i].widget;
+        hit = .{ .widget = table[i].widget, .index = table[i].user_index };
         i += 1;
     }
     // Anything extending `seq` sorts immediately after it, because the padding
@@ -720,10 +733,10 @@ pub const Keymap = struct {
         const over = lookupIn(self.overrides.items, seq);
         const def = lookupIn(defaultsFor(self.id), seq);
 
-        const widget: ?Widget = switch (over) {
-            .exact, .exact_prefix => |w| w,
+        const binding: ?Binding = switch (over) {
+            .exact, .exact_prefix => |b| b,
             else => switch (def) {
-                .exact, .exact_prefix => |w| w,
+                .exact, .exact_prefix => |b| b,
                 else => null,
             },
         };
@@ -735,7 +748,7 @@ pub const Keymap = struct {
             },
         };
 
-        if (widget) |w| return if (longer) .{ .exact_prefix = w } else .{ .exact = w };
+        if (binding) |b| return if (longer) .{ .exact_prefix = b } else .{ .exact = b };
         return if (longer) .prefix else .none;
     }
 
@@ -745,7 +758,7 @@ pub const Keymap = struct {
     pub fn forEach(
         self: *const Keymap,
         context: anytype,
-        comptime visit: fn (@TypeOf(context), seq: []const u8, widget: Widget) anyerror!void,
+        comptime visit: fn (@TypeOf(context), seq: []const u8, binding: Binding) anyerror!void,
     ) !void {
         const defaults = defaultsFor(self.id);
         const overrides = self.overrides.items;
@@ -780,7 +793,7 @@ pub const Keymap = struct {
                 const shift: u6 = @intCast((max_key_seq_len - 1 - i) * 8);
                 seq[i] = @truncate(entry.key >> shift);
             }
-            try visit(context, seq[0..entry.len], entry.widget);
+            try visit(context, seq[0..entry.len], .{ .widget = entry.widget, .index = entry.user_index });
         }
     }
 };
@@ -790,6 +803,10 @@ pub const KeymapSet = struct {
     maps: [keymap_count]Keymap,
     /// Whichever of `emacs` / `viins` `main` resolves to.
     current: KeymapId = .emacs,
+    /// Macro bodies for `bindkey -s`, referenced by `Binding.index`. Append
+    /// only: an index handed to a binding has to stay valid, and the strings are
+    /// a handful of bytes each.
+    strings: std.ArrayList([]u8) = .empty,
 
     /// Allocation-free: the default tables are comptime data and the override
     /// lists start empty.
@@ -803,6 +820,22 @@ pub const KeymapSet = struct {
 
     pub fn deinit(self: *KeymapSet, allocator: std.mem.Allocator) void {
         for (&self.maps) |*m| m.deinit(allocator);
+        for (self.strings.items) |str| allocator.free(str);
+        self.strings.deinit(allocator);
+        self.strings = .empty;
+    }
+
+    /// Store a macro body and return the index to bind it under. Takes
+    /// ownership of `text`.
+    pub fn addString(self: *KeymapSet, allocator: std.mem.Allocator, text: []u8) !u16 {
+        if (self.strings.items.len >= std.math.maxInt(u16)) return error.TooManyStrings;
+        try self.strings.append(allocator, text);
+        return @intCast(self.strings.items.len - 1);
+    }
+
+    pub fn getString(self: *const KeymapSet, index: u16) ?[]const u8 {
+        if (index >= self.strings.items.len) return null;
+        return self.strings.items[index];
     }
 
     pub fn get(self: *KeymapSet, id: KeymapId) *Keymap {
@@ -833,6 +866,8 @@ pub const KeymapSet = struct {
         for (&self.maps) |*m| {
             m.overrides.clearAndFree(allocator);
         }
+        for (self.strings.items) |str| allocator.free(str);
+        self.strings.clearAndFree(allocator);
     }
 };
 
@@ -904,7 +939,7 @@ test "default emacs keymap resolves the documented bindings" {
     };
     for (cases) |c| {
         switch (map.lookup(seqOf(c[0]).slice())) {
-            .exact, .exact_prefix => |w| try testing.expectEqual(c[1], w),
+            .exact, .exact_prefix => |b| try testing.expectEqual(c[1], b.widget),
             else => {
                 std.debug.print("expected {s} to be bound\n", .{c[0]});
                 return error.TestUnexpectedResult;
@@ -922,7 +957,7 @@ test "Ctrl+X is a prefix, not an exact binding" {
 
     try testing.expectEqual(Lookup.prefix, map.lookup(seqOf("^X").slice()));
     switch (map.lookup(seqOf("^X(").slice())) {
-        .exact => |w| try testing.expectEqual(Widget.start_kbd_macro, w),
+        .exact => |b| try testing.expectEqual(Widget.start_kbd_macro, b.widget),
         else => return error.TestUnexpectedResult,
     }
 }
@@ -931,7 +966,7 @@ test "escape is an exact match that is also a prefix" {
     var set = KeymapSet.init();
     defer set.deinit(testing.allocator);
     switch (set.getConst(.emacs).lookup(seqOf("^[").slice())) {
-        .exact_prefix => |w| try testing.expectEqual(Widget.den_escape, w),
+        .exact_prefix => |b| try testing.expectEqual(Widget.den_escape, b.widget),
         else => return error.TestUnexpectedResult,
     }
 }
@@ -950,7 +985,7 @@ test "an override shadows a default" {
 
     try map.bind(testing.allocator, seqOf("^A").slice(), .kill_whole_line, 0);
     switch (map.lookup(seqOf("^A").slice())) {
-        .exact => |w| try testing.expectEqual(Widget.kill_whole_line, w),
+        .exact => |b| try testing.expectEqual(Widget.kill_whole_line, b.widget),
         else => return error.TestUnexpectedResult,
     }
 
@@ -958,7 +993,7 @@ test "an override shadows a default" {
     try map.bind(testing.allocator, seqOf("^A").slice(), .yank, 0);
     try testing.expectEqual(@as(usize, 1), map.overrides.items.len);
     switch (map.lookup(seqOf("^A").slice())) {
-        .exact => |w| try testing.expectEqual(Widget.yank, w),
+        .exact => |b| try testing.expectEqual(Widget.yank, b.widget),
         else => return error.TestUnexpectedResult,
     }
 }
@@ -970,7 +1005,7 @@ test "unbinding a default disables it rather than revealing it" {
 
     try testing.expect(try map.unbind(testing.allocator, seqOf("^A").slice()));
     switch (map.lookup(seqOf("^A").slice())) {
-        .exact => |w| try testing.expectEqual(Widget.ignore, w),
+        .exact => |b| try testing.expectEqual(Widget.ignore, b.widget),
         else => return error.TestUnexpectedResult,
     }
     // Unbinding again is a no-op, so `bindkey -r` can stay quiet about it.
@@ -996,7 +1031,7 @@ test "a user binding turns an exact default into a prefix" {
     // ^Y is an exact default; binding ^Y^Y must make ^Y ambiguous.
     try map.bind(testing.allocator, seqOf("^Y^Y").slice(), .yank, 0);
     switch (map.lookup(seqOf("^Y").slice())) {
-        .exact_prefix => |w| try testing.expectEqual(Widget.yank, w),
+        .exact_prefix => |b| try testing.expectEqual(Widget.yank, b.widget),
         else => return error.TestUnexpectedResult,
     }
 }
@@ -1008,7 +1043,7 @@ test "keymaps are independent" {
     try set.get(.vicmd).bind(testing.allocator, "Y", .yank, 0);
     try testing.expectEqual(Lookup.none, set.getConst(.emacs).lookup("Y"));
     switch (set.getConst(.vicmd).lookup("Y")) {
-        .exact => |w| try testing.expectEqual(Widget.yank, w),
+        .exact => |b| try testing.expectEqual(Widget.yank, b.widget),
         else => return error.TestUnexpectedResult,
     }
 }
@@ -1021,11 +1056,11 @@ test "vicmd binds dd and cc as two-byte sequences" {
     // `d` alone is only a prefix: Den has no operator-pending motions.
     try testing.expectEqual(Lookup.prefix, map.lookup("d"));
     switch (map.lookup("dd")) {
-        .exact => |w| try testing.expectEqual(Widget.kill_whole_line, w),
+        .exact => |b| try testing.expectEqual(Widget.kill_whole_line, b.widget),
         else => return error.TestUnexpectedResult,
     }
     switch (map.lookup("cc")) {
-        .exact => |w| try testing.expectEqual(Widget.vi_change_whole_line, w),
+        .exact => |b| try testing.expectEqual(Widget.vi_change_whole_line, b.widget),
         else => return error.TestUnexpectedResult,
     }
 }
@@ -1034,7 +1069,7 @@ test "viins leaves insert mode on escape where emacs cancels" {
     var set = KeymapSet.init();
     defer set.deinit(testing.allocator);
     switch (set.getConst(.viins).lookup(seqOf("^[").slice())) {
-        .exact, .exact_prefix => |w| try testing.expectEqual(Widget.vi_cmd_mode, w),
+        .exact, .exact_prefix => |b| try testing.expectEqual(Widget.vi_cmd_mode, b.widget),
         else => return error.TestUnexpectedResult,
     }
 }
@@ -1086,11 +1121,11 @@ test "resetAll restores the defaults" {
     set.resetAll(testing.allocator);
     try testing.expectEqual(@as(usize, 0), map.overrides.items.len);
     switch (map.lookup(seqOf("^A").slice())) {
-        .exact => |w| try testing.expectEqual(Widget.beginning_of_line, w),
+        .exact => |b| try testing.expectEqual(Widget.beginning_of_line, b.widget),
         else => return error.TestUnexpectedResult,
     }
     switch (map.lookup(seqOf("^E").slice())) {
-        .exact => |w| try testing.expectEqual(Widget.end_of_line, w),
+        .exact => |b| try testing.expectEqual(Widget.end_of_line, b.widget),
         else => return error.TestUnexpectedResult,
     }
 }
@@ -1100,9 +1135,9 @@ const Collector = struct {
     widgets: std.ArrayList(Widget) = .empty,
     allocator: std.mem.Allocator,
 
-    fn visit(self: *Collector, seq: []const u8, widget: Widget) anyerror!void {
+    fn visit(self: *Collector, seq: []const u8, binding: Binding) anyerror!void {
         try self.seqs.append(self.allocator, try self.allocator.dupe(u8, seq));
-        try self.widgets.append(self.allocator, widget);
+        try self.widgets.append(self.allocator, binding.widget);
     }
 
     fn deinit(self: *Collector) void {
