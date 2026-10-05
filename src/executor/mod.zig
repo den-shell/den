@@ -1048,6 +1048,8 @@ pub const Executor = struct {
             "show",      "hide",     "ft",        "sys-stats",  "netstats", "net-check", "log-tail",  "proc-monitor",
             "log-parse", "dotfiles", "library",   "hook",       "ifind",    "coproc",    "break",     "continue",
             ":",         "declare",  "typeset",   "let",        "shift",
+            // Line editing
+               "bindkey",   "zle",
             // Nushell-inspired structured data commands
                "from",      "to",        "table",
             "grid",      "where",    "select",    "reject",     "get",      "first",     "last",      "skip",
@@ -1100,6 +1102,8 @@ pub const Executor = struct {
             "show",    "hide",     "sys-stats", "netstats",  "net-check",  "log-tail", "proc-monitor", "log-parse", "dotfiles",
             "library", "hook",     "ifind",     "coproc",    "exit",       ":",        "declare",      "typeset",   "let",
             "shift",   "break",    "continue",
+            // Line editing
+            "bindkey", "zle",
             // Nushell-inspired structured data commands
              "from",      "to",         "table",    "grid",         "where",     "select",
             "reject",  "get",      "first",     "last",      "skip",       "take",     "length",       "flatten",   "uniq",
@@ -1453,6 +1457,14 @@ pub const Executor = struct {
             return try builtins.explore_builtins.exploreCmd(self.allocator, command);
         } else if (std.mem.eql(u8, command.name, "use")) {
             return try shell_builtins.useModule(&ctx, command);
+        }
+
+        // Shell-level builtins (bindkey, setopt, ...) are implemented on the
+        // Shell rather than here. Without this they resolve as builtins and then
+        // fall through to "not implemented" anywhere the executor runs the
+        // command, such as the right-hand side of `&&` or inside a pipeline.
+        if (self.shell) |shell| {
+            if (try shell.dispatchShellBuiltin(command)) |code| return code;
         }
 
         // Check for loadable builtins

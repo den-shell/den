@@ -892,3 +892,287 @@ test "builtin: ANSI-C $'\\cX' control-character escapes" {
     try test_utils.TestAssert.expectContains(result.stdout, "A\tB");
     try test_utils.TestAssert.expectContains(result.stdout, "\x1B");
 }
+
+// ---------------------------------------------------------------------------
+// bindkey / zle
+//
+// These run through DenShellFixture, which executes the den binary (plain
+// ShellFixture shells out to /bin/sh and would test the wrong shell entirely).
+// `den -c` is non-interactive and never creates a line editor, so this suite
+// also guards the requirement that the keymaps live on the Shell rather than on
+// the editor.
+// ---------------------------------------------------------------------------
+
+test "builtin bindkey: lists the default bindings" {
+    const allocator = std.testing.allocator;
+    var fixture = try test_utils.DenShellFixture.init(allocator);
+    defer fixture.deinit();
+    const r = try fixture.execDirect("bindkey");
+    defer allocator.free(r.stdout);
+    defer allocator.free(r.stderr);
+
+    try test_utils.TestAssert.expectEqual(@as(u8, 0), r.exit_code);
+    try test_utils.TestAssert.expectContains(r.stdout, "\"^A\" beginning-of-line");
+    try test_utils.TestAssert.expectContains(r.stdout, "\"^E\" end-of-line");
+    try test_utils.TestAssert.expectContains(r.stdout, "\"^[[A\" up-line-or-history");
+}
+
+test "builtin bindkey: -l lists the keymap names" {
+    const allocator = std.testing.allocator;
+    var fixture = try test_utils.DenShellFixture.init(allocator);
+    defer fixture.deinit();
+    const r = try fixture.execDirect("bindkey -l");
+    defer allocator.free(r.stdout);
+    defer allocator.free(r.stderr);
+
+    try test_utils.TestAssert.expectEqual(@as(u8, 0), r.exit_code);
+    try test_utils.TestAssert.expectContains(r.stdout, "emacs");
+    try test_utils.TestAssert.expectContains(r.stdout, "main");
+    try test_utils.TestAssert.expectContains(r.stdout, "vicmd");
+}
+
+test "builtin bindkey: every -L line is re-runnable" {
+    const allocator = std.testing.allocator;
+    var fixture = try test_utils.DenShellFixture.init(allocator);
+    defer fixture.deinit();
+    const r = try fixture.execDirect("bindkey -L");
+    defer allocator.free(r.stdout);
+    defer allocator.free(r.stderr);
+
+    try test_utils.TestAssert.expectEqual(@as(u8, 0), r.exit_code);
+    var lines = std.mem.splitScalar(u8, r.stdout, '\n');
+    while (lines.next()) |line| {
+        if (line.len == 0) continue;
+        try test_utils.TestAssert.expectTrue(std.mem.startsWith(u8, line, "bindkey "));
+    }
+}
+
+test "builtin bindkey: -L output sources cleanly and is a fixed point" {
+    const allocator = std.testing.allocator;
+    var fixture = try test_utils.DenShellFixture.init(allocator);
+    defer fixture.deinit();
+    // `exec` runs in the fixture's temp directory, so the dumps do not land in
+    // the working tree.
+    const r = try fixture.exec(
+        "bindkey -L > a.txt; source a.txt; bindkey -L > b.txt; diff a.txt b.txt && echo identical",
+    );
+    defer allocator.free(r.stdout);
+    defer allocator.free(r.stderr);
+
+    try test_utils.TestAssert.expectEqual(@as(u8, 0), r.exit_code);
+    try test_utils.TestAssert.expectContains(r.stdout, "identical");
+}
+
+test "builtin bindkey: binds a widget and reports it back" {
+    const allocator = std.testing.allocator;
+    var fixture = try test_utils.DenShellFixture.init(allocator);
+    defer fixture.deinit();
+    const r = try fixture.execDirect("bindkey '^T' kill-whole-line && bindkey '^T'");
+    defer allocator.free(r.stdout);
+    defer allocator.free(r.stderr);
+
+    try test_utils.TestAssert.expectEqual(@as(u8, 0), r.exit_code);
+    try test_utils.TestAssert.expectContains(r.stdout, "\"^T\" kill-whole-line");
+}
+
+test "builtin bindkey: querying an unbound sequence exits 1" {
+    const allocator = std.testing.allocator;
+    var fixture = try test_utils.DenShellFixture.init(allocator);
+    defer fixture.deinit();
+    const r = try fixture.execDirect("bindkey '^X^Q'");
+    defer allocator.free(r.stdout);
+    defer allocator.free(r.stderr);
+
+    try test_utils.TestAssert.expectEqual(@as(u8, 1), r.exit_code);
+    try test_utils.TestAssert.expectEqual(@as(usize, 0), r.stdout.len);
+}
+
+test "builtin bindkey: -r disables a default binding" {
+    const allocator = std.testing.allocator;
+    var fixture = try test_utils.DenShellFixture.init(allocator);
+    defer fixture.deinit();
+    const r = try fixture.execDirect("bindkey -r '^A'; bindkey '^A'; echo exit=$?");
+    defer allocator.free(r.stdout);
+    defer allocator.free(r.stderr);
+
+    try test_utils.TestAssert.expectContains(r.stdout, "exit=1");
+}
+
+test "builtin bindkey: -r of an unbound key succeeds quietly" {
+    const allocator = std.testing.allocator;
+    var fixture = try test_utils.DenShellFixture.init(allocator);
+    defer fixture.deinit();
+    const r = try fixture.execDirect("bindkey -r '^X^Q'");
+    defer allocator.free(r.stdout);
+    defer allocator.free(r.stderr);
+
+    try test_utils.TestAssert.expectEqual(@as(u8, 0), r.exit_code);
+    try test_utils.TestAssert.expectEqual(@as(usize, 0), r.stderr.len);
+}
+
+test "builtin bindkey: -s round-trips through -L" {
+    const allocator = std.testing.allocator;
+    var fixture = try test_utils.DenShellFixture.init(allocator);
+    defer fixture.deinit();
+    const r = try fixture.execDirect("bindkey -s '^X^Z' 'fg\\n'; bindkey -L");
+    defer allocator.free(r.stdout);
+    defer allocator.free(r.stderr);
+
+    try test_utils.TestAssert.expectEqual(@as(u8, 0), r.exit_code);
+    try test_utils.TestAssert.expectContains(r.stdout, "bindkey -s \"^X^Z\"");
+}
+
+test "builtin bindkey: -M vicmd leaves the main keymap alone" {
+    const allocator = std.testing.allocator;
+    var fixture = try test_utils.DenShellFixture.init(allocator);
+    defer fixture.deinit();
+    const r = try fixture.execDirect("bindkey -M vicmd 'Y' yank; bindkey -M vicmd 'Y'; bindkey 'Y'; echo main=$?");
+    defer allocator.free(r.stdout);
+    defer allocator.free(r.stderr);
+
+    try test_utils.TestAssert.expectContains(r.stdout, "\"Y\" yank");
+    try test_utils.TestAssert.expectContains(r.stdout, "main=1");
+}
+
+test "builtin bindkey: -d restores the defaults" {
+    const allocator = std.testing.allocator;
+    var fixture = try test_utils.DenShellFixture.init(allocator);
+    defer fixture.deinit();
+    const r = try fixture.execDirect("bindkey '^A' yank; bindkey -d; bindkey '^A'");
+    defer allocator.free(r.stdout);
+    defer allocator.free(r.stderr);
+
+    try test_utils.TestAssert.expectEqual(@as(u8, 0), r.exit_code);
+    try test_utils.TestAssert.expectContains(r.stdout, "\"^A\" beginning-of-line");
+}
+
+test "builtin bindkey: -e and -v only switch keymaps" {
+    const allocator = std.testing.allocator;
+    var fixture = try test_utils.DenShellFixture.init(allocator);
+    defer fixture.deinit();
+    const r = try fixture.execDirect("bindkey -v; bindkey -e; echo done");
+    defer allocator.free(r.stdout);
+    defer allocator.free(r.stderr);
+
+    try test_utils.TestAssert.expectEqual(@as(u8, 0), r.exit_code);
+    try test_utils.TestAssert.expectEqual(@as(usize, "done\n".len), r.stdout.len);
+}
+
+test "builtin bindkey: unknown widget is a diagnostic" {
+    const allocator = std.testing.allocator;
+    var fixture = try test_utils.DenShellFixture.init(allocator);
+    defer fixture.deinit();
+    const r = try fixture.execDirect("bindkey '^T' no-such-widget");
+    defer allocator.free(r.stdout);
+    defer allocator.free(r.stderr);
+
+    try test_utils.TestAssert.expectEqual(@as(u8, 1), r.exit_code);
+    try test_utils.TestAssert.expectContains(r.stderr, "no such widget: no-such-widget");
+}
+
+test "builtin bindkey: a shell function of that name points at zle -N" {
+    const allocator = std.testing.allocator;
+    var fixture = try test_utils.DenShellFixture.init(allocator);
+    defer fixture.deinit();
+    const r = try fixture.execDirect("my-widget() { echo hi; }; bindkey '^T' my-widget");
+    defer allocator.free(r.stdout);
+    defer allocator.free(r.stderr);
+
+    try test_utils.TestAssert.expectEqual(@as(u8, 1), r.exit_code);
+    try test_utils.TestAssert.expectContains(r.stderr, "zle -N");
+}
+
+test "builtin bindkey: malformed key spec is a diagnostic" {
+    const allocator = std.testing.allocator;
+    var fixture = try test_utils.DenShellFixture.init(allocator);
+    defer fixture.deinit();
+    const r = try fixture.execDirect("bindkey '\\x' yank");
+    defer allocator.free(r.stdout);
+    defer allocator.free(r.stderr);
+
+    try test_utils.TestAssert.expectEqual(@as(u8, 1), r.exit_code);
+    try test_utils.TestAssert.expectContains(r.stderr, "must be followed by a hex digit");
+}
+
+test "builtin bindkey: unknown keymap is a diagnostic" {
+    const allocator = std.testing.allocator;
+    var fixture = try test_utils.DenShellFixture.init(allocator);
+    defer fixture.deinit();
+    const r = try fixture.execDirect("bindkey -M nope 'x' yank");
+    defer allocator.free(r.stdout);
+    defer allocator.free(r.stderr);
+
+    try test_utils.TestAssert.expectEqual(@as(u8, 1), r.exit_code);
+    try test_utils.TestAssert.expectContains(r.stderr, "no such keymap: nope");
+}
+
+test "builtin bindkey: a bad option prints usage and exits 2" {
+    const allocator = std.testing.allocator;
+    var fixture = try test_utils.DenShellFixture.init(allocator);
+    defer fixture.deinit();
+    const r = try fixture.execDirect("bindkey -Q");
+    defer allocator.free(r.stdout);
+    defer allocator.free(r.stderr);
+
+    try test_utils.TestAssert.expectEqual(@as(u8, 2), r.exit_code);
+    try test_utils.TestAssert.expectContains(r.stderr, "bad option: -Q");
+    try test_utils.TestAssert.expectContains(r.stderr, "usage: bindkey");
+}
+
+test "builtin bindkey: unsupported flags explain themselves" {
+    const allocator = std.testing.allocator;
+    var fixture = try test_utils.DenShellFixture.init(allocator);
+    defer fixture.deinit();
+    const r = try fixture.execDirect("bindkey -A");
+    defer allocator.free(r.stdout);
+    defer allocator.free(r.stderr);
+
+    try test_utils.TestAssert.expectEqual(@as(u8, 2), r.exit_code);
+    try test_utils.TestAssert.expectContains(r.stderr, "fixed set of keymaps");
+}
+
+test "builtin bindkey: every documented default is still bound" {
+    const allocator = std.testing.allocator;
+    const seqs = [_][]const u8{
+        "^A",     "^E",     "^B",      "^F",     "^K",     "^U",      "^W",
+        "^R",     "^L",     "^D",      "^P",     "^N",     "^Y",      "^T",
+        "^I",     "^?",     "^[[A",    "^[[B",   "^[[C",   "^[[D",    "^[b",
+        "^[f",    "^[d",    "^[[3~",   "^[[H",   "^[[F",
+    };
+    for (seqs) |seq| {
+        const cmd = try std.fmt.allocPrint(allocator, "bindkey '{s}'", .{seq});
+        defer allocator.free(cmd);
+        var fixture = try test_utils.DenShellFixture.init(allocator);
+    defer fixture.deinit();
+    const r = try fixture.execDirect(cmd);
+        defer allocator.free(r.stdout);
+        defer allocator.free(r.stderr);
+
+        try test_utils.TestAssert.expectEqual(@as(u8, 0), r.exit_code);
+        try test_utils.TestAssert.expectTrue(r.stdout.len > 0);
+    }
+}
+
+test "builtin zle: reports that user widgets are unimplemented" {
+    const allocator = std.testing.allocator;
+    var fixture = try test_utils.DenShellFixture.init(allocator);
+    defer fixture.deinit();
+    const r = try fixture.execDirect("zle -N my-widget");
+    defer allocator.free(r.stdout);
+    defer allocator.free(r.stderr);
+
+    try test_utils.TestAssert.expectEqual(@as(u8, 2), r.exit_code);
+    try test_utils.TestAssert.expectContains(r.stderr, "bindkey");
+}
+
+test "builtin type: reports bindkey as a shell builtin" {
+    const allocator = std.testing.allocator;
+    var fixture = try test_utils.DenShellFixture.init(allocator);
+    defer fixture.deinit();
+    const r = try fixture.execDirect("type bindkey");
+    defer allocator.free(r.stdout);
+    defer allocator.free(r.stderr);
+
+    try test_utils.TestAssert.expectEqual(@as(u8, 0), r.exit_code);
+    try test_utils.TestAssert.expectContains(r.stdout, "shell builtin");
+}

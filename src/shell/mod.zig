@@ -94,6 +94,11 @@ pub const setopt_builtin = @import("setopt_builtin.zig");
 pub const builtinSetopt = setopt_builtin.builtinSetopt;
 pub const builtinUnsetopt = setopt_builtin.builtinUnsetopt;
 
+// Re-export the zsh-style bindkey builtin (and the zle stub)
+pub const bindkey_builtin = @import("bindkey_builtin.zig");
+pub const builtinBindkey = bindkey_builtin.builtinBindkey;
+pub const builtinZle = bindkey_builtin.builtinZle;
+
 // Re-export AI completion builtin
 pub const ai_builtin = @import("ai_builtin.zig");
 pub const builtinAi = ai_builtin.builtinAi;

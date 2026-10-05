@@ -58,6 +58,8 @@ pub fn isShellBuiltin(name: []const u8) bool {
             "times",
         "time",      "umask",    "hash",     "shopt",    "caller",
         "enable",    "setopt",   "unsetopt", "ai",       "wasm",
+        // Line editing
+        "bindkey",   "zle",
     };
     for (shell_builtins) |b| {
         if (std.mem.eql(u8, name, b)) return true;
@@ -327,6 +329,14 @@ pub fn dispatchBuiltin(self: *Shell, cmd: *types.ParsedCommand) !DispatchResult 
     }
     if (std.mem.eql(u8, name, "enable")) {
         try shell_mod.builtinEnable(self, cmd);
+        return .handled;
+    }
+    if (std.mem.eql(u8, name, "bindkey")) {
+        try shell_mod.builtinBindkey(self, cmd);
+        return .handled;
+    }
+    if (std.mem.eql(u8, name, "zle")) {
+        try shell_mod.builtinZle(self, cmd);
         return .handled;
     }
     if (std.mem.eql(u8, name, "setopt")) {

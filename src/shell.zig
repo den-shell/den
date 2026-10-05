@@ -120,6 +120,7 @@ fn applySystemPaths(allocator: std.mem.Allocator, env: *std.StringHashMap([]cons
 
 const Terminal = @import("utils/terminal.zig");
 const LineEditor = Terminal.LineEditor;
+const keymap = Terminal.keymap;
 const Completion = @import("utils/completion.zig").Completion;
 const Expansion = @import("utils/expansion.zig").Expansion;
 const Glob = @import("utils/glob.zig").Glob;
@@ -333,6 +334,14 @@ pub const Shell = struct {
     // Interactive mode
     is_interactive: bool,
     line_editor: ?LineEditor,
+    /// Keymaps for the interactive line editor.
+    ///
+    /// These live here rather than on the editor because `bindkey` has to work
+    /// before the editor exists -- it is created lazily at the first interactive
+    /// prompt, so ~/.denrc runs while `line_editor` is still null, and `den -c`
+    /// never creates one at all. The editor borrows a pointer to this, so a
+    /// `bindkey` typed at the prompt takes effect on the next keystroke.
+    keymaps: keymap.KeymapSet,
     // Prompt rendering
     prompt_renderer: ?PromptRenderer,
     prompt_context: PromptContext,
@@ -660,6 +669,7 @@ pub const Shell = struct {
             .call_stack = @splat(CallFrame{ .line_number = 0, .function_name = "", .source_file = "" }),
             .call_stack_depth = 0,
             .loadable_builtins = LoadableBuiltins.init(allocator),
+            .keymaps = keymap.KeymapSet.init(),
         };
 
         // Detect setuid condition and drop privileges
@@ -770,6 +780,7 @@ pub const Shell = struct {
 
         // Clean up function manager
         self.function_manager.deinit();
+        self.keymaps.deinit(self.allocator);
 
         // Clean up the directory recorded for the chpwd hooks
         dir_hooks.reset(self);
@@ -1018,6 +1029,7 @@ pub const Shell = struct {
                             .emacs => editor.setEditingMode(.emacs),
                             .vi => editor.setEditingMode(.vi),
                         }
+                        editor.keymaps = &self.keymaps;
                         editor.setHistory(&self.history, &self.history_count);
                         // Same buffer the inline suggestion reads, so Tab and
                         // ghost text agree on what "recently used" means.
@@ -4141,6 +4153,18 @@ pub const Shell = struct {
     }
 
     /// Load aliases from configuration
+    /// Run a shell-level builtin (bindkey, setopt, ...) on behalf of the
+    /// executor, or return null if `cmd` is not one.
+    ///
+    /// The explicit error set is load-bearing. The executor calls this, and a
+    /// shell builtin such as `eval` calls back into the executor, so inferring
+    /// the error set here would close a dependency loop.
+    pub fn dispatchShellBuiltin(self: *Shell, cmd: *types.ParsedCommand) anyerror!?i32 {
+        if (!shell_mod.isShellBuiltin(cmd.name)) return null;
+        if (try shell_mod.dispatchBuiltin(self, cmd) != .handled) return null;
+        return self.last_exit_code;
+    }
+
     pub fn loadAliasesFromConfig(self: *Shell) !void {
         // Check if aliases are enabled in config
         if (!self.config.aliases.enabled) return;
