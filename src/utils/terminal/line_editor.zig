@@ -1043,7 +1043,7 @@ pub const LineEditor = struct {
             .send_break => return self.sendBreak(),
             .delete_char_or_eof => return self.deleteCharOrEof(),
             .undefined_key => try self.undefinedKey(),
-            .ignore => {},
+            .ignore, .unbound => {},
 
             .beginning_of_line => try self.moveCursorHome(),
             .end_of_line => try self.moveCursorEnd(),

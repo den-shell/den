@@ -45,6 +45,11 @@ pub const Widget = enum(u8) {
     delete_char_or_eof,
     undefined_key,
     ignore,
+    /// Recorded by `bindkey -r` over a key a default provides: the key consumes
+    /// its byte and does nothing. Distinct from `ignore`, which is a binding a
+    /// default or a user can legitimately ask for -- conflating them made
+    /// `bindkey -L` lose the lines it had itself emitted for `ignore` keys.
+    unbound,
 
     // Movement
     beginning_of_line,
@@ -151,6 +156,7 @@ pub fn resolveWidget(name: []const u8) Widget {
         .{ "delete-char-or-eof", .delete_char_or_eof },
         .{ "undefined-key", .undefined_key },
         .{ "ignore", .ignore },
+        .{ "den-unbound", .unbound },
 
         .{ "beginning-of-line", .beginning_of_line },
         .{ "vi-beginning-of-line", .beginning_of_line },
@@ -272,6 +278,7 @@ pub fn widgetName(w: Widget) []const u8 {
         .delete_char_or_eof => "delete-char-or-eof",
         .undefined_key => "undefined-key",
         .ignore => "ignore",
+        .unbound => "den-unbound",
         .beginning_of_line => "beginning-of-line",
         .end_of_line => "end-of-line",
         .end_of_line_or_autosuggest => "den-end-of-line-or-autosuggest",
@@ -709,11 +716,11 @@ pub const Keymap = struct {
 
         if (was_bound) {
             // Shadow the default with an explicit "does nothing".
-            const tombstone = Entry{ .key = needle.key, .len = needle.len, .widget = .ignore };
+            const tombstone = Entry{ .key = needle.key, .len = needle.len, .widget = .unbound };
             if (has_override) {
                 const prev = self.overrides.items[at].widget;
                 self.overrides.items[at] = tombstone;
-                return prev != .ignore;
+                return prev != .unbound;
             }
             try self.overrides.insert(allocator, at, tombstone);
             return true;
@@ -721,7 +728,7 @@ pub const Keymap = struct {
         if (has_override) {
             const prev = self.overrides.items[at].widget;
             _ = self.overrides.orderedRemove(at);
-            return prev != .ignore;
+            return prev != .unbound;
         }
         return false;
     }
@@ -750,6 +757,17 @@ pub const Keymap = struct {
 
         if (binding) |b| return if (longer) .{ .exact_prefix = b } else .{ .exact = b };
         return if (longer) .prefix else .none;
+    }
+
+    /// Whether a user override explicitly unbinds this sequence, which is what
+    /// `bindkey -r` records for a key a default provides. Such a key consumes
+    /// its byte and does nothing, but must not be reported as a binding -- the
+    /// same reason forEach skips it.
+    pub fn isUnbound(self: *const Keymap, seq: []const u8) bool {
+        return switch (lookupIn(self.overrides.items, seq)) {
+            .exact, .exact_prefix => |b| b.widget == .unbound,
+            else => false,
+        };
     }
 
     /// Walk every effective binding in ascending byte order, merging overrides
@@ -785,7 +803,7 @@ pub const Keymap = struct {
             } else {
                 di += 1;
             }
-            if (entry.widget == .ignore and take_override) continue;
+            if (entry.widget == .unbound) continue;
 
             var seq: [max_key_seq_len]u8 = undefined;
             var i: usize = 0;
@@ -1005,7 +1023,7 @@ test "unbinding a default disables it rather than revealing it" {
 
     try testing.expect(try map.unbind(testing.allocator, seqOf("^A").slice()));
     switch (map.lookup(seqOf("^A").slice())) {
-        .exact => |b| try testing.expectEqual(Widget.ignore, b.widget),
+        .exact => |b| try testing.expectEqual(Widget.unbound, b.widget),
         else => return error.TestUnexpectedResult,
     }
     // Unbinding again is a no-op, so `bindkey -r` can stay quiet about it.
