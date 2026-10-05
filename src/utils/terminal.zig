@@ -27,6 +27,7 @@ pub const CompletionFn = mod.CompletionFn;
 pub const EditingMode = mod.EditingMode;
 pub const ViMode = mod.ViMode;
 pub const UndoState = mod.UndoState;
+pub const Flow = mod.Flow;
 pub const LineEditor = mod.LineEditor;
 pub const keymap = mod.keymap;
 pub const Widget = mod.Widget;

@@ -23,3 +23,22 @@ pub const UndoState = struct {
     length: usize,
     cursor: usize,
 };
+
+/// What handling one key did to the read loop.
+///
+/// The line editor's dispatch arms express this today with `continue` and
+/// `return` statements inlined in `readLine`. Naming it lets an action live in
+/// its own method -- and later be reached from a keymap -- while `readLine`
+/// keeps sole responsibility for leaving raw mode on the way out.
+pub const Flow = union(enum) {
+    /// Key consumed; keep reading. Covers PS2 continuation and the modal
+    /// accepts (incremental search, completion menu) that absorb the key.
+    cont,
+    /// A complete line. The caller owns the slice.
+    accepted: []u8,
+    /// End of input, e.g. Ctrl+D on an empty line. `readLine` returns null.
+    eof,
+    /// Interrupted, e.g. Ctrl+C with text present. `readLine` returns
+    /// `error.Interrupted`.
+    interrupt,
+};

@@ -24,6 +24,7 @@ const types = @import("types.zig");
 const CompletionFn = types.CompletionFn;
 const EditingMode = types.EditingMode;
 const ViMode = types.ViMode;
+const Flow = types.Flow;
 
 // Import from parent utils directory
 const SyntaxHighlighter = @import("../syntax_highlight.zig").SyntaxHighlighter;
@@ -314,6 +315,15 @@ pub const LineEditor = struct {
     // Transient prompt support
     transient_prompt: ?[]const u8 = null, // Minimal prompt to replace full prompt after Enter
 
+    // Test seams. Every existing test here is a pure function because output
+    // goes straight to the tty and input straight from it; these two fields are
+    // what let the editing actions themselves be asserted. Both are inert in
+    // production.
+    /// When set, writeBytes appends here instead of writing to the terminal.
+    write_sink: ?*std.ArrayList(u8) = null,
+    /// When true, input is never read from the terminal.
+    no_terminal: bool = false,
+
     const UndoState = struct {
         buffer: [4096]u8,
         length: usize,
@@ -377,37 +387,40 @@ pub const LineEditor = struct {
     }
 
     /// Handle Vi normal mode key press
-    fn handleViNormalKey(self: *LineEditor, char: u8) !bool {
+    /// Handle one key in vi normal mode. Returns the same Flow as any other
+    /// editing action, so accepting a line goes through acceptLine rather
+    /// than a second, divergent copy of it.
+    fn handleViNormalKey(self: *LineEditor, char: u8) !Flow {
         const count = if (self.vi_count == 0) 1 else self.vi_count;
 
         switch (char) {
             // Mode switching
             'i' => {
                 self.viEnterInsertMode();
-                return false;
+                return .cont;
             },
             'I' => {
                 self.cursor = 0;
                 self.viEnterInsertMode();
-                return false;
+                return .cont;
             },
             'a' => {
                 if (self.cursor < self.length) {
                     self.cursor += 1;
                 }
                 self.viEnterInsertMode();
-                return false;
+                return .cont;
             },
             'A' => {
                 self.cursor = self.length;
                 self.viEnterInsertMode();
-                return false;
+                return .cont;
             },
             'o', 'O' => {
                 // In line editor, just go to end and insert
                 self.cursor = self.length;
                 self.viEnterInsertMode();
-                return false;
+                return .cont;
             },
             's' => {
                 // Substitute: delete char and enter insert mode
@@ -415,7 +428,7 @@ pub const LineEditor = struct {
                     try self.deleteChar();
                 }
                 self.viEnterInsertMode();
-                return false;
+                return .cont;
             },
             'S', 'C' => {
                 // Change line from cursor / substitute entire line
@@ -423,11 +436,11 @@ pub const LineEditor = struct {
                 if (char == 'S') self.cursor = 0;
                 self.viEnterInsertMode();
                 try self.redrawLine();
-                return false;
+                return .cont;
             },
             'R' => {
                 self.vi_mode = .replace;
-                return false;
+                return .cont;
             },
 
             // Navigation
@@ -435,13 +448,13 @@ pub const LineEditor = struct {
                 for (0..count) |_| {
                     try self.moveCursorLeft();
                 }
-                return false;
+                return .cont;
             },
             'l' => {
                 for (0..count) |_| {
                     try self.moveCursorRight();
                 }
-                return false;
+                return .cont;
             },
             '0' => {
                 if (self.vi_count == 0) {
@@ -452,12 +465,12 @@ pub const LineEditor = struct {
                     // It's a count digit
                     self.vi_count = self.vi_count * 10;
                 }
-                return false;
+                return .cont;
             },
             '$' => {
                 self.cursor = if (self.length > 0) self.length - 1 else 0;
                 try self.redrawLine();
-                return false;
+                return .cont;
             },
             '^' => {
                 // Go to first non-blank
@@ -466,7 +479,7 @@ pub const LineEditor = struct {
                     self.cursor += 1;
                 }
                 try self.redrawLine();
-                return false;
+                return .cont;
             },
             'w' => {
                 // Move forward word
@@ -474,7 +487,7 @@ pub const LineEditor = struct {
                     self.moveForwardWord();
                 }
                 try self.redrawLine();
-                return false;
+                return .cont;
             },
             'b' => {
                 // Move backward word
@@ -482,7 +495,7 @@ pub const LineEditor = struct {
                     self.moveBackwardWord();
                 }
                 try self.redrawLine();
-                return false;
+                return .cont;
             },
             'e' => {
                 // Move to end of word
@@ -490,7 +503,7 @@ pub const LineEditor = struct {
                     self.moveToEndOfWord();
                 }
                 try self.redrawLine();
-                return false;
+                return .cont;
             },
 
             // Editing
@@ -501,7 +514,7 @@ pub const LineEditor = struct {
                         try self.deleteChar();
                     }
                 }
-                return false;
+                return .cont;
             },
             'X' => {
                 // Delete character before cursor
@@ -510,13 +523,13 @@ pub const LineEditor = struct {
                         try self.backspace();
                     }
                 }
-                return false;
+                return .cont;
             },
             'D' => {
                 // Delete to end of line
                 self.length = self.cursor;
                 try self.redrawLine();
-                return false;
+                return .cont;
             },
             'd' => {
                 if (self.vi_pending_op == 'd') {
@@ -528,7 +541,7 @@ pub const LineEditor = struct {
                 } else {
                     self.vi_pending_op = 'd';
                 }
-                return false;
+                return .cont;
             },
             'c' => {
                 if (self.vi_pending_op == 'c') {
@@ -541,50 +554,50 @@ pub const LineEditor = struct {
                 } else {
                     self.vi_pending_op = 'c';
                 }
-                return false;
+                return .cont;
             },
 
             // History
             'j' => {
                 try self.historyNext();
-                return false;
+                return .cont;
             },
             'k' => {
                 try self.historyPrevious();
-                return false;
+                return .cont;
             },
 
             // Undo/Redo
             'u' => {
                 try self.undo();
-                return false;
+                return .cont;
             },
 
             // Search
             '/' => {
                 try self.startReverseSearch();
-                return false;
+                return .cont;
             },
             'n' => {
                 try self.continueReverseSearch();
-                return false;
+                return .cont;
             },
 
             // Count digits
             '1', '2', '3', '4', '5', '6', '7', '8', '9' => {
                 self.vi_count = self.vi_count * 10 + (char - '0');
-                return false;
+                return .cont;
             },
 
             // Execute line
             '\r', '\n' => {
-                return true; // Signal to execute
+                return try self.acceptLine();
             },
 
             else => {
                 self.vi_pending_op = null;
                 self.vi_count = 0;
-                return false;
+                return .cont;
             },
         }
     }
@@ -701,6 +714,110 @@ pub const LineEditor = struct {
     }
 
     /// Read a line with editing support
+    /// Accept the current line.
+    ///
+    /// Returns `.cont` when the key was absorbed -- an incremental-search or
+    /// completion-menu accept, or a continuation line that still needs more
+    /// input -- and `.accepted` with an owned slice when there is a complete
+    /// command to run.
+    ///
+    /// Terminal writes stay here: the transient-prompt repaint has to happen
+    /// before the final CRLF, and the PS2 path writes its own. Leaving raw mode
+    /// stays in readLine, so it keeps its ordering against the bracketed-paste
+    /// `defer` that disables paste mode on every exit path.
+    fn acceptLine(self: *LineEditor) !Flow {
+        // Erase any inline (ghost-text) suggestion before submitting. The cursor
+        // sits at the end of the typed input with the dim suggestion drawn to
+        // its right; without this the suggestion (e.g. "; exit") gets left on
+        // the executed command line.
+        if (self.suggestion != null) {
+            try self.writeBytes("\x1b[0K");
+            self.clearSuggestion();
+        }
+
+        // In reverse search, Enter accepts the match.
+        if (self.reverse_search_mode) {
+            try self.acceptReverseSearch();
+            if (self.length > 0) {
+                try self.writeBytes("\r\n");
+                return .{ .accepted = try self.allocator.dupe(u8, self.buffer[0..self.length]) };
+            }
+            return .cont;
+        }
+
+        // If a completion grid is showing, Enter accepts the highlighted entry
+        // and returns to editing. A second Enter submits it; selecting a
+        // directory must never unexpectedly execute `cd` just because the
+        // chooser was confirmed.
+        if (self.completion_list != null) {
+            try self.applyCurrentCompletion();
+            self.clearCompletionState();
+            return .cont;
+        }
+
+        const current_line = self.buffer[0..self.length];
+
+        // Build complete input (accumulated + current line).
+        var complete_input: []const u8 = undefined;
+        if (self.multiline_buffer) |*mlb| {
+            try mlb.append(self.allocator, '\n');
+            try mlb.appendSlice(self.allocator, current_line);
+            complete_input = mlb.items;
+        } else {
+            complete_input = current_line;
+        }
+
+        // Incomplete input continues on the next line.
+        if (isIncomplete(complete_input)) {
+            if (self.multiline_buffer == null) {
+                self.multiline_buffer = .empty;
+                try self.multiline_buffer.?.appendSlice(self.allocator, current_line);
+            }
+            self.in_multiline = true;
+
+            try self.writeBytes("\r\n");
+            try self.writeBytes(self.ps2_prompt);
+
+            self.length = 0;
+            self.cursor = 0;
+            return .cont;
+        }
+
+        // Input is complete - redraw with the transient prompt if enabled.
+        if (self.transient_prompt) |transient| {
+            // Count newlines in the original prompt to handle multi-line prompts.
+            var newline_count: usize = 0;
+            for (self.prompt) |ch| {
+                if (ch == '\n') newline_count += 1;
+            }
+            // Move the cursor up for each newline in the prompt.
+            if (newline_count > 0) {
+                var move_buf: [32]u8 = undefined;
+                const move_seq = std.fmt.bufPrint(&move_buf, "\x1b[{d}A", .{newline_count}) catch "\x1b[1A";
+                try self.writeBytes(move_seq);
+            }
+            // Move to start of line and clear from here to end of screen.
+            try self.writeBytes("\r\x1b[J");
+            // Write the transient (minimal) prompt plus the typed command.
+            try self.writeBytes(transient);
+            try self.writeBytes(self.buffer[0..self.length]);
+        }
+
+        try self.writeBytes("\r\n");
+
+        // Return the complete multi-line input, or the single line.
+        if (self.multiline_buffer) |*mlb| {
+            const result = try self.allocator.dupe(u8, mlb.items);
+            mlb.deinit(self.allocator);
+            self.multiline_buffer = null;
+            self.in_multiline = false;
+            return .{ .accepted = result };
+        }
+
+        if (self.length == 0) return .{ .accepted = try self.allocator.dupe(u8, "") };
+        return .{ .accepted = try self.allocator.dupe(u8, self.buffer[0..self.length]) };
+    }
+
     pub fn readLine(self: *LineEditor) !?[]u8 {
 
         // Display prompt BEFORE entering raw mode so ANSI codes work
@@ -790,106 +907,20 @@ pub const LineEditor = struct {
 
             // Handle special characters
             switch (byte) {
-                '\r', '\n' => {
-                    // Erase any inline (ghost-text) suggestion before submitting.
-                    // The cursor sits at the end of the typed input with the dim
-                    // suggestion drawn to its right; without this the suggestion
-                    // (e.g. "; exit") gets left on the executed command line.
-                    if (self.suggestion != null) {
-                        try self.writeBytes("\x1b[0K");
-                        self.clearSuggestion();
-                    }
-
-                    // Enter key
-                    // If in reverse search mode, accept the match
-                    if (self.reverse_search_mode) {
-                        try self.acceptReverseSearch();
-                        if (self.length > 0) {
-                            try self.writeBytes("\r\n");
-                            try self.terminal.disableRawMode();
-                            return try self.allocator.dupe(u8, self.buffer[0..self.length]);
-                        }
-                        continue;
-                    }
-
-                    // If a completion grid is showing, Enter accepts the
-                    // highlighted entry and returns to editing. A second Enter
-                    // submits it; selecting a directory must never unexpectedly
-                    // execute `cd` just because the chooser was confirmed.
-                    if (self.completion_list != null) {
-                        try self.applyCurrentCompletion();
-                        self.clearCompletionState();
-                        continue;
-                    }
-
-                    // Get current line content
-                    const current_line = self.buffer[0..self.length];
-
-                    // Build complete input (accumulated + current line)
-                    var complete_input: []const u8 = undefined;
-
-                    if (self.multiline_buffer) |*mlb| {
-                        // Add newline and current line to accumulated buffer
-                        try mlb.append(self.allocator, '\n');
-                        try mlb.appendSlice(self.allocator, current_line);
-                        complete_input = mlb.items;
-                    } else {
-                        complete_input = current_line;
-                    }
-
-                    // Check if input is incomplete (needs continuation)
-                    if (isIncomplete(complete_input)) {
-                        // Initialize multiline buffer if not already done
-                        if (self.multiline_buffer == null) {
-                            self.multiline_buffer = .empty;
-                            try self.multiline_buffer.?.appendSlice(self.allocator, current_line);
-                        }
-                        self.in_multiline = true;
-
-                        // Move to next line and show PS2 prompt
-                        try self.writeBytes("\r\n");
-                        try self.writeBytes(self.ps2_prompt);
-
-                        // Reset buffer for next line input
-                        self.length = 0;
-                        self.cursor = 0;
-                        continue;
-                    }
-
-                    // Input is complete - redraw with transient prompt if enabled
-                    if (self.transient_prompt) |transient| {
-                        // Count newlines in the original prompt to handle multi-line prompts
-                        var newline_count: usize = 0;
-                        for (self.prompt) |ch| {
-                            if (ch == '\n') newline_count += 1;
-                        }
-                        // Move cursor up for each newline in the prompt
-                        if (newline_count > 0) {
-                            var move_buf: [32]u8 = undefined;
-                            const move_seq = std.fmt.bufPrint(&move_buf, "\x1b[{d}A", .{newline_count}) catch "\x1b[1A";
-                            try self.writeBytes(move_seq);
-                        }
-                        // Move to start of line and clear from here to end of screen
-                        try self.writeBytes("\r\x1b[J");
-                        // Write the transient (minimal) prompt + the typed command
-                        try self.writeBytes(transient);
-                        try self.writeBytes(self.buffer[0..self.length]);
-                    }
-
-                    try self.writeBytes("\r\n");
-                    try self.terminal.disableRawMode();
-
-                    // Return the complete multi-line input or single line
-                    if (self.multiline_buffer) |*mlb| {
-                        const result = try self.allocator.dupe(u8, mlb.items);
-                        mlb.deinit(self.allocator);
-                        self.multiline_buffer = null;
-                        self.in_multiline = false;
-                        return result;
-                    }
-
-                    if (self.length == 0) return try self.allocator.dupe(u8, "");
-                    return try self.allocator.dupe(u8, self.buffer[0..self.length]);
+                '\r', '\n' => switch (try self.acceptLine()) {
+                    .cont => continue,
+                    .accepted => |line| {
+                        try self.terminal.disableRawMode();
+                        return line;
+                    },
+                    .eof => {
+                        try self.terminal.disableRawMode();
+                        return null;
+                    },
+                    .interrupt => {
+                        try self.terminal.disableRawMode();
+                        return error.Interrupted;
+                    },
                 },
                 0x03 => {
                     // Ctrl+C
@@ -1077,19 +1108,26 @@ pub const LineEditor = struct {
                             try self.updateReverseSearch();
                         }
                     } else if (self.editing_mode == .vi and self.vi_mode == .normal) {
-                        // Vi normal mode - handle navigation/commands
-                        const should_execute = try self.handleViNormalKey(byte);
-                        if (should_execute) {
-                            // Check for multi-line
-                            const current_input = self.buffer[0..self.length];
-                            if (isIncomplete(current_input)) {
-                                try self.writeBytes("\r\n");
-                                try self.displayPrompt();
-                                continue;
-                            }
-                            try self.writeBytes("\r\n");
-                            try self.terminal.disableRawMode();
-                            return try self.allocator.dupe(u8, self.buffer[0..self.length]);
+                        // Vi normal mode - handle navigation/commands.
+                        // Accepting goes through the same acceptLine as Enter in
+                        // insert mode; the hand-rolled copy that used to live
+                        // here ignored multiline_buffer, so a continuation
+                        // accepted from normal mode returned only its last
+                        // physical line and leaked the accumulated buffer.
+                        switch (try self.handleViNormalKey(byte)) {
+                            .cont => {},
+                            .accepted => |line| {
+                                try self.terminal.disableRawMode();
+                                return line;
+                            },
+                            .eof => {
+                                try self.terminal.disableRawMode();
+                                return null;
+                            },
+                            .interrupt => {
+                                try self.terminal.disableRawMode();
+                                return error.Interrupted;
+                            },
                         }
                     } else if (self.editing_mode == .vi and self.vi_mode == .replace) {
                         // Vi replace mode - replace character under cursor
@@ -2311,7 +2349,10 @@ pub const LineEditor = struct {
     }
 
     fn writeBytes(self: *LineEditor, bytes: []const u8) !void {
-        _ = self;
+        if (self.write_sink) |sink| {
+            try sink.appendSlice(self.allocator, bytes);
+            return;
+        }
 
         if (builtin.os.tag == .windows) {
             const handle = @import("windows_compat").GetStdHandle(@import("windows_compat").STD_OUTPUT_HANDLE) orelse return error.NoStdOut;
@@ -3557,4 +3598,146 @@ test "leaving vi normal mode is reset for the next line" {
     try std.testing.expectEqual(ViMode.insert, editor.vi_mode);
     try std.testing.expectEqual(@as(?u8, null), editor.vi_pending_op);
     try std.testing.expectEqual(@as(usize, 0), editor.vi_count);
+}
+
+/// Build an editor wired to a capture buffer, with the typed text already in it.
+fn testEditor(sink: *std.ArrayList(u8), text: []const u8) LineEditor {
+    var editor = LineEditor.init(std.testing.allocator, "$ ");
+    @memcpy(editor.buffer[0..text.len], text);
+    editor.length = text.len;
+    editor.cursor = text.len;
+    editor.write_sink = sink;
+    editor.no_terminal = true;
+    return editor;
+}
+
+test "acceptLine returns the typed line" {
+    var sink: std.ArrayList(u8) = .empty;
+    defer sink.deinit(std.testing.allocator);
+    var editor = testEditor(&sink, "echo hi");
+    defer editor.deinit();
+
+    switch (try editor.acceptLine()) {
+        .accepted => |line| {
+            defer std.testing.allocator.free(line);
+            try std.testing.expectEqualStrings("echo hi", line);
+        },
+        else => return error.TestUnexpectedResult,
+    }
+    try std.testing.expectEqualStrings("\r\n", sink.items);
+}
+
+test "acceptLine returns an empty string for an empty line" {
+    var sink: std.ArrayList(u8) = .empty;
+    defer sink.deinit(std.testing.allocator);
+    var editor = testEditor(&sink, "");
+    defer editor.deinit();
+
+    switch (try editor.acceptLine()) {
+        .accepted => |line| {
+            defer std.testing.allocator.free(line);
+            try std.testing.expectEqualStrings("", line);
+        },
+        else => return error.TestUnexpectedResult,
+    }
+}
+
+test "acceptLine continues an incomplete line and shows the PS2 prompt" {
+    var sink: std.ArrayList(u8) = .empty;
+    defer sink.deinit(std.testing.allocator);
+    var editor = testEditor(&sink, "echo \"foo");
+    defer editor.deinit();
+
+    try std.testing.expectEqual(Flow.cont, try editor.acceptLine());
+    try std.testing.expect(editor.in_multiline);
+    try std.testing.expect(editor.multiline_buffer != null);
+    try std.testing.expectEqual(@as(usize, 0), editor.length);
+    try std.testing.expectEqual(@as(usize, 0), editor.cursor);
+    try std.testing.expect(std.mem.endsWith(u8, sink.items, editor.ps2_prompt));
+}
+
+test "acceptLine joins continuation lines" {
+    var sink: std.ArrayList(u8) = .empty;
+    defer sink.deinit(std.testing.allocator);
+    var editor = testEditor(&sink, "echo \"foo");
+    defer editor.deinit();
+
+    try std.testing.expectEqual(Flow.cont, try editor.acceptLine());
+
+    const second = "bar\"";
+    @memcpy(editor.buffer[0..second.len], second);
+    editor.length = second.len;
+    editor.cursor = second.len;
+
+    switch (try editor.acceptLine()) {
+        .accepted => |line| {
+            defer std.testing.allocator.free(line);
+            try std.testing.expectEqualStrings("echo \"foo\nbar\"", line);
+        },
+        else => return error.TestUnexpectedResult,
+    }
+    try std.testing.expect(!editor.in_multiline);
+    try std.testing.expectEqual(@as(?std.ArrayList(u8), null), editor.multiline_buffer);
+}
+
+test "accepting from vi normal mode joins continuation lines too" {
+    // Regression test: vi normal mode used to run its own copy of accept-line
+    // that ignored multiline_buffer, so this returned only "bar\"" and leaked
+    // the accumulated buffer.
+    var sink: std.ArrayList(u8) = .empty;
+    defer sink.deinit(std.testing.allocator);
+    var editor = testEditor(&sink, "echo \"foo");
+    defer editor.deinit();
+    editor.setEditingMode(.vi);
+    editor.vi_mode = .normal;
+
+    try std.testing.expectEqual(Flow.cont, try editor.handleViNormalKey('\r'));
+    try std.testing.expect(editor.multiline_buffer != null);
+
+    const second = "bar\"";
+    @memcpy(editor.buffer[0..second.len], second);
+    editor.length = second.len;
+    editor.cursor = second.len;
+
+    switch (try editor.handleViNormalKey('\r')) {
+        .accepted => |line| {
+            defer std.testing.allocator.free(line);
+            try std.testing.expectEqualStrings("echo \"foo\nbar\"", line);
+        },
+        else => return error.TestUnexpectedResult,
+    }
+}
+
+test "acceptLine repaints with the transient prompt" {
+    var sink: std.ArrayList(u8) = .empty;
+    defer sink.deinit(std.testing.allocator);
+    var editor = testEditor(&sink, "ls");
+    defer editor.deinit();
+    editor.setTransientPrompt("> ");
+
+    switch (try editor.acceptLine()) {
+        .accepted => |line| {
+            defer std.testing.allocator.free(line);
+            try std.testing.expectEqualStrings("ls", line);
+        },
+        else => return error.TestUnexpectedResult,
+    }
+    // Clear to end of screen, the minimal prompt, then the command it replaces.
+    try std.testing.expectEqualStrings("\r\x1b[J> ls\r\n", sink.items);
+}
+
+test "acceptLine erases a ghost suggestion before submitting" {
+    var sink: std.ArrayList(u8) = .empty;
+    defer sink.deinit(std.testing.allocator);
+    var editor = testEditor(&sink, "ech");
+    defer editor.deinit();
+    // `suggestion` is a borrowed view; only `suggestion_entry` owns memory.
+    editor.suggestion = "o hi";
+
+    switch (try editor.acceptLine()) {
+        .accepted => |line| std.testing.allocator.free(line),
+        else => return error.TestUnexpectedResult,
+    }
+    try std.testing.expectEqualStrings("\x1b[0K\r\n", sink.items);
+    try std.testing.expectEqual(@as(?[]const u8, null), editor.suggestion);
 }

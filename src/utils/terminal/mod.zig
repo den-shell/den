@@ -25,6 +25,7 @@ pub const CompletionFn = @import("types.zig").CompletionFn;
 pub const EditingMode = @import("types.zig").EditingMode;
 pub const ViMode = @import("types.zig").ViMode;
 pub const UndoState = @import("types.zig").UndoState;
+pub const Flow = @import("types.zig").Flow;
 
 // LineEditor is imported from the main terminal file for now
 // (will be fully modularized in a future iteration)
