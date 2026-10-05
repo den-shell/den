@@ -884,6 +884,16 @@ pub const LineEditor = struct {
     // Vi mode transitions, shared with handleViNormalKey so there is one
     // implementation of each.
 
+    /// Consume a pending numeric prefix, defaulting to 1.
+    ///
+    /// Only vi normal mode ever sets one, so the repeatable widgets can call
+    /// this unconditionally: in emacs the count is always 0 and this is 1.
+    fn takeCount(self: *LineEditor) usize {
+        const n = if (self.vi_count == 0) 1 else self.vi_count;
+        self.vi_count = 0;
+        return n;
+    }
+
     fn viAddNext(self: *LineEditor) void {
         if (self.cursor < self.length) self.cursor += 1;
         self.viEnterInsertMode();
@@ -1056,8 +1066,8 @@ pub const LineEditor = struct {
                     try self.moveCursorEnd();
                 }
             },
-            .backward_char => try self.moveCursorLeft(),
-            .forward_char => try self.moveCursorRight(),
+            .backward_char => for (0..self.takeCount()) |_| try self.moveCursorLeft(),
+            .forward_char => for (0..self.takeCount()) |_| try self.moveCursorRight(),
             .forward_char_or_autosuggest => {
                 if (self.suggestion != null and self.cursor == self.length) {
                     try self.acceptSuggestion();
@@ -1068,23 +1078,23 @@ pub const LineEditor = struct {
             .backward_word => try self.moveCursorWordLeft(),
             .forward_word => try self.moveCursorWordRight(),
             .vi_forward_word => {
-                self.moveForwardWord();
+                for (0..self.takeCount()) |_| self.moveForwardWord();
                 try self.redrawLine();
             },
             .vi_backward_word => {
-                self.moveBackwardWord();
+                for (0..self.takeCount()) |_| self.moveBackwardWord();
                 try self.redrawLine();
             },
             .vi_forward_word_end => {
-                self.moveToEndOfWord();
+                for (0..self.takeCount()) |_| self.moveToEndOfWord();
                 try self.redrawLine();
             },
 
             .self_insert => try self.selfInsert(key),
             .vi_replace_char => try self.viReplaceChar(key),
             .quoted_insert => try self.quotedInsert(),
-            .backward_delete_char => try self.backspace(),
-            .delete_char => try self.deleteChar(),
+            .backward_delete_char => for (0..self.takeCount()) |_| try self.backspace(),
+            .delete_char => for (0..self.takeCount()) |_| try self.deleteChar(),
             .transpose_chars => try self.transposeChars(),
 
             .kill_line => try self.killToEnd(),
@@ -1136,6 +1146,19 @@ pub const LineEditor = struct {
 
             .clear_screen => try self.clearScreen(),
             .redisplay => try self.redrawLine(),
+
+            .digit_argument => {
+                if (key.len > 0 and key[0] >= '0' and key[0] <= '9') {
+                    self.vi_count = self.vi_count * 10 + (key[0] - '0');
+                }
+            },
+            .vi_digit_or_beginning_of_line => {
+                if (self.vi_count == 0) {
+                    try self.moveCursorHome();
+                } else {
+                    self.vi_count *= 10;
+                }
+            },
 
             .vi_cmd_mode => {
                 self.viEnterNormalMode();
@@ -4786,4 +4809,83 @@ test "stopping a macro does not record its own trigger" {
     // Exactly the one key between the start and stop sequences.
     try std.testing.expectEqual(@as(usize, 1), editor.macro_stored_len);
     try std.testing.expectEqual(@as(u8, 0x01), editor.macro_stored[0]);
+}
+
+test "vi counts repeat a movement" {
+    var sink: std.ArrayList(u8) = .empty;
+    defer sink.deinit(std.testing.allocator);
+    var maps = keymap.KeymapSet.init();
+    defer maps.deinit(std.testing.allocator);
+    var editor = testKeyEditor(&sink, &maps, "abcdefgh");
+    defer editor.deinit();
+    editor.setEditingMode(.vi);
+    editor.vi_mode = .normal;
+    editor.cursor = 8;
+
+    _ = try editor.feedKeys("3h");
+    try std.testing.expectEqual(@as(usize, 5), editor.cursor);
+    // The count is consumed, so the next h moves one.
+    _ = try editor.feedKeys("h");
+    try std.testing.expectEqual(@as(usize, 4), editor.cursor);
+}
+
+test "vi counts accumulate across digits" {
+    var sink: std.ArrayList(u8) = .empty;
+    defer sink.deinit(std.testing.allocator);
+    var maps = keymap.KeymapSet.init();
+    defer maps.deinit(std.testing.allocator);
+    var editor = testKeyEditor(&sink, &maps, "0123456789abcdef");
+    defer editor.deinit();
+    editor.setEditingMode(.vi);
+    editor.vi_mode = .normal;
+    editor.cursor = 16;
+
+    // `0` is a count digit once one is being typed, so this is 12.
+    _ = try editor.feedKeys("12h");
+    try std.testing.expectEqual(@as(usize, 4), editor.cursor);
+}
+
+test "vi 0 with no count pending goes to the start of the line" {
+    var sink: std.ArrayList(u8) = .empty;
+    defer sink.deinit(std.testing.allocator);
+    var maps = keymap.KeymapSet.init();
+    defer maps.deinit(std.testing.allocator);
+    var editor = testKeyEditor(&sink, &maps, "abcdef");
+    defer editor.deinit();
+    editor.setEditingMode(.vi);
+    editor.vi_mode = .normal;
+    editor.cursor = 4;
+
+    _ = try editor.feedKeys("0");
+    try std.testing.expectEqual(@as(usize, 0), editor.cursor);
+}
+
+test "vi caret moves to the first non-blank" {
+    var sink: std.ArrayList(u8) = .empty;
+    defer sink.deinit(std.testing.allocator);
+    var maps = keymap.KeymapSet.init();
+    defer maps.deinit(std.testing.allocator);
+    var editor = testKeyEditor(&sink, &maps, "  indented");
+    defer editor.deinit();
+    editor.setEditingMode(.vi);
+    editor.vi_mode = .normal;
+    editor.cursor = 8;
+
+    // A literal caret, not Ctrl+^ -- the table used to bind 0x1E by mistake.
+    _ = try editor.feedKeys("^");
+    try std.testing.expectEqual(@as(usize, 0), editor.cursor);
+}
+
+test "a count does nothing in emacs mode" {
+    var sink: std.ArrayList(u8) = .empty;
+    defer sink.deinit(std.testing.allocator);
+    var maps = keymap.KeymapSet.init();
+    defer maps.deinit(std.testing.allocator);
+    var editor = testKeyEditor(&sink, &maps, "abcdef");
+    defer editor.deinit();
+    editor.cursor = 4;
+
+    try std.testing.expectEqual(@as(usize, 1), editor.takeCount());
+    _ = try editor.invokeWidget(.backward_char, "\x02");
+    try std.testing.expectEqual(@as(usize, 3), editor.cursor);
 }

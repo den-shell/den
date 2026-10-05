@@ -115,6 +115,13 @@ pub const Widget = enum(u8) {
     clear_screen,
     redisplay,
 
+    /// Accumulate a numeric prefix, as vi's 1-9 do. Honoured by the movement
+    /// and single-character delete widgets; other widgets ignore it.
+    digit_argument,
+    /// Vi's `0`: start of line, unless a count is already being typed, in which
+    /// case it is another digit of it.
+    vi_digit_or_beginning_of_line,
+
     // Vi mode transitions
     vi_cmd_mode,
     vi_insert,
@@ -234,6 +241,10 @@ pub fn resolveWidget(name: []const u8) Widget {
         .{ "clear-screen", .clear_screen },
         .{ "redisplay", .redisplay },
 
+        .{ "digit-argument", .digit_argument },
+        .{ "vi-digit-argument", .digit_argument },
+        .{ "vi-digit-or-beginning-of-line", .vi_digit_or_beginning_of_line },
+
         .{ "vi-cmd-mode", .vi_cmd_mode },
         .{ "vi-insert", .vi_insert },
         .{ "vi-add-next", .vi_add_next },
@@ -325,6 +336,8 @@ pub fn widgetName(w: Widget) []const u8 {
         .call_last_kbd_macro => "call-last-kbd-macro",
         .clear_screen => "clear-screen",
         .redisplay => "redisplay",
+        .digit_argument => "digit-argument",
+        .vi_digit_or_beginning_of_line => "vi-digit-or-beginning-of-line",
         .vi_cmd_mode => "vi-cmd-mode",
         .vi_insert => "vi-insert",
         .vi_add_next => "vi-add-next",
@@ -561,9 +574,20 @@ const vicmd_defaults = buildKeymap(&[_]DefaultRow{
 
     .{ "h", .backward_char },
     .{ "l", .forward_char },
-    .{ "0", .beginning_of_line },
+    // `0` is also a count digit once one is being typed.
+    .{ "0", .vi_digit_or_beginning_of_line },
     .{ "$", .end_of_line },
-    .{ "^^", .beginning_of_line },
+    // A literal caret: "^^" would be Ctrl+^ (0x1E).
+    .{ "\\^", .beginning_of_line },
+    .{ "1", .digit_argument },
+    .{ "2", .digit_argument },
+    .{ "3", .digit_argument },
+    .{ "4", .digit_argument },
+    .{ "5", .digit_argument },
+    .{ "6", .digit_argument },
+    .{ "7", .digit_argument },
+    .{ "8", .digit_argument },
+    .{ "9", .digit_argument },
     .{ "w", .vi_forward_word },
     .{ "b", .vi_backward_word },
     .{ "e", .vi_forward_word_end },
