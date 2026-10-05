@@ -4158,6 +4158,19 @@ pub const Shell = struct {
     }
 
     /// Load aliases from configuration
+    /// Whether `name` is a shell-level builtin -- one implemented on the Shell
+    /// rather than in the executor.
+    ///
+    /// The executor needs this to recognise such a name as a builtin at all.
+    /// Asking the Shell rather than keeping a second copy of the list is what
+    /// stops the two drifting: setopt, unsetopt, ai, wasm, shopt, enable,
+    /// complete, compgen, mapfile, readarray, readonly and caller were all
+    /// absent from the executor's own copy, so each failed with "command not
+    /// found" anywhere the executor ran the command.
+    pub fn isShellBuiltinName(name: []const u8) bool {
+        return shell_mod.isShellBuiltin(name);
+    }
+
     /// Run a shell-level builtin (bindkey, setopt, ...) on behalf of the
     /// executor, or return null if `cmd` is not one.
     ///

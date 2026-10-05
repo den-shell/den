@@ -1048,8 +1048,6 @@ pub const Executor = struct {
             "show",      "hide",     "ft",        "sys-stats",  "netstats", "net-check", "log-tail",  "proc-monitor",
             "log-parse", "dotfiles", "library",   "hook",       "ifind",    "coproc",    "break",     "continue",
             ":",         "declare",  "typeset",   "let",        "shift",
-            // Line editing
-               "bindkey",   "zle",
             // Nushell-inspired structured data commands
                "from",      "to",        "table",
             "grid",      "where",    "select",    "reject",     "get",      "first",     "last",      "skip",
@@ -1065,7 +1063,10 @@ pub const Executor = struct {
         if (self.shell) |shell| {
             if (shell.loadable_builtins.isEnabled(name)) return true;
         }
-        return false;
+        // Shell-level builtins are implemented on the Shell and listed there;
+        // executeBuiltin hands them over. Asking rather than repeating the list
+        // keeps the two from drifting apart.
+        return Shell.isShellBuiltinName(name);
     }
 
     /// Get a BuiltinContext for calling extracted builtins
@@ -1102,8 +1103,6 @@ pub const Executor = struct {
             "show",    "hide",     "sys-stats", "netstats",  "net-check",  "log-tail", "proc-monitor", "log-parse", "dotfiles",
             "library", "hook",     "ifind",     "coproc",    "exit",       ":",        "declare",      "typeset",   "let",
             "shift",   "break",    "continue",
-            // Line editing
-            "bindkey", "zle",
             // Nushell-inspired structured data commands
              "from",      "to",         "table",    "grid",         "where",     "select",
             "reject",  "get",      "first",     "last",      "skip",       "take",     "length",       "flatten",   "uniq",
@@ -1114,7 +1113,10 @@ pub const Executor = struct {
         for (builtin_names) |b| {
             if (std.mem.eql(u8, name, b)) return true;
         }
-        return false;
+        // Shell-level builtins are implemented on the Shell and listed there;
+        // executeBuiltin hands them over. Asking rather than repeating the list
+        // keeps the two from drifting apart.
+        return Shell.isShellBuiltinName(name);
     }
 
     /// Check if a command name is a control flow keyword (while, for, if, until, case, select)

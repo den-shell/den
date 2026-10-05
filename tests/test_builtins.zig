@@ -1176,3 +1176,122 @@ test "builtin type: reports bindkey as a shell builtin" {
     try test_utils.TestAssert.expectEqual(@as(u8, 0), r.exit_code);
     try test_utils.TestAssert.expectContains(r.stdout, "shell builtin");
 }
+
+// ---------------------------------------------------------------------------
+// Shell-level builtins outside a bare command
+//
+// These are implemented on the Shell rather than in the executor. The executor
+// kept its own copy of the builtin-name list, and twelve of them were missing
+// from it, so each failed with "command not found" anywhere the executor ran the
+// command -- after `&&`, inside a pipeline, in a subshell. The executor now asks
+// the Shell instead of repeating the list.
+// ---------------------------------------------------------------------------
+
+test "shell builtins: setopt runs after &&" {
+    const allocator = std.testing.allocator;
+    var fixture = try test_utils.DenShellFixture.init(allocator);
+    defer fixture.deinit();
+    const r = try fixture.execDirect("true && setopt nullglob && echo ok");
+    defer allocator.free(r.stdout);
+    defer allocator.free(r.stderr);
+
+    try test_utils.TestAssert.expectEqual(@as(u8, 0), r.exit_code);
+    try test_utils.TestAssert.expectContains(r.stdout, "ok");
+}
+
+test "shell builtins: setopt takes effect after &&" {
+    const allocator = std.testing.allocator;
+    var fixture = try test_utils.DenShellFixture.init(allocator);
+    defer fixture.deinit();
+    const r = try fixture.execDirect("true && setopt nullglob; setopt");
+    defer allocator.free(r.stdout);
+    defer allocator.free(r.stderr);
+
+    try test_utils.TestAssert.expectEqual(@as(u8, 0), r.exit_code);
+    try test_utils.TestAssert.expectContains(r.stdout, "nullglob");
+}
+
+test "shell builtins: unsetopt runs after &&" {
+    const allocator = std.testing.allocator;
+    var fixture = try test_utils.DenShellFixture.init(allocator);
+    defer fixture.deinit();
+    const r = try fixture.execDirect("setopt nullglob; true && unsetopt nullglob && echo ok");
+    defer allocator.free(r.stdout);
+    defer allocator.free(r.stderr);
+
+    try test_utils.TestAssert.expectEqual(@as(u8, 0), r.exit_code);
+    try test_utils.TestAssert.expectContains(r.stdout, "ok");
+}
+
+test "shell builtins: shopt runs after &&" {
+    const allocator = std.testing.allocator;
+    var fixture = try test_utils.DenShellFixture.init(allocator);
+    defer fixture.deinit();
+    const r = try fixture.execDirect("true && shopt -s extglob && shopt");
+    defer allocator.free(r.stdout);
+    defer allocator.free(r.stderr);
+
+    try test_utils.TestAssert.expectEqual(@as(u8, 0), r.exit_code);
+    try test_utils.TestAssert.expectContains(r.stdout, "extglob");
+}
+
+test "shell builtins: enable, compgen and complete run after &&" {
+    const allocator = std.testing.allocator;
+    var fixture = try test_utils.DenShellFixture.init(allocator);
+    defer fixture.deinit();
+    const r = try fixture.execDirect("true && enable -a > /dev/null && true && compgen -b > /dev/null && true && complete > /dev/null; echo ok");
+    defer allocator.free(r.stdout);
+    defer allocator.free(r.stderr);
+
+    try test_utils.TestAssert.expectContains(r.stdout, "ok");
+    try test_utils.TestAssert.expectEqual(@as(?usize, null), std.mem.indexOf(u8, r.stderr, "command not found"));
+}
+
+test "shell builtins: readonly and caller run after &&" {
+    const allocator = std.testing.allocator;
+    var fixture = try test_utils.DenShellFixture.init(allocator);
+    defer fixture.deinit();
+    const r = try fixture.execDirect("true && readonly RO_VAR=yes && echo $RO_VAR; true && caller; echo done");
+    defer allocator.free(r.stdout);
+    defer allocator.free(r.stderr);
+
+    try test_utils.TestAssert.expectContains(r.stdout, "yes");
+    try test_utils.TestAssert.expectContains(r.stdout, "done");
+    try test_utils.TestAssert.expectEqual(@as(?usize, null), std.mem.indexOf(u8, r.stderr, "command not found"));
+}
+
+test "shell builtins: bindkey runs in a pipeline" {
+    const allocator = std.testing.allocator;
+    var fixture = try test_utils.DenShellFixture.init(allocator);
+    defer fixture.deinit();
+    const r = try fixture.execDirect("bindkey -L | grep -c 'beginning-of-line'");
+    defer allocator.free(r.stdout);
+    defer allocator.free(r.stderr);
+
+    try test_utils.TestAssert.expectEqual(@as(u8, 0), r.exit_code);
+    try test_utils.TestAssert.expectEqual(@as(?usize, null), std.mem.indexOf(u8, r.stderr, "command not found"));
+}
+
+test "shell builtins: setopt runs in a pipeline" {
+    const allocator = std.testing.allocator;
+    var fixture = try test_utils.DenShellFixture.init(allocator);
+    defer fixture.deinit();
+    const r = try fixture.execDirect("setopt nullglob; setopt | grep -c nullglob");
+    defer allocator.free(r.stdout);
+    defer allocator.free(r.stderr);
+
+    try test_utils.TestAssert.expectEqual(@as(u8, 0), r.exit_code);
+    try test_utils.TestAssert.expectContains(r.stdout, "1");
+}
+
+test "shell builtins: an unknown name is still not found" {
+    const allocator = std.testing.allocator;
+    var fixture = try test_utils.DenShellFixture.init(allocator);
+    defer fixture.deinit();
+    const r = try fixture.execDirect("true && definitely_not_a_builtin_xyz");
+    defer allocator.free(r.stdout);
+    defer allocator.free(r.stderr);
+
+    try test_utils.TestAssert.expectEqual(@as(u8, 127), r.exit_code);
+    try test_utils.TestAssert.expectContains(r.stderr, "command not found");
+}
