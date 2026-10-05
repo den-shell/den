@@ -560,7 +560,7 @@ Some features from Bash/Zsh are intentionally not supported in Den to keep the i
 | Global aliases (`-g`) | Confusing behavior; use functions |
 | Suffix aliases (`-s`) | Available in config as `aliases.suffix` |
 | `zparseopts` | Use standard `getopts` or manual parsing |
-| `zle` widgets | Different line editing architecture |
+| `zle -N` user widgets | Not implemented; `bindkey` binds the built-in widgets |
 | `zmodload` | Den uses plugin system |
 | `precmd`/`preexec` hooks | Use config-based hooks |
 
@@ -609,12 +609,27 @@ Quick mapping for common Zsh workflows:
 
 ### Keybindings
 
+`bindkey` works as written, with zsh's key notation, widget names and keymaps.
+See [Line Editing](./LINE_EDITING.md#customizing-keybindings-with-bindkey).
+
 | Zsh | Den |
 |-----|-----|
-| `bindkey '^R' history-incremental-search-backward` | Built-in, Ctrl+R |
-| `bindkey '^[[A' up-line-or-history` | Built-in, Arrow Up |
-| `bindkey '^A' beginning-of-line` | Built-in (Emacs mode) |
-| `bindkey '^E' end-of-line` | Built-in (Emacs mode) |
+| `bindkey '^R' history-incremental-search-backward` | Works as written |
+| `bindkey '^[[A' up-line-or-history` | Works as written |
+| `bindkey '^A' beginning-of-line` | Works as written |
+| `bindkey -s '^X^Z' 'fg\n'` | Works as written |
+| `bindkey -e` / `-v` / `-a` / `-M vicmd` | Works as written |
+| `bindkey -l` / `-L` / `-r` / `-d` | Works as written |
+| `bindkey -A` / `-N` / `-D` | Rejected: den has a fixed set of keymaps |
+| `bindkey -m` | Rejected: den decodes Meta as an ESC prefix, so bind `\e<key>` |
+| `bindkey -p` / `-R` | Rejected: use `bindkey -L` and filter, or bind keys individually |
+| `zle -N my-widget my-func` | Not implemented; `zle` reports this |
+
+Two deliberate differences. `\M-x` binds the ESC prefix (`ESC x`) rather than
+setting the high bit, which is what a terminal actually sends for Option/Alt;
+and `history-incremental-search-forward` is accepted but mapped to den's Ctrl+S,
+which toggles fuzzy matching inside the reverse search rather than searching
+forward.
 
 ### Completion
 

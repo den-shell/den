@@ -179,8 +179,41 @@ each line starts in insert mode; **Esc** switches to normal mode for navigation
 `s` `S` `C` `R` return to inserting. Every new prompt starts in insert mode
 again, as zsh's `viins` does.
 
-`custom` is not yet applied — see [Line Editing](./LINE_EDITING.md) for the
-full default keymap.
+`custom` binds keys to named editing widgets, the same way the `bindkey` builtin
+does. Each entry takes a `key` in zsh's notation and an `action`:
+
+```jsonc
+"keybindings": {
+  "mode": "emacs",
+  "custom": [
+    { "key": "^X^E", "action": "kill-whole-line" },
+    { "key": "\\e[1;5C", "action": "forward-word" },
+    { "key": "^X^Z", "action": "fg\\n", "string": true },
+    { "key": "jj", "action": "vi-cmd-mode", "keymap": "viins" }
+  ]
+}
+```
+
+| Field | Default | Meaning |
+|-------|---------|---------|
+| `key` | — | Key sequence in `bindkey` notation |
+| `action` | — | Widget name, or literal text when `string` is true |
+| `keymap` | `"main"` | `main`, `emacs`, `viins`, `vicmd`, `vireplace` or `isearch` |
+| `string` | `false` | Treat `action` as literal input rather than a widget name |
+
+Note the double backslash: JSON consumes one level of escaping, so zsh's `\e`
+is written `\\e` here. The caret form (`^X`, `^[`) needs no escaping and is
+usually easier to read.
+
+Config bindings are applied before `~/.denrc` is sourced, so a `bindkey` in the
+rc file wins for the same key. On hot reload they are re-applied additively:
+bindings made interactively or in `~/.denrc` survive, so removing one from this
+file takes a restart or an explicit `bindkey -r`. A bad entry warns and is
+skipped rather than failing startup.
+
+Run `bindkey -L` for every current binding and `bindkey -l` for the keymap
+names. See [Line Editing](./LINE_EDITING.md#customizing-keybindings-with-bindkey)
+for the full reference.
 
 ## See also
 

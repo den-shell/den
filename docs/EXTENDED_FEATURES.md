@@ -72,6 +72,30 @@ The qualifier engine filters glob matches by type/permission: `/` or `d`
 Den's `*(...)` syntax is also used by bash-style extended globbing; the
 qualifier engine applies wherever a qualifier reaches glob expansion.
 
+### `bindkey`
+
+Binds keys to named editing widgets, using zsh's notation, widget names and
+keymaps, so lines copied out of a `.zshrc` work as written:
+
+```sh
+bindkey '^T' kill-whole-line        # rebind Ctrl+T
+bindkey '\e[1;5C' forward-word      # Ctrl+Right
+bindkey -s '^X^Z' 'fg\n'            # literal input, dispatched as if typed
+bindkey -M vicmd 'H' beginning-of-line
+bindkey -L                          # dump as re-runnable bindkey commands
+```
+
+Keymaps are `emacs`, `viins`, `vicmd`, `vireplace`, `isearch` and `main`.
+`bindkey -e`/`-v` pick the editing mode, which `keybindings.mode` also sets.
+
+Two deliberate divergences: `\M-x` binds the ESC prefix rather than setting the
+high bit, matching what terminals actually send for Option; and key sequences are
+capped at 8 bytes, with longer specs rejected rather than truncated.
+
+`zle -N` user-defined widgets are not implemented; `zle` is registered and
+reports that. See [Line Editing](./LINE_EDITING.md#customizing-keybindings-with-bindkey)
+for the full option and widget reference.
+
 ## AI-assisted completions
 
 The `ai` builtin turns a natural-language description into a shell command using

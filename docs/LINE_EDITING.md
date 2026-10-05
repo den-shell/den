@@ -18,6 +18,7 @@ Den provides a powerful line editor with Emacs/Readline-style keybindings. All f
 4. [Screen Management](#screen-management)
 5. [History Search](#history-search)
 6. [Complete Keybinding Reference](#complete-keybinding-reference)
+7. [Customizing Keybindings with `bindkey`](#customizing-keybindings-with-bindkey)
 
 ---
 
@@ -724,14 +725,132 @@ Completion:
 
 ---
 
+## Customizing Keybindings with `bindkey`
+
+Every default binding has a name, and `bindkey` rebinds it. The syntax is zsh's,
+so lines copied out of a `.zshrc` work as written.
+
+```sh
+bindkey '^T' kill-whole-line        # rebind Ctrl+T
+bindkey '\e[1;5C' forward-word      # Ctrl+Right
+bindkey -s '^X^Z' 'fg\n'            # insert literal text and run it
+bindkey -r '^A'                     # unbind
+bindkey                             # list the current keymap
+bindkey -L                          # list it as re-runnable bindkey commands
+bindkey -l                          # list the keymap names
+```
+
+Put them in `~/.denrc`, or use the `keybindings.custom` section of `den.jsonc`
+(see [Configuration](./config.md#keybindings)). Both take effect immediately when
+run at the prompt.
+
+### Options
+
+| Option | Effect |
+|--------|--------|
+| *(none)* | List the bindings of the current keymap |
+| `<seq>` | Show what one sequence is bound to; exit status 1 if it is unbound |
+| `<seq> <widget>` | Bind a sequence to a widget |
+| `-s <seq> <string>` | Bind a sequence to literal input, dispatched as if typed |
+| `-r <seq>...` | Unbind. Succeeds quietly if the key was already free |
+| `-l` | List keymap names |
+| `-L` | List bindings as `bindkey` commands. The output re-runs exactly |
+| `-e` / `-v` | Select the emacs or vi-insert keymap as `main` |
+| `-a` | Operate on `vicmd` (same as `-M vicmd`) |
+| `-M <keymap>` | Operate on a named keymap |
+| `-d` | Restore the compiled-in defaults |
+
+Keymaps are `emacs`, `viins`, `vicmd`, `vireplace` and `isearch`, plus `main`,
+which follows whichever of `emacs`/`viins` is selected. There is no `menuselect`
+keymap: while the completion menu is open it owns the arrow keys and Enter, and
+bindings do not fire until it is dismissed.
+
+`-A`, `-N`, `-D`, `-R`, `-p` and `-m` are recognised and rejected with the
+reason, rather than silently doing nothing.
+
+### Key notation
+
+| Form | Meaning |
+|------|---------|
+| `^A` … `^Z`, `^@`, `^[`, `^?` | Control characters; `^?` is Delete |
+| `\C-x` | Same as `^x` |
+| `\M-x`, `\ex`, `\Ex` | Escape prefix followed by `x` |
+| `\e[A` or `^[[A` | A full escape sequence, such as Up |
+| `\a \b \f \n \r \t \v` | The usual control characters |
+| `\\ \^ \" \'` | A literal backslash, caret, quote |
+| `\0`, `\101` | Octal, up to three digits |
+| `\x1b`, `\x7` | Hex, one or two digits |
+| anything else | Itself |
+
+Two things to know:
+
+- **`\M-x` means the ESC prefix, not the high bit.** Den reads input as bytes
+  with a dedicated escape path, and Terminal.app and iTerm2 both send ESC-prefix
+  for Option by default, so `\M-b` and `\eb` are the same binding. This is why
+  `bindkey -m` is rejected.
+- **Sequences are at most 8 bytes.** That covers everything a terminal sends for
+  a key, including `^[[1;5C` and bracketed paste. Longer specs are rejected
+  outright rather than silently truncated into a binding that could never fire.
+
+### Multi-key sequences
+
+A binding may be several keys, and a sequence that is the prefix of a longer one
+still works: with `^X(` bound, a lone `^X` waits briefly to see whether the rest
+arrives. The wait is one terminal read timeout, roughly 100ms, the same pause
+Escape has always had.
+
+### Widget names
+
+`bindkey -L` prints every widget currently bound, which is the authoritative
+list. The common ones:
+
+| Widget | Does |
+|--------|------|
+| `beginning-of-line`, `end-of-line` | Move to the start or end |
+| `backward-char`, `forward-char` | Move one character |
+| `backward-word`, `forward-word` | Move one word |
+| `up-line-or-history`, `down-line-or-history` | History navigation |
+| `history-incremental-search-backward` | Reverse search (Ctrl+R) |
+| `expand-or-complete`, `reverse-menu-complete` | Completion, forwards or back |
+| `backward-delete-char`, `delete-char` | Delete one character |
+| `kill-line`, `backward-kill-line`, `kill-whole-line` | Kill to end, to start, or all |
+| `kill-word`, `backward-kill-word` | Kill a word |
+| `yank` | Paste the last kill |
+| `transpose-chars` | Swap the characters around the cursor |
+| `undo` | Undo the last edit |
+| `clear-screen`, `redisplay` | Repaint |
+| `accept-line` | Run the line |
+| `send-break` | Abandon the line (Ctrl+C) |
+| `quoted-insert` | Insert the next key literally |
+| `start-kbd-macro`, `end-kbd-macro`, `call-last-kbd-macro` | Keyboard macros |
+| `vi-cmd-mode`, `vi-insert` | Switch vi modes |
+| `undefined-key` | Beep |
+| `ignore` | Do nothing |
+
+zsh aliases are accepted where den has an equivalent, so `previous-history`,
+`vi-backward-char`, `complete-word` and similar all resolve. Composite widgets
+whose behaviour depends on context carry a `den-` prefix, such as
+`den-forward-char-or-autosuggest`, which accepts an inline suggestion at the end
+of the line and otherwise moves right.
+
+Names den does not have — `digit-argument`, `universal-argument`,
+`vi-repeat-change` — are reported as unknown rather than bound to something that
+quietly does nothing.
+
+### User-defined widgets
+
+`zle -N my-widget my-function` is not implemented, so a widget cannot yet be a
+shell function. `zle` is a recognised command that says so, and binding a name
+that happens to be a shell function points this out rather than just reporting an
+unknown widget.
+
 ## What's Next
 
 Future line editing features planned:
 
-- Kill ring with Ctrl+Y (yank)
 - Multiple cursors
-- Visual selection mode
-- Undo/redo (Ctrl+_)
-- Macros
+- `zle -N` user-defined widgets backed by shell functions
+- Numeric arguments (`digit-argument`)
+- `yank-pop` and redo
 
 Stay tuned!
