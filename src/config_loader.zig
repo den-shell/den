@@ -3,6 +3,16 @@ const builtin = @import("builtin");
 const types = @import("types/mod.zig");
 const IO = @import("utils/io.zig").IO;
 const DenConfig = types.DenConfig;
+const bindkey_spec = @import("compat/bindkey.zig");
+
+/// Keymap names `keybindings.custom[].keymap` accepts, matching `bindkey -M`.
+fn isKnownKeymapName(name: []const u8) bool {
+    const known = [_][]const u8{ "main", "emacs", "viins", "vicmd", "vireplace", "isearch" };
+    for (known) |k| {
+        if (std.mem.eql(u8, name, k)) return true;
+    }
+    return false;
+}
 
 /// Cross-platform file read helper
 fn readFileChunk(file: std.Io.File, buf: []u8) !usize {
@@ -771,6 +781,24 @@ pub fn validateConfig(allocator: std.mem.Allocator, config: DenConfig) !Validati
                         break :blk fields[i];
                     } else "keybindings.custom[N].key",
                     .message = "Keybinding key cannot be empty",
+                    .severity = .err,
+                });
+            }
+            // Catch a malformed key spec or keymap name here, so `den config
+            // check` reports it before the shell ever starts.
+            if (binding.key.len > 0) {
+                if (bindkey_spec.parseKeySpec(binding.key)) |_| {} else |err| {
+                    try errors.append(allocator, ConfigError{
+                        .field = "keybindings.custom[N].key",
+                        .message = bindkey_spec.errorMessage(err),
+                        .severity = .err,
+                    });
+                }
+            }
+            if (!isKnownKeymapName(binding.keymap)) {
+                try errors.append(allocator, ConfigError{
+                    .field = "keybindings.custom[N].keymap",
+                    .message = "Keybinding keymap must be one of main, emacs, viins, vicmd, vireplace, isearch",
                     .severity = .err,
                 });
             }

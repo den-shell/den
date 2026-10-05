@@ -117,8 +117,16 @@ pub const KeybindingConfig = struct {
     };
 
     pub const KeybindEntry = struct {
+        /// Key sequence in zsh's `bindkey` notation, e.g. "^X^E" or "\\e[1;5C".
         key: []const u8,
+        /// Widget name, or literal text to insert when `string` is true.
         action: []const u8,
+        /// Which keymap to bind in: "main" (the default), "emacs", "viins",
+        /// "vicmd", "vireplace" or "isearch".
+        keymap: []const u8 = "main",
+        /// When true, `action` is literal input to insert rather than the name of
+        /// a widget -- the equivalent of `bindkey -s`.
+        string: bool = false,
     };
 };
 

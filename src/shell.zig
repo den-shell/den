@@ -121,6 +121,7 @@ fn applySystemPaths(allocator: std.mem.Allocator, env: *std.StringHashMap([]cons
 const Terminal = @import("utils/terminal.zig");
 const LineEditor = Terminal.LineEditor;
 const keymap = Terminal.keymap;
+const bindkey_spec = @import("compat/bindkey.zig");
 const Completion = @import("utils/completion.zig").Completion;
 const Expansion = @import("utils/expansion.zig").Expansion;
 const Glob = @import("utils/glob.zig").Glob;
@@ -697,6 +698,10 @@ pub const Shell = struct {
         shell.loadAliasesFromConfig() catch {
             // Ignore errors loading aliases
         };
+
+        // Keybindings from config. This runs before ~/.denrc is sourced, so a
+        // `bindkey` in the rc file overrides a config binding for the same key.
+        shell.loadKeybindingsFromConfig() catch {};
 
         // Execute shell_init hooks
         var init_context = HookContext{
@@ -4165,6 +4170,54 @@ pub const Shell = struct {
         return self.last_exit_code;
     }
 
+    /// Apply `config.keybindings` to the keymaps.
+    ///
+    /// Mirrors loadAliasesFromConfig: called once from init and again on hot
+    /// reload. A bad entry warns and is skipped, because a typo in one binding
+    /// must not cost the user their shell. Strings are duplicated since
+    /// `self.config` is replaced wholesale on reload.
+    pub fn loadKeybindingsFromConfig(self: *Shell) !void {
+        self.keymaps.current = switch (self.config.keybindings.mode) {
+            .emacs => .emacs,
+            .vi => .viins,
+        };
+
+        const entries = self.config.keybindings.custom orelse return;
+        for (entries) |entry| {
+            const seq = bindkey_spec.parseKeySpec(entry.key) catch |err| {
+                try IO.eprint("den: config: keybindings.custom: {s}: {s}\n", .{
+                    entry.key,
+                    bindkey_spec.errorMessage(err),
+                });
+                continue;
+            };
+            const id = self.keymaps.resolve(entry.keymap) orelse {
+                try IO.eprint("den: config: keybindings.custom: no such keymap: {s}\n", .{entry.keymap});
+                continue;
+            };
+
+            if (entry.string) {
+                const body = bindkey_spec.parseString(self.allocator, entry.action) catch {
+                    try IO.eprint("den: config: keybindings.custom: bad string: {s}\n", .{entry.action});
+                    continue;
+                };
+                const index = self.keymaps.addString(self.allocator, body) catch {
+                    self.allocator.free(body);
+                    continue;
+                };
+                try self.keymaps.get(id).bind(self.allocator, seq.slice(), .push_input, index);
+                continue;
+            }
+
+            const widget = keymap.resolveWidget(entry.action);
+            if (widget == .unknown or widget == .user_widget or widget == .push_input) {
+                try IO.eprint("den: config: keybindings.custom: no such widget: {s}\n", .{entry.action});
+                continue;
+            }
+            try self.keymaps.get(id).bind(self.allocator, seq.slice(), widget, 0);
+        }
+    }
+
     pub fn loadAliasesFromConfig(self: *Shell) !void {
         // Check if aliases are enabled in config
         if (!self.config.aliases.enabled) return;
@@ -4212,6 +4265,12 @@ pub const Shell = struct {
 
             // Reload aliases
             self.loadAliasesFromConfig() catch {};
+
+            // Re-apply config keybindings. This is additive: bindings made
+            // interactively or from ~/.denrc survive, so a binding removed from
+            // the config file stays until `bindkey -r` or a restart -- the same
+            // way aliases already behave.
+            self.loadKeybindingsFromConfig() catch {};
 
             // Notify user (only in interactive mode)
             if (self.is_interactive) {

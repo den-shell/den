@@ -160,8 +160,21 @@
   },
 
   // Keybinding configuration
+  //
+  // `mode` is "emacs" or "vi". `custom` binds keys to named editing widgets,
+  // the same way the `bindkey` builtin does; run `bindkey -L` for the full list
+  // of defaults and `bindkey -l` for the keymap names.
+  //
+  // Key sequences use zsh's notation. Prefer the caret form in JSON: "\e" has
+  // to be written "\\e" here, because JSON consumes one level of escaping.
   "keybindings": {
     "mode": "emacs",
     "custom": null
+    // "custom": [
+    //   { "key": "^X^E", "action": "kill-whole-line" },
+    //   { "key": "\\e[1;5C", "action": "forward-word" },
+    //   { "key": "^X^Z", "action": "fg\\n", "string": true },
+    //   { "key": "jj", "action": "vi-cmd-mode", "keymap": "viins" }
+    // ]
   }
 }
