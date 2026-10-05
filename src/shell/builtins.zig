@@ -415,7 +415,12 @@ pub fn builtinHelp(shell: *Shell, cmd: *types.ParsedCommand) !void {
     try IO.print("  getopts spec var  Parse command options (stub)\n", .{});
     try IO.print("  timeout [-s sig] [-k dur] dur cmd  Execute with timeout\n", .{});
     try IO.print("  times             Display process times\n", .{});
-    try IO.print("\nTotal: 54 builtin commands available\n", .{});
+    try IO.print("\nLine Editing:\n", .{});
+    try IO.print("  bindkey [seq wid] Bind keys to editing widgets\n", .{});
+    try IO.print("  zle               Line editor control (widgets unimplemented)\n", .{});
+    // Counts the entries actually listed above. It read 54 while 56 were
+    // enumerated; the docs' separate figure of 58 is unverified and left alone.
+    try IO.print("\nTotal: 58 builtin commands available\n", .{});
     try IO.print("For more help, use 'man bash' or visit docs.den.sh\n", .{});
 }
 

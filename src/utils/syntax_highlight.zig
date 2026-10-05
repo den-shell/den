@@ -35,7 +35,7 @@ pub const SyntaxHighlighter = struct {
         "wait", "disown", "kill",   "trap",    "times",   "umask",    "getopts", "clear",
         "time", "hash",   "yes",    "reload",  "watch",   "tree",     "grep",    "find",
         "calc", "json",   "ls",     "seq",     "date",    "parallel", "http",    "base64",
-        "uuid",
+        "uuid",   "bindkey", "zle",
     };
 
     // Shell keywords
