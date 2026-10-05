@@ -324,6 +324,15 @@ pub const LineEditor = struct {
     /// When true, input is never read from the terminal.
     no_terminal: bool = false,
 
+    /// Bytes to consume before reading the terminal again.
+    ///
+    /// One queue serves three jobs: replaying a recorded macro as real input,
+    /// re-dispatching the tail of a key sequence that turned out not to match,
+    /// and feeding a byte script to a test with no tty attached.
+    input_queue: [256]u8 = undefined,
+    input_queue_head: usize = 0,
+    input_queue_len: usize = 0,
+
     const UndoState = struct {
         buffer: [4096]u8,
         length: usize,
@@ -357,6 +366,31 @@ pub const LineEditor = struct {
     /// Set the transient prompt (minimal prompt shown after command execution)
     pub fn setTransientPrompt(self: *LineEditor, transient: []const u8) void {
         self.transient_prompt = transient;
+    }
+
+    /// Next input byte: queued bytes first, then the terminal. Null means
+    /// nothing is available right now (the terminal read times out ~100ms).
+    fn nextByte(self: *LineEditor) !?u8 {
+        if (self.input_queue_len > 0) {
+            const b = self.input_queue[self.input_queue_head];
+            self.input_queue_head = (self.input_queue_head + 1) % self.input_queue.len;
+            self.input_queue_len -= 1;
+            return b;
+        }
+        if (self.no_terminal) return null;
+        return self.terminal.readByte();
+    }
+
+    /// Queue bytes to be consumed before any further terminal input. Silently
+    /// drops anything past the queue's capacity: the alternative is failing a
+    /// keystroke, and 256 bytes is far more than any key sequence or macro.
+    fn pushBack(self: *LineEditor, bytes: []const u8) void {
+        for (bytes) |b| {
+            if (self.input_queue_len >= self.input_queue.len) return;
+            const at = (self.input_queue_head + self.input_queue_len) % self.input_queue.len;
+            self.input_queue[at] = b;
+            self.input_queue_len += 1;
+        }
     }
 
     /// Set the editing mode (Emacs or Vi)
@@ -863,7 +897,7 @@ pub const LineEditor = struct {
                 try self.handleWindowResize();
             }
 
-            const maybe_byte = try self.terminal.readByte();
+            const maybe_byte = try self.nextByte();
             if (maybe_byte == null) {
                 // A lone Escape has no parser terminator. Once the terminal's
                 // read timeout expires, handle it as a standalone key instead
@@ -1033,7 +1067,7 @@ pub const LineEditor = struct {
                 0x18 => {
                     // Ctrl+X prefix for extended commands
                     // Read next character for the command
-                    const next_byte = (try self.terminal.readByte()) orelse continue;
+                    const next_byte = (try self.nextByte()) orelse continue;
                     switch (next_byte) {
                         '(' => try self.startMacroRecording(),
                         ')' => try self.stopMacroRecording(),
@@ -1590,10 +1624,13 @@ pub const LineEditor = struct {
         const total = utf8SeqLen(lead);
         var got: usize = 1;
         while (got < total) : (got += 1) {
-            const b = (try self.terminal.readByte()) orelse break;
+            const b = (try self.nextByte()) orelse break;
             if (!isUtf8Continuation(b)) {
-                // Malformed sequence — handle the stray byte as its own input.
-                if (b < 0x80) try self.insertChar(b);
+                // Malformed sequence. Hand the stray byte back to the read loop
+                // so it is dispatched as its own key: inserting it here typed a
+                // raw control character into the buffer when something like
+                // Ctrl+C or Tab arrived mid-codepoint.
+                self.pushBack(&.{b});
                 break;
             }
             bytes[got] = b;
@@ -1637,7 +1674,7 @@ pub const LineEditor = struct {
         var matched: usize = 0;
 
         while (true) {
-            const byte = (try self.terminal.readByte()) orelse {
+            const byte = (try self.nextByte()) orelse {
                 // No byte ready yet — wait briefly; a paste arrives as a burst,
                 // so this only spins at the very end.
                 std.Io.sleep(std.Options.debug_io, std.Io.Duration.fromNanoseconds(@as(i96, 1_000_000)), .awake) catch {};
@@ -3740,4 +3777,65 @@ test "acceptLine erases a ghost suggestion before submitting" {
     }
     try std.testing.expectEqualStrings("\x1b[0K\r\n", sink.items);
     try std.testing.expectEqual(@as(?[]const u8, null), editor.suggestion);
+}
+
+test "nextByte drains the pushback queue before the terminal" {
+    var editor = LineEditor.init(std.testing.allocator, "");
+    defer editor.deinit();
+    editor.no_terminal = true;
+
+    editor.pushBack("abc");
+    try std.testing.expectEqual(@as(?u8, 'a'), try editor.nextByte());
+    try std.testing.expectEqual(@as(?u8, 'b'), try editor.nextByte());
+    try std.testing.expectEqual(@as(?u8, 'c'), try editor.nextByte());
+    // Empty queue and no terminal: nothing available.
+    try std.testing.expectEqual(@as(?u8, null), try editor.nextByte());
+}
+
+test "pushBack wraps around the ring and drops the overflow" {
+    var editor = LineEditor.init(std.testing.allocator, "");
+    defer editor.deinit();
+    editor.no_terminal = true;
+
+    // Advance the head so the next fill has to wrap.
+    editor.pushBack("xy");
+    _ = try editor.nextByte();
+    _ = try editor.nextByte();
+
+    var full: [300]u8 = @splat('z');
+    editor.pushBack(&full);
+    try std.testing.expectEqual(editor.input_queue.len, editor.input_queue_len);
+
+    var seen: usize = 0;
+    while (try editor.nextByte()) |b| : (seen += 1) {
+        try std.testing.expectEqual(@as(u8, 'z'), b);
+    }
+    try std.testing.expectEqual(editor.input_queue.len, seen);
+}
+
+test "insertUtf8 hands a stray byte back instead of inserting it" {
+    // Regression test: a control byte arriving mid-codepoint used to be written
+    // into the buffer as a literal character.
+    var editor = LineEditor.init(std.testing.allocator, "");
+    defer editor.deinit();
+    editor.no_terminal = true;
+
+    var sink: std.ArrayList(u8) = .empty;
+    defer sink.deinit(std.testing.allocator);
+    editor.write_sink = &sink;
+
+    // 0xC3 starts a two-byte codepoint; 0x09 (Tab) is not a continuation byte.
+    editor.pushBack(&.{0x09});
+    try editor.insertUtf8(0xC3);
+
+    // The stray byte goes back to the read loop to be dispatched as its own
+    // key, rather than being typed into the line.
+    try std.testing.expectEqual(@as(?u8, 0x09), try editor.nextByte());
+    try std.testing.expectEqual(@as(?usize, null), std.mem.indexOfScalar(u8, editor.buffer[0..editor.length], 0x09));
+    // The incomplete lead byte is still inserted. That is deliberate and
+    // unchanged: `nextByte` also returns null when a slow terminal simply has
+    // not delivered the continuation bytes yet, and dropping the character
+    // there would silently swallow input.
+    try std.testing.expectEqual(@as(usize, 1), editor.length);
+    try std.testing.expectEqual(@as(u8, 0xC3), editor.buffer[0]);
 }
