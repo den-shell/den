@@ -761,9 +761,12 @@ run at the prompt.
 | `-d` | Restore the compiled-in defaults |
 
 Keymaps are `emacs`, `viins`, `vicmd`, `vireplace` and `isearch`, plus `main`,
-which follows whichever of `emacs`/`viins` is selected. There is no `menuselect`
-keymap: while the completion menu is open it owns the arrow keys and Enter, and
-bindings do not fire until it is dismissed.
+which follows whichever of `emacs`/`viins` is selected.
+
+There is no `menuselect` keymap. While the completion menu is open it owns the
+arrow keys, and any other key dismisses it and then does its usual job — except
+Enter, Tab and Shift+Tab, Escape, Ctrl+C and Ctrl+D, which manage the menu
+themselves.
 
 `-A`, `-N`, `-D`, `-R`, `-p` and `-m` are recognised and rejected with the
 reason, rather than silently doing nothing.
@@ -824,6 +827,8 @@ list. The common ones:
 | `quoted-insert` | Insert the next key literally |
 | `start-kbd-macro`, `end-kbd-macro`, `call-last-kbd-macro` | Keyboard macros |
 | `vi-cmd-mode`, `vi-insert` | Switch vi modes |
+| `digit-argument` | Accumulate a numeric prefix (vi `1`-`9`) |
+| `vi-digit-or-beginning-of-line` | vi `0`: a count digit, or the start of the line |
 | `undefined-key` | Beep |
 | `ignore` | Do nothing |
 
@@ -833,9 +838,13 @@ whose behaviour depends on context carry a `den-` prefix, such as
 `den-forward-char-or-autosuggest`, which accepts an inline suggestion at the end
 of the line and otherwise moves right.
 
-Names den does not have — `digit-argument`, `universal-argument`,
-`vi-repeat-change` — are reported as unknown rather than bound to something that
-quietly does nothing.
+Counts work in vi normal mode: `digit-argument` is bound to `1`-`9` and
+`vi-digit-or-beginning-of-line` to `0`, and the movement and
+single-character delete widgets consume the count, so `3h` and `2x` behave. Only
+those widgets honour it; others ignore a pending count.
+
+Names den does not have — `universal-argument`, `vi-repeat-change` — are reported
+as unknown rather than bound to something that quietly does nothing.
 
 ### User-defined widgets
 
@@ -850,7 +859,8 @@ Future line editing features planned:
 
 - Multiple cursors
 - `zle -N` user-defined widgets backed by shell functions
-- Numeric arguments (`digit-argument`)
+- `universal-argument`, and counts honoured by more widgets
+- Operator-motion pairs in vi (`dw`, `c$`); only `dd` and `cc` work today
 - `yank-pop` and redo
 
 Stay tuned!
