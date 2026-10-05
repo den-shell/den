@@ -929,6 +929,8 @@ pub const LineEditor = struct {
     fn feedKeys(self: *LineEditor, bytes: []const u8) !Flow {
         self.pushBack(bytes);
         while (try self.nextByte()) |b| {
+            // Mirrors readLine's per-byte handling.
+            if (self.macro_recording) self.recordKey(b);
             if (try self.keymapProbe(b)) |flow| {
                 switch (flow) {
                     .cont => {},
@@ -1125,7 +1127,11 @@ pub const LineEditor = struct {
             .undo => try self.undo(),
 
             .start_kbd_macro => try self.startMacroRecording(),
-            .end_kbd_macro => try self.stopMacroRecording(),
+            .end_kbd_macro => {
+                // The keys that triggered this were recorded on their way in.
+                if (self.macro_len >= key.len) self.macro_len -= key.len;
+                try self.stopMacroRecording();
+            },
             .call_last_kbd_macro => try self.playMacro(),
 
             .clear_screen => try self.clearScreen(),
@@ -1354,6 +1360,10 @@ pub const LineEditor = struct {
             }
             const byte = maybe_byte.?;
             self.idle_polls = 0;
+            // Record before dispatching, so a macro captures the keys as typed.
+            // The sequence that stops recording is trimmed by end-kbd-macro, and
+            // the one that starts it is discarded when the buffer resets.
+            if (self.macro_recording) self.recordKey(byte);
 
             // Keymap first, so a bound key wins over the built-in handling
             // below. Skipped while the escape parser is mid-sequence, and while
@@ -1966,20 +1976,11 @@ pub const LineEditor = struct {
     fn playMacro(self: *LineEditor) !void {
         if (self.macro_stored_len == 0) return;
 
-        // Temporarily disable recording during playback
-        const was_recording = self.macro_recording;
-        self.macro_recording = false;
-
-        // Replay each key
-        for (self.macro_stored[0..self.macro_stored_len]) |key| {
-            // For printable characters, insert them
-            if (key >= 0x20 and key <= 0x7E) {
-                try self.insertChar(key);
-            }
-            // Control characters could be handled here too
-        }
-
-        self.macro_recording = was_recording;
+        // Queue the recorded bytes so the read loop dispatches them as real
+        // keys. Replaying them by inserting characters directly, as this used
+        // to, could only ever reproduce typing -- no movement, no deletion, no
+        // history recall.
+        self.pushBack(self.macro_stored[0..self.macro_stored_len]);
     }
 
     fn insertChar(self: *LineEditor, char: u8) !void {
@@ -4734,4 +4735,55 @@ test "a string binding with a missing string does nothing" {
     _ = try editor.feedKeys("\x18\x1a");
     try std.testing.expectEqual(@as(usize, 0), editor.input_queue_len);
     try std.testing.expectEqual(@as(usize, 0), editor.length);
+}
+
+test "a macro records and replays real editing commands" {
+    // Regression test: recordKey had no caller, so nothing was ever stored, and
+    // playMacro only re-inserted printable bytes -- a macro could reproduce
+    // typing but no movement or deletion.
+    var sink: std.ArrayList(u8) = .empty;
+    defer sink.deinit(std.testing.allocator);
+    var maps = keymap.KeymapSet.init();
+    defer maps.deinit(std.testing.allocator);
+    var editor = testKeyEditor(&sink, &maps, "");
+    defer editor.deinit();
+
+    // Record: Ctrl+X ( , then "ab", then Ctrl+A (move home), then Ctrl+X )
+    _ = try editor.feedKeys("\x18(");
+    try std.testing.expect(editor.macro_recording);
+    try editor.insertChar('a');
+    try editor.insertChar('b');
+    _ = try editor.feedKeys("ab\x01\x18)");
+    try std.testing.expect(!editor.macro_recording);
+
+    // "ab" fell through the keymap (printables are not bound), so only the
+    // dispatched keys were recorded -- but Ctrl+A was, and the trigger was not.
+    try std.testing.expectEqual(@as(?usize, null), std.mem.indexOfScalar(u8, editor.macro_stored[0..editor.macro_stored_len], 0x18));
+    try std.testing.expect(std.mem.indexOfScalar(u8, editor.macro_stored[0..editor.macro_stored_len], 0x01) != null);
+
+    // Replaying queues the recorded bytes for the read loop.
+    editor.cursor = editor.length;
+    _ = try editor.invokeWidget(.call_last_kbd_macro, "\x18e");
+    try std.testing.expect(editor.input_queue_len > 0);
+
+    // Draining them re-runs Ctrl+A, which moves the cursor home.
+    while (try editor.nextByte()) |b| {
+        _ = try editor.keymapProbe(b);
+    }
+    try std.testing.expectEqual(@as(usize, 0), editor.cursor);
+}
+
+test "stopping a macro does not record its own trigger" {
+    var sink: std.ArrayList(u8) = .empty;
+    defer sink.deinit(std.testing.allocator);
+    var maps = keymap.KeymapSet.init();
+    defer maps.deinit(std.testing.allocator);
+    var editor = testKeyEditor(&sink, &maps, "");
+    defer editor.deinit();
+
+    _ = try editor.feedKeys("\x18(");
+    _ = try editor.feedKeys("\x01\x18)");
+    // Exactly the one key between the start and stop sequences.
+    try std.testing.expectEqual(@as(usize, 1), editor.macro_stored_len);
+    try std.testing.expectEqual(@as(u8, 0x01), editor.macro_stored[0]);
 }
