@@ -25,6 +25,8 @@ const CompletionFn = types.CompletionFn;
 const EditingMode = types.EditingMode;
 const ViMode = types.ViMode;
 const Flow = types.Flow;
+const keymap = @import("keymap.zig");
+const Widget = keymap.Widget;
 
 // Import from parent utils directory
 const SyntaxHighlighter = @import("../syntax_highlight.zig").SyntaxHighlighter;
@@ -420,7 +422,6 @@ pub const LineEditor = struct {
         }
     }
 
-    /// Handle Vi normal mode key press
     /// Handle one key in vi normal mode. Returns the same Flow as any other
     /// editing action, so accepting a line goes through acceptLine rather
     /// than a second, divergent copy of it.
@@ -434,42 +435,31 @@ pub const LineEditor = struct {
                 return .cont;
             },
             'I' => {
-                self.cursor = 0;
-                self.viEnterInsertMode();
+                self.viInsertBol();
                 return .cont;
             },
             'a' => {
-                if (self.cursor < self.length) {
-                    self.cursor += 1;
-                }
-                self.viEnterInsertMode();
+                self.viAddNext();
                 return .cont;
             },
             'A' => {
-                self.cursor = self.length;
-                self.viEnterInsertMode();
+                self.viAddEol();
                 return .cont;
             },
             'o', 'O' => {
-                // In line editor, just go to end and insert
-                self.cursor = self.length;
-                self.viEnterInsertMode();
+                self.viOpenLine();
                 return .cont;
             },
             's' => {
-                // Substitute: delete char and enter insert mode
-                if (self.cursor < self.length) {
-                    try self.deleteChar();
-                }
-                self.viEnterInsertMode();
+                try self.viSubstitute();
                 return .cont;
             },
-            'S', 'C' => {
-                // Change line from cursor / substitute entire line
-                self.length = if (char == 'S') 0 else self.cursor;
-                if (char == 'S') self.cursor = 0;
-                self.viEnterInsertMode();
-                try self.redrawLine();
+            'S' => {
+                try self.viChangeWholeLine();
+                return .cont;
+            },
+            'C' => {
+                try self.viChangeEol();
                 return .cont;
             },
             'R' => {
@@ -748,6 +738,289 @@ pub const LineEditor = struct {
     }
 
     /// Read a line with editing support
+    // -----------------------------------------------------------------------
+    // Widgets
+    //
+    // Named editing actions, so a key can be bound to one by name. Most are a
+    // single call to a method that already existed; the ones defined here are
+    // the actions that only existed as inline switch arms, plus the composites
+    // where Den overloads a key by context.
+    // -----------------------------------------------------------------------
+
+    /// Ctrl+C: abandon whatever is in progress.
+    fn sendBreak(self: *LineEditor) !Flow {
+        if (self.reverse_search_mode) {
+            try self.cancelReverseSearch();
+            try self.writeBytes("\r\n");
+            try self.writePromptCrlf();
+            self.length = 0;
+            self.cursor = 0;
+            return .cont;
+        }
+
+        if (self.completion_list != null) {
+            self.clearCompletionState();
+            try self.writeBytes("^C\r\n");
+            try self.displayPrompt();
+            self.length = 0;
+            self.cursor = 0;
+            self.resetRenderedRowToPrompt();
+            return .cont;
+        }
+
+        if (self.multiline_buffer) |*mlb| {
+            mlb.deinit(self.allocator);
+            self.multiline_buffer = null;
+            self.in_multiline = false;
+        }
+
+        // Nothing typed: just a fresh prompt. Avoids a duplicate prompt after
+        // Ctrl+C'ing an external command.
+        if (self.length == 0) {
+            try self.writeBytes("\r\n");
+            try self.displayPrompt();
+            self.resetRenderedRowToPrompt();
+            return .cont;
+        }
+
+        try self.writeBytes("^C\r\n");
+        return .interrupt;
+    }
+
+    /// Ctrl+D: end of input on an empty line, otherwise delete forward.
+    fn deleteCharOrEof(self: *LineEditor) !Flow {
+        if (self.length == 0) {
+            if (self.completion_list != null) try self.clearCompletionDisplay();
+            try self.writeBytes("\r\n");
+            return .eof;
+        }
+        try self.deleteChar();
+        return .cont;
+    }
+
+    /// Insert the key that was typed.
+    fn selfInsert(self: *LineEditor, key: []const u8) !void {
+        if (key.len == 0) return;
+        const b = key[0];
+        if (b >= 0xC2) try self.insertUtf8(b) else try self.insertChar(b);
+    }
+
+    /// Insert the next key literally, whatever it is.
+    fn quotedInsert(self: *LineEditor) !void {
+        const b = (try self.nextByte()) orelse return;
+        try self.insertChar(b);
+    }
+
+    fn killWholeLine(self: *LineEditor) !void {
+        if (self.length == 0) return;
+        self.saveUndoState();
+        self.pushToKillRing(self.buffer[0..self.length]);
+        self.length = 0;
+        self.cursor = 0;
+        try self.redrawLine();
+    }
+
+    fn undefinedKey(self: *LineEditor) !void {
+        try self.writeBytes("\x07");
+    }
+
+    /// Overwrite the character under the cursor (vi replace mode).
+    fn viReplaceChar(self: *LineEditor, key: []const u8) !void {
+        if (key.len == 0 or self.cursor >= self.length) return;
+        self.saveUndoState();
+        self.buffer[self.cursor] = key[0];
+        if (self.cursor < self.length - 1) self.cursor += 1;
+        try self.redrawLine();
+    }
+
+    /// Add a character to the incremental-search query.
+    fn isearchInsert(self: *LineEditor, key: []const u8) !void {
+        if (key.len == 0) return;
+        if (self.reverse_search_query_len >= self.reverse_search_query.len) return;
+        self.reverse_search_query[self.reverse_search_query_len] = key[0];
+        self.reverse_search_query_len += 1;
+        if (self.history_count) |count| self.reverse_search_history_index = count.*;
+        try self.updateReverseSearch();
+    }
+
+    /// Remove the last character from the incremental-search query.
+    fn isearchDeleteChar(self: *LineEditor) !void {
+        if (self.reverse_search_query_len == 0) return;
+        self.reverse_search_query_len -= 1;
+        if (self.history_count) |count| self.reverse_search_history_index = count.*;
+        try self.updateReverseSearch();
+    }
+
+    /// A key with no meaning during incremental search accepts the match and is
+    /// then run as itself -- zsh's rule. Den used to drop it silently.
+    fn isearchAcceptAndRedispatch(self: *LineEditor, key: []const u8) !void {
+        try self.acceptReverseSearch();
+        self.pushBack(key);
+    }
+
+    // Vi mode transitions, shared with handleViNormalKey so there is one
+    // implementation of each.
+
+    fn viAddNext(self: *LineEditor) void {
+        if (self.cursor < self.length) self.cursor += 1;
+        self.viEnterInsertMode();
+    }
+
+    fn viAddEol(self: *LineEditor) void {
+        self.cursor = self.length;
+        self.viEnterInsertMode();
+    }
+
+    fn viInsertBol(self: *LineEditor) void {
+        self.cursor = 0;
+        self.viEnterInsertMode();
+    }
+
+    /// There is only one line to open onto, so this goes to its end.
+    fn viOpenLine(self: *LineEditor) void {
+        self.cursor = self.length;
+        self.viEnterInsertMode();
+    }
+
+    fn viSubstitute(self: *LineEditor) !void {
+        if (self.cursor < self.length) try self.deleteChar();
+        self.viEnterInsertMode();
+    }
+
+    fn viChangeWholeLine(self: *LineEditor) !void {
+        self.length = 0;
+        self.cursor = 0;
+        self.viEnterInsertMode();
+        try self.redrawLine();
+    }
+
+    fn viChangeEol(self: *LineEditor) !void {
+        self.length = self.cursor;
+        self.viEnterInsertMode();
+        try self.redrawLine();
+    }
+
+    /// Run a widget. `key` is the byte sequence that triggered it, which the
+    /// inserting widgets need (zsh calls it $KEYS).
+    pub fn invokeWidget(self: *LineEditor, widget: Widget, key: []const u8) !Flow {
+        switch (widget) {
+            .accept_line => return self.acceptLine(),
+            .send_break => return self.sendBreak(),
+            .delete_char_or_eof => return self.deleteCharOrEof(),
+            .undefined_key => try self.undefinedKey(),
+            .ignore => {},
+
+            .beginning_of_line => try self.moveCursorHome(),
+            .end_of_line => try self.moveCursorEnd(),
+            .end_of_line_or_autosuggest => {
+                if (self.suggestion != null and self.cursor == self.length) {
+                    try self.acceptSuggestion();
+                } else {
+                    try self.moveCursorEnd();
+                }
+            },
+            .backward_char => try self.moveCursorLeft(),
+            .forward_char => try self.moveCursorRight(),
+            .forward_char_or_autosuggest => {
+                if (self.suggestion != null and self.cursor == self.length) {
+                    try self.acceptSuggestion();
+                } else {
+                    try self.moveCursorRight();
+                }
+            },
+            .backward_word => try self.moveCursorWordLeft(),
+            .forward_word => try self.moveCursorWordRight(),
+            .vi_forward_word => {
+                self.moveForwardWord();
+                try self.redrawLine();
+            },
+            .vi_backward_word => {
+                self.moveBackwardWord();
+                try self.redrawLine();
+            },
+            .vi_forward_word_end => {
+                self.moveToEndOfWord();
+                try self.redrawLine();
+            },
+
+            .self_insert => try self.selfInsert(key),
+            .vi_replace_char => try self.viReplaceChar(key),
+            .quoted_insert => try self.quotedInsert(),
+            .backward_delete_char => try self.backspace(),
+            .delete_char => try self.deleteChar(),
+            .transpose_chars => try self.transposeChars(),
+
+            .kill_line => try self.killToEnd(),
+            .backward_kill_line => try self.killToStart(),
+            .kill_whole_line => try self.killWholeLine(),
+            .kill_word => try self.killWordForward(),
+            .backward_kill_word => try self.killWordBackward(),
+            .yank => try self.yank(),
+            .kill_region_or_backward_kill_line => {
+                if (self.visual_mode) try self.cutSelection() else try self.killToStart();
+            },
+            .copy_region_or_backward_kill_word => {
+                if (self.visual_mode) try self.copySelection() else try self.killWordBackward();
+            },
+
+            .set_mark_command => try self.startVisualMode(),
+            .copy_region_as_kill => try self.copySelection(),
+            .kill_region => try self.cutSelection(),
+
+            .up_line_or_history => try self.historyPrevious(),
+            .down_line_or_history => try self.historyNext(),
+            .history_incremental_search_backward => {
+                if (self.reverse_search_mode) {
+                    try self.continueReverseSearch();
+                } else {
+                    try self.startReverseSearch();
+                }
+            },
+            .toggle_fuzzy_search => try self.toggleFuzzySearch(),
+            .accept_search => try self.acceptReverseSearch(),
+            .cancel_search => try self.cancelReverseSearch(),
+            .isearch_insert => try self.isearchInsert(key),
+            .isearch_delete_char => try self.isearchDeleteChar(),
+            .isearch_accept_and_redispatch => try self.isearchAcceptAndRedispatch(key),
+
+            .expand_or_complete => try self.handleTabCompletion(false),
+            .reverse_menu_complete => try self.handleTabCompletion(true),
+            .autosuggest_accept => try self.acceptSuggestion(),
+
+            .undo => try self.undo(),
+
+            .start_kbd_macro => try self.startMacroRecording(),
+            .end_kbd_macro => try self.stopMacroRecording(),
+            .call_last_kbd_macro => try self.playMacro(),
+
+            .clear_screen => try self.clearScreen(),
+            .redisplay => try self.redrawLine(),
+
+            .vi_cmd_mode => {
+                self.viEnterNormalMode();
+                try self.redrawLine();
+            },
+            .vi_insert => self.viEnterInsertMode(),
+            .vi_add_next => self.viAddNext(),
+            .vi_add_eol => self.viAddEol(),
+            .vi_insert_bol => self.viInsertBol(),
+            .vi_open_line_below, .vi_open_line_above => self.viOpenLine(),
+            .vi_substitute => try self.viSubstitute(),
+            .vi_change_whole_line => try self.viChangeWholeLine(),
+            .vi_change_eol => try self.viChangeEol(),
+            .overwrite_mode => self.vi_mode = .replace,
+
+            .den_escape => try self.handleStandaloneEscape(),
+            .bracketed_paste => try self.handlePaste(),
+
+            // `zle -N` is not implemented, so nothing ever binds these. The
+            // builtin rejects the attempt with an explanation rather than
+            // letting a key quietly do nothing.
+            .user_widget, .unknown => {},
+        }
+        return .cont;
+    }
+
     /// Accept the current line.
     ///
     /// Returns `.cont` when the key was absorbed -- an incremental-search or
@@ -2064,8 +2337,15 @@ pub const LineEditor = struct {
         try self.writeBytes(self.buffer[0..self.length]);
         try self.writeBytes("\x1B[K");
 
-        // Move cursor to home
-        while (self.cursor < self.length) {
+        // The remaining text was just rewritten from column 0, so the terminal
+        // cursor sits at its end; walk it back to the start.
+        //
+        // This loop used to test `self.cursor < self.length` without ever
+        // changing `self.cursor`, which is already 0 by this point -- so it
+        // never terminated whenever any text followed the cursor. Ctrl+U with
+        // the cursor mid-line hung the shell, spinning on cursor-left escapes.
+        var back: usize = self.length;
+        while (back > 0) : (back -= 1) {
             try self.writeBytes("\x1B[D");
         }
         self.cursor = 0;
@@ -3645,6 +3925,10 @@ fn testEditor(sink: *std.ArrayList(u8), text: []const u8) LineEditor {
     editor.cursor = text.len;
     editor.write_sink = sink;
     editor.no_terminal = true;
+    // The highlighter and the history-backed suggestions are not under test
+    // here, and both do real work on every repaint.
+    editor.syntax_highlighting = false;
+    editor.autosuggestions = false;
     return editor;
 }
 
@@ -3838,4 +4122,198 @@ test "insertUtf8 hands a stray byte back instead of inserting it" {
     // there would silently swallow input.
     try std.testing.expectEqual(@as(usize, 1), editor.length);
     try std.testing.expectEqual(@as(u8, 0xC3), editor.buffer[0]);
+}
+
+test "invokeWidget moves the cursor" {
+    var sink: std.ArrayList(u8) = .empty;
+    defer sink.deinit(std.testing.allocator);
+    var editor = testEditor(&sink, "echo hi");
+    defer editor.deinit();
+
+    _ = try editor.invokeWidget(.beginning_of_line, "\x01");
+    try std.testing.expectEqual(@as(usize, 0), editor.cursor);
+    _ = try editor.invokeWidget(.end_of_line, "\x05");
+    try std.testing.expectEqual(@as(usize, 7), editor.cursor);
+    _ = try editor.invokeWidget(.backward_char, "\x02");
+    try std.testing.expectEqual(@as(usize, 6), editor.cursor);
+    _ = try editor.invokeWidget(.forward_char, "\x06");
+    try std.testing.expectEqual(@as(usize, 7), editor.cursor);
+}
+
+test "invokeWidget edits the line" {
+    var sink: std.ArrayList(u8) = .empty;
+    defer sink.deinit(std.testing.allocator);
+    var editor = testEditor(&sink, "echo hi");
+    defer editor.deinit();
+
+    _ = try editor.invokeWidget(.backward_kill_word, "\x17");
+    try std.testing.expectEqualStrings("echo ", editor.buffer[0..editor.length]);
+
+    _ = try editor.invokeWidget(.self_insert, "y");
+    try std.testing.expectEqualStrings("echo y", editor.buffer[0..editor.length]);
+
+    _ = try editor.invokeWidget(.kill_whole_line, "");
+    try std.testing.expectEqual(@as(usize, 0), editor.length);
+    try std.testing.expectEqual(@as(usize, 0), editor.cursor);
+
+    // kill_whole_line saved to the kill ring, so yank brings it back.
+    _ = try editor.invokeWidget(.yank, "\x19");
+    try std.testing.expectEqualStrings("echo y", editor.buffer[0..editor.length]);
+}
+
+test "invokeWidget kill_line and backward_kill_line split at the cursor" {
+    var sink: std.ArrayList(u8) = .empty;
+    defer sink.deinit(std.testing.allocator);
+    var editor = testEditor(&sink, "echo hello");
+    defer editor.deinit();
+
+    editor.cursor = 5;
+    _ = try editor.invokeWidget(.kill_line, "\x0b");
+    try std.testing.expectEqualStrings("echo ", editor.buffer[0..editor.length]);
+
+    _ = try editor.invokeWidget(.backward_kill_line, "\x15");
+    try std.testing.expectEqual(@as(usize, 0), editor.length);
+}
+
+test "invokeWidget reports the flow for accept, break and eof" {
+    var sink: std.ArrayList(u8) = .empty;
+    defer sink.deinit(std.testing.allocator);
+
+    {
+        var editor = testEditor(&sink, "ls");
+        defer editor.deinit();
+        switch (try editor.invokeWidget(.accept_line, "\r")) {
+            .accepted => |line| {
+                defer std.testing.allocator.free(line);
+                try std.testing.expectEqualStrings("ls", line);
+            },
+            else => return error.TestUnexpectedResult,
+        }
+    }
+    {
+        // Ctrl+C with text present interrupts.
+        var editor = testEditor(&sink, "ls");
+        defer editor.deinit();
+        try std.testing.expectEqual(Flow.interrupt, try editor.invokeWidget(.send_break, "\x03"));
+    }
+    {
+        // Ctrl+C on an empty line just reprompts.
+        var editor = testEditor(&sink, "");
+        defer editor.deinit();
+        try std.testing.expectEqual(Flow.cont, try editor.invokeWidget(.send_break, "\x03"));
+    }
+    {
+        // Ctrl+D on an empty line is end of input.
+        var editor = testEditor(&sink, "");
+        defer editor.deinit();
+        try std.testing.expectEqual(Flow.eof, try editor.invokeWidget(.delete_char_or_eof, "\x04"));
+    }
+    {
+        // With text, it deletes forward instead.
+        var editor = testEditor(&sink, "ab");
+        defer editor.deinit();
+        editor.cursor = 0;
+        try std.testing.expectEqual(Flow.cont, try editor.invokeWidget(.delete_char_or_eof, "\x04"));
+        try std.testing.expectEqualStrings("b", editor.buffer[0..editor.length]);
+    }
+}
+
+test "invokeWidget undefined_key beeps and ignore does nothing" {
+    var sink: std.ArrayList(u8) = .empty;
+    defer sink.deinit(std.testing.allocator);
+    var editor = testEditor(&sink, "ab");
+    defer editor.deinit();
+
+    _ = try editor.invokeWidget(.undefined_key, "\x07");
+    try std.testing.expectEqualStrings("\x07", sink.items);
+
+    sink.clearRetainingCapacity();
+    _ = try editor.invokeWidget(.ignore, "\x00");
+    try std.testing.expectEqualStrings("", sink.items);
+    try std.testing.expectEqualStrings("ab", editor.buffer[0..editor.length]);
+}
+
+test "invokeWidget quoted_insert takes the next byte literally" {
+    var sink: std.ArrayList(u8) = .empty;
+    defer sink.deinit(std.testing.allocator);
+    var editor = testEditor(&sink, "");
+    defer editor.deinit();
+    editor.no_terminal = true;
+
+    editor.pushBack(&.{0x1B});
+    _ = try editor.invokeWidget(.quoted_insert, "\x16");
+    try std.testing.expectEqual(@as(usize, 1), editor.length);
+    try std.testing.expectEqual(@as(u8, 0x1B), editor.buffer[0]);
+}
+
+test "invokeWidget CtrlU outside visual mode kills to start" {
+    // Regression test: with text after the cursor, killToStart used to spin
+    // forever writing cursor-left escapes, hanging the shell.
+    var sink: std.ArrayList(u8) = .empty;
+    defer sink.deinit(std.testing.allocator);
+    var editor = testEditor(&sink, "echo hello");
+    defer editor.deinit();
+    editor.cursor = 5;
+    _ = try editor.invokeWidget(.kill_region_or_backward_kill_line, "\x15");
+    try std.testing.expectEqualStrings("hello", editor.buffer[0..editor.length]);
+    try std.testing.expectEqual(@as(usize, 0), editor.cursor);
+}
+
+test "invokeWidget CtrlU inside visual mode cuts the selection" {
+    var sink: std.ArrayList(u8) = .empty;
+    defer sink.deinit(std.testing.allocator);
+    var editor = testEditor(&sink, "echo hello");
+    defer editor.deinit();
+    editor.visual_mode = true;
+    editor.visual_start = 0;
+    editor.cursor = 4;
+    _ = try editor.invokeWidget(.kill_region_or_backward_kill_line, "\x15");
+    try std.testing.expectEqualStrings(" hello", editor.buffer[0..editor.length]);
+}
+
+test "invokeWidget vi transitions match handleViNormalKey" {
+    var sink: std.ArrayList(u8) = .empty;
+    defer sink.deinit(std.testing.allocator);
+
+    // Both paths share one implementation, so `A` and vi_add_eol must agree.
+    var a = testEditor(&sink, "echo");
+    defer a.deinit();
+    a.setEditingMode(.vi);
+    a.vi_mode = .normal;
+    a.cursor = 0;
+    _ = try a.handleViNormalKey('A');
+
+    var b = testEditor(&sink, "echo");
+    defer b.deinit();
+    b.setEditingMode(.vi);
+    b.vi_mode = .normal;
+    b.cursor = 0;
+    _ = try b.invokeWidget(.vi_add_eol, "A");
+
+    try std.testing.expectEqual(a.cursor, b.cursor);
+    try std.testing.expectEqual(a.vi_mode, b.vi_mode);
+    try std.testing.expectEqual(ViMode.insert, b.vi_mode);
+    try std.testing.expectEqual(@as(usize, 4), b.cursor);
+}
+
+test "invokeWidget isearch widgets drive the search query" {
+    var sink: std.ArrayList(u8) = .empty;
+    defer sink.deinit(std.testing.allocator);
+    var editor = testEditor(&sink, "");
+    defer editor.deinit();
+    editor.reverse_search_mode = true;
+
+    _ = try editor.invokeWidget(.isearch_insert, "g");
+    _ = try editor.invokeWidget(.isearch_insert, "i");
+    _ = try editor.invokeWidget(.isearch_insert, "t");
+    try std.testing.expectEqualStrings("git", editor.reverse_search_query[0..editor.reverse_search_query_len]);
+
+    _ = try editor.invokeWidget(.isearch_delete_char, "\x7f");
+    try std.testing.expectEqualStrings("gi", editor.reverse_search_query[0..editor.reverse_search_query_len]);
+
+    // An unbound key accepts the search and is then re-run as itself.
+    editor.no_terminal = true;
+    _ = try editor.invokeWidget(.isearch_accept_and_redispatch, "\x01");
+    try std.testing.expect(!editor.reverse_search_mode);
+    try std.testing.expectEqual(@as(?u8, 0x01), try editor.nextByte());
 }
