@@ -445,210 +445,6 @@ pub const LineEditor = struct {
         }
     }
 
-    /// Handle one key in vi normal mode. Returns the same Flow as any other
-    /// editing action, so accepting a line goes through acceptLine rather
-    /// than a second, divergent copy of it.
-    fn handleViNormalKey(self: *LineEditor, char: u8) !Flow {
-        const count = if (self.vi_count == 0) 1 else self.vi_count;
-
-        switch (char) {
-            // Mode switching
-            'i' => {
-                self.viEnterInsertMode();
-                return .cont;
-            },
-            'I' => {
-                self.viInsertBol();
-                return .cont;
-            },
-            'a' => {
-                self.viAddNext();
-                return .cont;
-            },
-            'A' => {
-                self.viAddEol();
-                return .cont;
-            },
-            'o', 'O' => {
-                self.viOpenLine();
-                return .cont;
-            },
-            's' => {
-                try self.viSubstitute();
-                return .cont;
-            },
-            'S' => {
-                try self.viChangeWholeLine();
-                return .cont;
-            },
-            'C' => {
-                try self.viChangeEol();
-                return .cont;
-            },
-            'R' => {
-                self.vi_mode = .replace;
-                return .cont;
-            },
-
-            // Navigation
-            'h' => {
-                for (0..count) |_| {
-                    try self.moveCursorLeft();
-                }
-                return .cont;
-            },
-            'l' => {
-                for (0..count) |_| {
-                    try self.moveCursorRight();
-                }
-                return .cont;
-            },
-            '0' => {
-                if (self.vi_count == 0) {
-                    // Go to beginning of line
-                    self.cursor = 0;
-                    try self.redrawLine();
-                } else {
-                    // It's a count digit
-                    self.vi_count = self.vi_count * 10;
-                }
-                return .cont;
-            },
-            '$' => {
-                self.cursor = if (self.length > 0) self.length - 1 else 0;
-                try self.redrawLine();
-                return .cont;
-            },
-            '^' => {
-                // Go to first non-blank
-                self.cursor = 0;
-                while (self.cursor < self.length and (self.buffer[self.cursor] == ' ' or self.buffer[self.cursor] == '\t')) {
-                    self.cursor += 1;
-                }
-                try self.redrawLine();
-                return .cont;
-            },
-            'w' => {
-                // Move forward word
-                for (0..count) |_| {
-                    self.moveForwardWord();
-                }
-                try self.redrawLine();
-                return .cont;
-            },
-            'b' => {
-                // Move backward word
-                for (0..count) |_| {
-                    self.moveBackwardWord();
-                }
-                try self.redrawLine();
-                return .cont;
-            },
-            'e' => {
-                // Move to end of word
-                for (0..count) |_| {
-                    self.moveToEndOfWord();
-                }
-                try self.redrawLine();
-                return .cont;
-            },
-
-            // Editing
-            'x' => {
-                // Delete character under cursor
-                for (0..count) |_| {
-                    if (self.cursor < self.length) {
-                        try self.deleteChar();
-                    }
-                }
-                return .cont;
-            },
-            'X' => {
-                // Delete character before cursor
-                for (0..count) |_| {
-                    if (self.cursor > 0) {
-                        try self.backspace();
-                    }
-                }
-                return .cont;
-            },
-            'D' => {
-                // Delete to end of line
-                self.length = self.cursor;
-                try self.redrawLine();
-                return .cont;
-            },
-            'd' => {
-                if (self.vi_pending_op == 'd') {
-                    // dd - delete entire line
-                    self.length = 0;
-                    self.cursor = 0;
-                    self.vi_pending_op = null;
-                    try self.redrawLine();
-                } else {
-                    self.vi_pending_op = 'd';
-                }
-                return .cont;
-            },
-            'c' => {
-                if (self.vi_pending_op == 'c') {
-                    // cc - change entire line
-                    self.length = 0;
-                    self.cursor = 0;
-                    self.vi_pending_op = null;
-                    self.viEnterInsertMode();
-                    try self.redrawLine();
-                } else {
-                    self.vi_pending_op = 'c';
-                }
-                return .cont;
-            },
-
-            // History
-            'j' => {
-                try self.historyNext();
-                return .cont;
-            },
-            'k' => {
-                try self.historyPrevious();
-                return .cont;
-            },
-
-            // Undo/Redo
-            'u' => {
-                try self.undo();
-                return .cont;
-            },
-
-            // Search
-            '/' => {
-                try self.startReverseSearch();
-                return .cont;
-            },
-            'n' => {
-                try self.continueReverseSearch();
-                return .cont;
-            },
-
-            // Count digits
-            '1', '2', '3', '4', '5', '6', '7', '8', '9' => {
-                self.vi_count = self.vi_count * 10 + (char - '0');
-                return .cont;
-            },
-
-            // Execute line
-            '\r', '\n' => {
-                return try self.acceptLine();
-            },
-
-            else => {
-                self.vi_pending_op = null;
-                self.vi_count = 0;
-                return .cont;
-            },
-        }
-    }
-
     /// Move forward by one word (vi style)
     fn moveForwardWord(self: *LineEditor) void {
         // Skip current word
@@ -881,8 +677,7 @@ pub const LineEditor = struct {
         self.pushBack(key);
     }
 
-    // Vi mode transitions, shared with handleViNormalKey so there is one
-    // implementation of each.
+    // Vi mode transitions.
 
     /// Consume a pending numeric prefix, defaulting to 1.
     ///
@@ -941,14 +736,126 @@ pub const LineEditor = struct {
         while (try self.nextByte()) |b| {
             // Mirrors readLine's per-byte handling.
             if (self.macro_recording) self.recordKey(b);
-            if (try self.keymapProbe(b)) |flow| {
-                switch (flow) {
-                    .cont => {},
-                    else => return flow,
-                }
-            }
+            if (try self.keymapProbe(b)) |flow| switch (flow) {
+                .cont => {},
+                else => return flow,
+            };
         }
         if (self.pending.len > 0) return try self.resolvePending();
+        return .cont;
+    }
+
+    /// Which way a key moves the highlight in the completion menu.
+    const MenuDirection = enum { up, down, left, right };
+
+    /// Move the highlight within the completion menu.
+    ///
+    /// The list is laid out column-major (idx = col * rows + row), so down/up
+    /// step within a column and left/right step between columns -- matching what
+    /// the user sees, instead of both axes moving linearly.
+    fn menuSelectMove(self: *LineEditor, dir: MenuDirection) !void {
+        const list = self.completion_list orelse return;
+        const len = list.len;
+        if (len == 0) return;
+        const grid = self.completionGrid();
+        const nr = @max(1, grid.rows);
+        const col = self.completion_index / nr;
+        const row = self.completion_index % nr;
+
+        switch (dir) {
+            .down => {
+                // Next row in this column; wrap to the column's top.
+                const ni = col * nr + (row + 1);
+                self.completion_index = if (row + 1 < nr and ni < len) ni else col * nr;
+            },
+            .up => {
+                if (row > 0) {
+                    self.completion_index -= 1;
+                } else {
+                    // Wrap to the bottom-most populated row of this column.
+                    var r = nr - 1;
+                    while (col * nr + r >= len) r -= 1;
+                    self.completion_index = col * nr + r;
+                }
+            },
+            .right => {
+                // Next column, same row; wrap to the first column.
+                const ni = (col + 1) * nr + row;
+                self.completion_index = if (col + 1 < grid.cols and ni < len) ni else row;
+            },
+            .left => {
+                if (col > 0) {
+                    self.completion_index = (col - 1) * nr + row;
+                } else {
+                    // Wrap to the last column that has an item in this row.
+                    var c = grid.cols - 1;
+                    while (c * nr + row >= len) c -= 1;
+                    self.completion_index = c * nr + row;
+                }
+            },
+        }
+        try self.applyCurrentCompletion();
+        try self.updateCompletionListHighlight();
+    }
+
+    /// Keys the completion menu handles itself, so the menu guard must not
+    /// dismiss it before they run: accept-line takes the highlighted entry, Tab
+    /// cycles, and the rest already check for an open menu.
+    fn managesCompletionMenu(widget: Widget) bool {
+        return switch (widget) {
+            .accept_line,
+            .expand_or_complete,
+            .reverse_menu_complete,
+            .den_escape,
+            .send_break,
+            .delete_char_or_eof,
+            => true,
+            else => false,
+        };
+    }
+
+    /// While the completion menu is open it owns the arrow keys, and any other
+    /// key dismisses it before doing its usual job.
+    ///
+    /// This is deliberately imperative rather than a `menuselect` keymap: zsh's
+    /// menuselect falls through to the parent keymap for everything it does not
+    /// bind, and implementing that fallthrough would cost a second lookup on
+    /// every keystroke for this one feature.
+    fn menuGuard(self: *LineEditor, widget: Widget) !bool {
+        if (self.completion_list == null) return false;
+        const dir: ?MenuDirection = switch (widget) {
+            .up_line_or_history => .up,
+            .down_line_or_history => .down,
+            .backward_char => .left,
+            .forward_char, .forward_char_or_autosuggest => .right,
+            else => null,
+        };
+        if (dir) |d| {
+            try self.menuSelectMove(d);
+            return true;
+        }
+        if (!managesCompletionMenu(widget)) self.clearCompletionState();
+        return false;
+    }
+
+    /// What an unbound key does. This is where ordinary typing is handled: the
+    /// keymaps bind no printable characters, so every one of them lands here.
+    fn dispatchUnbound(self: *LineEditor, seq: []const u8) !Flow {
+        if (seq.len != 1) return .cont;
+        const id = self.activeKeymapId();
+        if (keymap.fallbackWidget(id, seq[0])) |widget| {
+            if (try self.menuGuard(widget)) return .cont;
+            return self.invokeWidget(widget, seq);
+        }
+        // An unbound control character does nothing, which is what the previous
+        // hand-written dispatch did for the ones it had no arm for. Bind
+        // `undefined-key` to one explicitly to get a beep instead.
+        if (id == .vicmd) {
+            // Mirrors vi normal mode discarding a pending operator and count on
+            // any key it does not understand.
+            self.vi_pending_op = null;
+            self.vi_count = 0;
+        }
         return .cont;
     }
 
@@ -969,7 +876,10 @@ pub const LineEditor = struct {
     /// the built-in path below -- which is every byte that begins no binding, so
     /// ordinary typing costs one lookup and nothing else.
     fn keymapProbe(self: *LineEditor, byte: u8) !?Flow {
-        const maps = self.keymaps orelse return null;
+        // With no keymaps at all -- a bare editor in a test, or before the shell
+        // hands its own over -- every key is unbound. Typing still has to work,
+        // since this is the only dispatch there is.
+        const maps = self.keymaps orelse return try self.dispatchUnbound(&.{byte});
         const map = maps.getConst(self.activeKeymapId());
 
         var probe = self.pending;
@@ -982,6 +892,7 @@ pub const LineEditor = struct {
         switch (map.lookup(probe.slice())) {
             .exact => |binding| {
                 self.clearPending();
+                if (try self.menuGuard(binding.widget)) return .cont;
                 return try self.invokeBinding(binding, probe.slice());
             },
             .exact_prefix => |binding| {
@@ -996,7 +907,7 @@ pub const LineEditor = struct {
                 return .cont;
             },
             .none => {
-                if (self.pending.len == 0) return null; // first byte: fall through
+                if (self.pending.len == 0) return try self.dispatchUnbound(probe.slice());
                 // Mid-sequence and nothing matches. Hand what we have to the
                 // built-in escape parser, which understands the sequences the
                 // keymap does not enumerate, and let it keep accumulating.
@@ -1030,8 +941,10 @@ pub const LineEditor = struct {
         if (fallback) |binding| {
             // Run the shorter binding and re-dispatch whatever followed it.
             if (seq.len > fallback_len) self.pushBack(seq.slice()[fallback_len..]);
+            if (try self.menuGuard(binding.widget)) return .cont;
             return try self.invokeBinding(binding, seq.slice()[0..fallback_len]);
         }
+        if (seq.len == 1) return try self.dispatchUnbound(seq.slice());
         self.handOffToEscapeParser(seq);
         return .cont;
     }
@@ -1426,266 +1339,13 @@ pub const LineEditor = struct {
                 continue;
             }
 
-            // Check for escape start
+            // Escape started a sequence the keymap does not enumerate; let the
+            // built-in parser accumulate the rest.
             if (byte == 0x1B) {
                 self.escape_seq.clear();
                 _ = self.escape_seq.push(byte);
                 self.in_escape = true;
                 continue;
-            }
-
-            // Handle special characters
-            switch (byte) {
-                '\r', '\n' => switch (try self.acceptLine()) {
-                    .cont => continue,
-                    .accepted => |line| {
-                        try self.terminal.disableRawMode();
-                        return line;
-                    },
-                    .eof => {
-                        try self.terminal.disableRawMode();
-                        return null;
-                    },
-                    .interrupt => {
-                        try self.terminal.disableRawMode();
-                        return error.Interrupted;
-                    },
-                },
-                0x03 => {
-                    // Ctrl+C
-                    if (self.reverse_search_mode) {
-                        // Cancel reverse search and clear line
-                        try self.cancelReverseSearch();
-                        try self.writeBytes("\r\n");
-                        try self.writePromptCrlf();
-                        self.length = 0;
-                        self.cursor = 0;
-                        continue;
-                    }
-
-                    // If completion list is showing, just dismiss it and reset the line
-                    if (self.completion_list != null) {
-                        self.clearCompletionState();
-                        // Clear current input and show fresh prompt
-                        try self.writeBytes("^C\r\n");
-                        try self.displayPrompt();
-                        self.length = 0;
-                        self.cursor = 0;
-                        self.resetRenderedRowToPrompt();
-                        continue;
-                    }
-
-                    // Clear multi-line buffer if in multi-line mode
-                    if (self.multiline_buffer) |*mlb| {
-                        mlb.deinit(self.allocator);
-                        self.multiline_buffer = null;
-                        self.in_multiline = false;
-                    }
-
-                    // If no input was typed, just show a fresh prompt
-                    // (avoids duplicate prompt after Ctrl+C'ing an external command)
-                    if (self.length == 0) {
-                        try self.writeBytes("\r\n");
-                        try self.displayPrompt();
-                        self.resetRenderedRowToPrompt();
-                        continue;
-                    }
-
-                    try self.writeBytes("^C\r\n");
-                    try self.terminal.disableRawMode();
-                    return error.Interrupted;
-                },
-                0x04 => {
-                    // Ctrl+D (EOF)
-                    if (self.length == 0) {
-                        // Clear any visible completion list first
-                        if (self.completion_list != null) {
-                            try self.clearCompletionDisplay();
-                        }
-                        try self.writeBytes("\r\n");
-                        try self.terminal.disableRawMode();
-                        return null; // Signal EOF
-                    }
-                    // Otherwise, delete character under cursor
-                    try self.deleteChar();
-                },
-                0x01 => {
-                    self.clearCompletionState();
-                    try self.moveCursorHome(); // Ctrl+A
-                },
-                0x05 => {
-                    self.clearCompletionState();
-                    try self.moveCursorEnd(); // Ctrl+E
-                },
-                0x02 => {
-                    self.clearCompletionState();
-                    try self.moveCursorLeft(); // Ctrl+B
-                },
-                0x06 => {
-                    self.clearCompletionState();
-                    try self.moveCursorRight(); // Ctrl+F
-                },
-                0x0B => {
-                    self.clearCompletionState();
-                    try self.killToEnd(); // Ctrl+K - kill to end of line (clear-screen is Ctrl+L)
-                },
-                0x0C => {
-                    self.clearCompletionState();
-                    try self.clearScreen(); // Ctrl+L
-                },
-                0x14 => {
-                    self.clearCompletionState();
-                    try self.transposeChars(); // Ctrl+T
-                },
-                0x00 => {
-                    // Ctrl+Space - start visual selection mode
-                    if (!self.visual_mode) {
-                        try self.startVisualMode();
-                    }
-                },
-                0x15 => {
-                    self.clearCompletionState();
-                    if (self.visual_mode) {
-                        try self.cutSelection(); // Cut selection in visual mode
-                    } else {
-                        try self.killToStart(); // Ctrl+U
-                    }
-                },
-                0x17 => {
-                    self.clearCompletionState();
-                    if (self.visual_mode) {
-                        try self.copySelection(); // Copy selection in visual mode
-                    } else {
-                        try self.killWordBackward(); // Ctrl+W - kill word backward (saves to kill ring)
-                    }
-                },
-                0x18 => {
-                    // Ctrl+X prefix for extended commands
-                    // Read next character for the command
-                    const next_byte = (try self.nextByte()) orelse continue;
-                    switch (next_byte) {
-                        '(' => try self.startMacroRecording(),
-                        ')' => try self.stopMacroRecording(),
-                        'e' => try self.playMacro(),
-                        else => {},
-                    }
-                },
-                0x19 => {
-                    self.clearCompletionState();
-                    try self.yank(); // Ctrl+Y - yank (paste from kill ring)
-                },
-                0x10 => {
-                    self.clearCompletionState();
-                    try self.historyPrevious(); // Ctrl+P - previous history (like Up arrow)
-                },
-                0x0E => {
-                    self.clearCompletionState();
-                    try self.historyNext(); // Ctrl+N - next history (like Down arrow)
-                },
-                0x1F => {
-                    self.clearCompletionState();
-                    try self.undo(); // Ctrl+_ (undo)
-                },
-                0x12 => {
-                    // Ctrl+R - Reverse search
-                    if (self.reverse_search_mode) {
-                        // Already in search mode - find next match
-                        try self.continueReverseSearch();
-                    } else {
-                        // Enter reverse search mode
-                        try self.startReverseSearch();
-                    }
-                },
-                0x13 => {
-                    // Ctrl+S - toggle fuzzy search mode (during reverse search)
-                    if (self.reverse_search_mode) {
-                        try self.toggleFuzzySearch();
-                    }
-                },
-                0x09 => {
-                    // Tab - handle completion (forward)
-                    if (!self.reverse_search_mode) {
-                        try self.handleTabCompletion(false);
-                    }
-                },
-                0x7F, 0x08 => {
-                    // Backspace (DEL or BS)
-                    if (self.reverse_search_mode) {
-                        // Delete character from search query
-                        if (self.reverse_search_query_len > 0) {
-                            self.reverse_search_query_len -= 1;
-                            if (self.history_count) |count| {
-                                self.reverse_search_history_index = count.*;
-                            }
-                            try self.updateReverseSearch();
-                        }
-                    } else {
-                        self.clearCompletionState();
-                        try self.backspace();
-                    }
-                },
-                0x20...0x7E => {
-                    // Printable ASCII
-                    if (self.reverse_search_mode) {
-                        // Add character to search query
-                        if (self.reverse_search_query_len < self.reverse_search_query.len) {
-                            self.reverse_search_query[self.reverse_search_query_len] = byte;
-                            self.reverse_search_query_len += 1;
-                            if (self.history_count) |count| {
-                                self.reverse_search_history_index = count.*;
-                            }
-                            try self.updateReverseSearch();
-                        }
-                    } else if (self.editing_mode == .vi and self.vi_mode == .normal) {
-                        // Vi normal mode - handle navigation/commands.
-                        // Accepting goes through the same acceptLine as Enter in
-                        // insert mode; the hand-rolled copy that used to live
-                        // here ignored multiline_buffer, so a continuation
-                        // accepted from normal mode returned only its last
-                        // physical line and leaked the accumulated buffer.
-                        switch (try self.handleViNormalKey(byte)) {
-                            .cont => {},
-                            .accepted => |line| {
-                                try self.terminal.disableRawMode();
-                                return line;
-                            },
-                            .eof => {
-                                try self.terminal.disableRawMode();
-                                return null;
-                            },
-                            .interrupt => {
-                                try self.terminal.disableRawMode();
-                                return error.Interrupted;
-                            },
-                        }
-                    } else if (self.editing_mode == .vi and self.vi_mode == .replace) {
-                        // Vi replace mode - replace character under cursor
-                        if (self.cursor < self.length) {
-                            self.buffer[self.cursor] = byte;
-                            if (self.cursor < self.length - 1) {
-                                self.cursor += 1;
-                            }
-                            try self.redrawLine();
-                        } else {
-                            try self.insertChar(byte);
-                        }
-                    } else {
-                        // Emacs mode or Vi insert mode
-                        self.clearCompletionState();
-                        try self.insertChar(byte);
-                    }
-                },
-                0xC2...0xF4 => {
-                    // UTF-8 lead byte — assemble and insert the full codepoint so
-                    // accented/CJK/emoji input works. Ignored during reverse search.
-                    if (!self.reverse_search_mode) {
-                        self.clearCompletionState();
-                        try self.insertUtf8(byte);
-                    }
-                },
-                else => {
-                    // Ignore other control / stray continuation bytes
-                },
             }
         }
     }
@@ -2402,42 +2062,6 @@ pub const LineEditor = struct {
         }
     }
 
-    fn deleteWordForward(self: *LineEditor) !void {
-        if (self.cursor >= self.length) return;
-
-        // Save state for undo
-        self.saveUndoState();
-
-        // Clear history search when user deletes word
-        self.clearHistorySearch();
-
-        // Find end of next word
-        const delete_to = self.findNextWord();
-        const chars_to_delete = delete_to - self.cursor;
-
-        if (chars_to_delete == 0) return;
-
-        // Shift remaining characters left
-        const remaining = self.length - delete_to;
-        var i: usize = 0;
-        while (i < remaining) : (i += 1) {
-            self.buffer[self.cursor + i] = self.buffer[delete_to + i];
-        }
-        self.length -= chars_to_delete;
-
-        // Redraw line from cursor position
-        try self.writeBytes(self.buffer[self.cursor..self.length]);
-        try self.writeBytes(" "); // Clear the last character
-        try self.writeBytes("\x1B[K"); // Clear to end of line
-
-        // Move cursor back to correct position
-        const moves_needed = self.length - self.cursor + 1;
-        i = 0;
-        while (i < moves_needed) : (i += 1) {
-            try self.writeBytes("\x1B[D");
-        }
-    }
-
     fn transposeChars(self: *LineEditor) !void {
         // Need at least 2 characters to transpose
         if (self.length < 2) return;
@@ -2719,59 +2343,19 @@ pub const LineEditor = struct {
         // step within a column and left/right step between columns — matching what
         // the user sees, instead of both axes moving linearly.
         if (self.completion_list != null) {
-            const len = self.completion_list.?.len;
-            const grid = self.completionGrid();
-            const nr = @max(1, grid.rows);
-            const col = self.completion_index / nr;
-            const row = self.completion_index % nr;
-            switch (seq) {
-                .down_arrow => {
-                    // Next row in this column; wrap to the column's top.
-                    const ni = col * nr + (row + 1);
-                    self.completion_index = if (row + 1 < nr and ni < len) ni else col * nr;
-                    try self.applyCurrentCompletion();
-                    try self.updateCompletionListHighlight();
-                    return;
-                },
-                .up_arrow => {
-                    if (row > 0) {
-                        self.completion_index -= 1;
-                    } else {
-                        // Wrap to the bottom-most populated row of this column.
-                        var r = nr - 1;
-                        while (col * nr + r >= len) r -= 1;
-                        self.completion_index = col * nr + r;
-                    }
-                    try self.applyCurrentCompletion();
-                    try self.updateCompletionListHighlight();
-                    return;
-                },
-                .right_arrow => {
-                    // Next column, same row; wrap to the first column.
-                    const ni = (col + 1) * nr + row;
-                    self.completion_index = if (col + 1 < grid.cols and ni < len) ni else row;
-                    try self.applyCurrentCompletion();
-                    try self.updateCompletionListHighlight();
-                    return;
-                },
-                .left_arrow => {
-                    if (col > 0) {
-                        self.completion_index = (col - 1) * nr + row;
-                    } else {
-                        // Wrap to the last column that has an item in this row.
-                        var c = grid.cols - 1;
-                        while (c * nr + row >= len) c -= 1;
-                        self.completion_index = c * nr + row;
-                    }
-                    try self.applyCurrentCompletion();
-                    try self.updateCompletionListHighlight();
-                    return;
-                },
-                else => {
-                    // Clear completion on other keys
-                    self.clearCompletionState();
-                },
+            const dir: ?MenuDirection = switch (seq) {
+                .down_arrow => .down,
+                .up_arrow => .up,
+                .right_arrow => .right,
+                .left_arrow => .left,
+                else => null,
+            };
+            if (dir) |d| {
+                try self.menuSelectMove(d);
+                return;
             }
+            // Clear completion on other keys
+            self.clearCompletionState();
         }
 
         // Normal arrow key handling (no active completions)
@@ -4224,8 +3808,11 @@ test "accepting from vi normal mode joins continuation lines too" {
     defer editor.deinit();
     editor.setEditingMode(.vi);
     editor.vi_mode = .normal;
+    var maps = keymap.KeymapSet.init();
+    defer maps.deinit(std.testing.allocator);
+    editor.keymaps = &maps;
 
-    try std.testing.expectEqual(Flow.cont, try editor.handleViNormalKey('\r'));
+    try std.testing.expectEqual(Flow.cont, try editor.feedKeys("\r"));
     try std.testing.expect(editor.multiline_buffer != null);
 
     const second = "bar\"";
@@ -4233,7 +3820,7 @@ test "accepting from vi normal mode joins continuation lines too" {
     editor.length = second.len;
     editor.cursor = second.len;
 
-    switch (try editor.handleViNormalKey('\r')) {
+    switch (try editor.feedKeys("\r")) {
         .accepted => |line| {
             defer std.testing.allocator.free(line);
             try std.testing.expectEqualStrings("echo \"foo\nbar\"", line);
@@ -4484,19 +4071,21 @@ test "invokeWidget CtrlU inside visual mode cuts the selection" {
     try std.testing.expectEqualStrings(" hello", editor.buffer[0..editor.length]);
 }
 
-test "invokeWidget vi transitions match handleViNormalKey" {
+test "the vicmd keymap routes A to vi-add-eol" {
     var sink: std.ArrayList(u8) = .empty;
     defer sink.deinit(std.testing.allocator);
+    var maps = keymap.KeymapSet.init();
+    defer maps.deinit(std.testing.allocator);
 
-    // Both paths share one implementation, so `A` and vi_add_eol must agree.
-    var a = testEditor(&sink, "echo");
+    // Typing `A` in normal mode must land on the same widget as invoking it.
+    var a = testKeyEditor(&sink, &maps, "echo");
     defer a.deinit();
     a.setEditingMode(.vi);
     a.vi_mode = .normal;
     a.cursor = 0;
-    _ = try a.handleViNormalKey('A');
+    _ = try a.feedKeys("A");
 
-    var b = testEditor(&sink, "echo");
+    var b = testKeyEditor(&sink, &maps, "echo");
     defer b.deinit();
     b.setEditingMode(.vi);
     b.vi_mode = .normal;
@@ -4630,7 +4219,7 @@ test "a user binding takes effect immediately" {
     try std.testing.expectEqual(@as(usize, 0), editor.length);
 }
 
-test "an unbound byte is left to the built-in handling" {
+test "an unbound printable character self-inserts" {
     var sink: std.ArrayList(u8) = .empty;
     defer sink.deinit(std.testing.allocator);
     var maps = keymap.KeymapSet.init();
@@ -4638,10 +4227,41 @@ test "an unbound byte is left to the built-in handling" {
     var editor = testKeyEditor(&sink, &maps, "");
     defer editor.deinit();
 
-    // Printable characters are not in the table; the probe declines them so the
-    // existing insert path (with its modal branches) still runs.
-    try std.testing.expectEqual(@as(?Flow, null), try editor.keymapProbe('q'));
-    try std.testing.expectEqual(@as(usize, 0), editor.length);
+    // The keymaps bind no printable characters, so ordinary typing is the
+    // keymap's fallback rather than a separate code path.
+    _ = try editor.feedKeys("hi");
+    try std.testing.expectEqualStrings("hi", editor.buffer[0..editor.length]);
+}
+
+test "an unbound control character does nothing" {
+    var sink: std.ArrayList(u8) = .empty;
+    defer sink.deinit(std.testing.allocator);
+    var maps = keymap.KeymapSet.init();
+    defer maps.deinit(std.testing.allocator);
+    var editor = testKeyEditor(&sink, &maps, "abc");
+    defer editor.deinit();
+
+    // 0x1C has no binding and no fallback: silently ignored, as before. Bind
+    // `undefined-key` to get a beep instead.
+    _ = try editor.feedKeys(&.{0x1C});
+    try std.testing.expectEqualStrings("abc", editor.buffer[0..editor.length]);
+    try std.testing.expectEqualStrings("", sink.items);
+}
+
+test "an unbound key in vi normal mode discards a pending count" {
+    var sink: std.ArrayList(u8) = .empty;
+    defer sink.deinit(std.testing.allocator);
+    var maps = keymap.KeymapSet.init();
+    defer maps.deinit(std.testing.allocator);
+    var editor = testKeyEditor(&sink, &maps, "abcdef");
+    defer editor.deinit();
+    editor.setEditingMode(.vi);
+    editor.vi_mode = .normal;
+
+    _ = try editor.feedKeys("3");
+    try std.testing.expectEqual(@as(usize, 3), editor.vi_count);
+    _ = try editor.feedKeys("Z"); // unbound in vicmd
+    try std.testing.expectEqual(@as(usize, 0), editor.vi_count);
 }
 
 test "an unbound key consumes its byte instead of falling through" {
@@ -4677,13 +4297,16 @@ test "an unenumerated escape sequence is handed back to the escape parser" {
     try std.testing.expectEqual(@as(u8, 0), editor.pending.len);
 }
 
-test "the keymap is skipped entirely when it is not set" {
+test "typing still works with no keymaps set" {
     var sink: std.ArrayList(u8) = .empty;
     defer sink.deinit(std.testing.allocator);
-    var editor = testEditor(&sink, "echo hi");
+    var editor = testEditor(&sink, "");
     defer editor.deinit();
 
-    try std.testing.expectEqual(@as(?Flow, null), try editor.keymapProbe(0x01));
+    // The keymap is the only dispatch there is, so a bare editor must treat
+    // every key as unbound rather than dropping it.
+    _ = try editor.feedKeys("ok");
+    try std.testing.expectEqualStrings("ok", editor.buffer[0..editor.length]);
 }
 
 test "activeKeymapId follows the editing and search modes" {
