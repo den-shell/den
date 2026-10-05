@@ -6,4 +6,5 @@ const std = @import("std");
 test {
     _ = @import("utils/terminal/mod.zig");
     _ = @import("utils/terminal/line_editor.zig");
+    _ = @import("utils/terminal/keymap.zig");
 }
