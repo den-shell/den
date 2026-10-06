@@ -103,6 +103,10 @@ pub const builtinZle = bindkey_builtin.builtinZle;
 pub const zstyle_builtin = @import("zstyle_builtin.zig");
 pub const builtinZstyle = zstyle_builtin.builtinZstyle;
 
+// Re-export add-zsh-hook
+pub const zsh_hooks_builtin = @import("zsh_hooks_builtin.zig");
+pub const builtinAddZshHook = zsh_hooks_builtin.builtinAddZshHook;
+
 // Re-export AI completion builtin
 pub const ai_builtin = @import("ai_builtin.zig");
 pub const builtinAi = ai_builtin.builtinAi;

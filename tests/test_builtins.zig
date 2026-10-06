@@ -1682,3 +1682,180 @@ test "zshexit hook: an EXIT trap still runs, and first" {
     const hook_at = std.mem.indexOf(u8, r.stdout, "HOOK") orelse return error.MissingHook;
     try std.testing.expect(trap_at < hook_at);
 }
+
+test "builtin add-zsh-hook: registers a function and lists it as zsh does" {
+    const allocator = std.testing.allocator;
+    var fixture = try test_utils.DenShellFixture.init(allocator);
+    defer fixture.deinit();
+    const r = try fixture.execDirect(
+        "f1() { :; }; add-zsh-hook precmd f1; echo \"rc=$?\"; add-zsh-hook -L precmd",
+    );
+    defer allocator.free(r.stdout);
+    defer allocator.free(r.stderr);
+
+    try test_utils.TestAssert.expectContains(r.stdout, "rc=0");
+    // zsh prints a re-runnable declaration, not bare names.
+    try test_utils.TestAssert.expectContains(r.stdout, "typeset -g -a precmd_functions=( f1 )");
+}
+
+test "builtin add-zsh-hook: adding twice registers once" {
+    const allocator = std.testing.allocator;
+    var fixture = try test_utils.DenShellFixture.init(allocator);
+    defer fixture.deinit();
+    // An rc file sourced twice is the common way this happens, and the hook
+    // would otherwise run twice per prompt.
+    const r = try fixture.execDirect(
+        "f1() { :; }; add-zsh-hook precmd f1; add-zsh-hook precmd f1; add-zsh-hook -L precmd",
+    );
+    defer allocator.free(r.stdout);
+    defer allocator.free(r.stderr);
+
+    try test_utils.TestAssert.expectContains(r.stdout, "precmd_functions=( f1 )");
+    try std.testing.expect(std.mem.indexOf(u8, r.stdout, "f1 f1") == null);
+}
+
+test "builtin add-zsh-hook: -d removes, and removing an absent hook succeeds" {
+    const allocator = std.testing.allocator;
+    var fixture = try test_utils.DenShellFixture.init(allocator);
+    defer fixture.deinit();
+    const r = try fixture.execDirect(
+        "f1() { :; }; f2() { :; }; add-zsh-hook precmd f1; add-zsh-hook precmd f2; " ++
+            "add-zsh-hook -d precmd f1; add-zsh-hook -L precmd; " ++
+            "add-zsh-hook -d precmd never_added; echo \"absent=$?\"",
+    );
+    defer allocator.free(r.stdout);
+    defer allocator.free(r.stderr);
+
+    try test_utils.TestAssert.expectContains(r.stdout, "precmd_functions=( f2 )");
+    // An rc file that removes a hook it never added must not start failing.
+    try test_utils.TestAssert.expectContains(r.stdout, "absent=0");
+}
+
+test "builtin add-zsh-hook: order is the order they were added" {
+    const allocator = std.testing.allocator;
+    var fixture = try test_utils.DenShellFixture.init(allocator);
+    defer fixture.deinit();
+    const r = try fixture.execDirect(
+        "a() { :; }; b() { :; }; c() { :; }; " ++
+            "add-zsh-hook precmd a; add-zsh-hook precmd b; add-zsh-hook precmd c; " ++
+            "add-zsh-hook -L precmd",
+    );
+    defer allocator.free(r.stdout);
+    defer allocator.free(r.stderr);
+
+    try test_utils.TestAssert.expectContains(r.stdout, "precmd_functions=( a b c )");
+}
+
+test "builtin add-zsh-hook: a hook den does not fire is refused" {
+    const allocator = std.testing.allocator;
+    var fixture = try test_utils.DenShellFixture.init(allocator);
+    defer fixture.deinit();
+    // A deliberate divergence: zsh accepts `periodic`, but den never fires it,
+    // so a function registered there would silently never run.
+    const r = try fixture.execDirect("f1() { :; }; add-zsh-hook periodic f1");
+    defer allocator.free(r.stdout);
+    defer allocator.free(r.stderr);
+
+    try test_utils.TestAssert.expectEqual(@as(u8, 1), r.exit_code);
+    try test_utils.TestAssert.expectContains(r.stderr, "does not fire periodic");
+    try test_utils.TestAssert.expectContains(r.stderr, "Valid hooks are");
+}
+
+test "builtin add-zsh-hook: zshexit is accepted and fires" {
+    const allocator = std.testing.allocator;
+    var fixture = try test_utils.DenShellFixture.init(allocator);
+    defer fixture.deinit();
+    const r = try fixture.execDirect(
+        "bye() { echo BYE; }; add-zsh-hook zshexit bye; echo \"rc=$?\"; echo main",
+    );
+    defer allocator.free(r.stdout);
+    defer allocator.free(r.stderr);
+
+    try test_utils.TestAssert.expectContains(r.stdout, "rc=0");
+    try test_utils.TestAssert.expectContains(r.stdout, "BYE");
+}
+
+test "builtin add-zsh-hook: an unknown hook names the valid ones" {
+    const allocator = std.testing.allocator;
+    var fixture = try test_utils.DenShellFixture.init(allocator);
+    defer fixture.deinit();
+    const r = try fixture.execDirect("add-zsh-hook nosuch f1");
+    defer allocator.free(r.stdout);
+    defer allocator.free(r.stderr);
+
+    try test_utils.TestAssert.expectEqual(@as(u8, 1), r.exit_code);
+    try test_utils.TestAssert.expectContains(r.stderr, "chpwd precmd preexec zshexit");
+}
+
+test "builtin add-zsh-hook: a bad option is a usage error" {
+    const allocator = std.testing.allocator;
+    var fixture = try test_utils.DenShellFixture.init(allocator);
+    defer fixture.deinit();
+    const r = try fixture.execDirect("add-zsh-hook -q precmd f1");
+    defer allocator.free(r.stdout);
+    defer allocator.free(r.stderr);
+
+    try test_utils.TestAssert.expectEqual(@as(u8, 2), r.exit_code);
+    try test_utils.TestAssert.expectContains(r.stderr, "bad option: -q");
+}
+
+test "builtin add-zsh-hook: -U and -D are accepted as zsh spells them" {
+    const allocator = std.testing.allocator;
+    var fixture = try test_utils.DenShellFixture.init(allocator);
+    defer fixture.deinit();
+    // Prompt frameworks write these, and neither changes what the line means
+    // here, so they must not be rejected.
+    const r = try fixture.execDirect(
+        "f1() { :; }; add-zsh-hook -U precmd f1; echo \"u=$?\"; " ++
+            "add-zsh-hook -D precmd f1; echo \"d=$?\"; add-zsh-hook -L precmd",
+    );
+    defer allocator.free(r.stdout);
+    defer allocator.free(r.stderr);
+
+    try test_utils.TestAssert.expectContains(r.stdout, "u=0");
+    try test_utils.TestAssert.expectContains(r.stdout, "d=0");
+    try std.testing.expect(std.mem.indexOf(u8, r.stdout, "precmd_functions") == null);
+}
+
+test "builtin type: reports add-zsh-hook as a shell builtin" {
+    const allocator = std.testing.allocator;
+    var fixture = try test_utils.DenShellFixture.init(allocator);
+    defer fixture.deinit();
+    const r = try fixture.execDirect("type add-zsh-hook");
+    defer allocator.free(r.stdout);
+    defer allocator.free(r.stderr);
+
+    try test_utils.TestAssert.expectEqual(@as(u8, 0), r.exit_code);
+    try test_utils.TestAssert.expectContains(r.stdout, "shell builtin");
+}
+
+test "builtin add-zsh-hook: -D deletes by pattern" {
+    const allocator = std.testing.allocator;
+    var fixture = try test_utils.DenShellFixture.init(allocator);
+    defer fixture.deinit();
+    // zsh's -D takes a glob, not a name, so one line drops a family of hooks.
+    const r = try fixture.execDirect(
+        "f1() { :; }; f2() { :; }; g1() { :; }; " ++
+            "add-zsh-hook precmd f1; add-zsh-hook precmd f2; add-zsh-hook precmd g1; " ++
+            "add-zsh-hook -D precmd 'f*'; add-zsh-hook -L precmd",
+    );
+    defer allocator.free(r.stdout);
+    defer allocator.free(r.stderr);
+
+    try test_utils.TestAssert.expectContains(r.stdout, "precmd_functions=( g1 )");
+}
+
+test "builtin add-zsh-hook: -d does not treat its operand as a pattern" {
+    const allocator = std.testing.allocator;
+    var fixture = try test_utils.DenShellFixture.init(allocator);
+    defer fixture.deinit();
+    // Only -D globs. A -d of `f*` must not take f1 with it.
+    const r = try fixture.execDirect(
+        "f1() { :; }; add-zsh-hook precmd f1; add-zsh-hook -d precmd 'f*'; " ++
+            "add-zsh-hook -L precmd",
+    );
+    defer allocator.free(r.stdout);
+    defer allocator.free(r.stderr);
+
+    try test_utils.TestAssert.expectContains(r.stdout, "precmd_functions=( f1 )");
+}
