@@ -1153,18 +1153,6 @@ test "builtin bindkey: every documented default is still bound" {
     }
 }
 
-test "builtin zle: reports that user widgets are unimplemented" {
-    const allocator = std.testing.allocator;
-    var fixture = try test_utils.DenShellFixture.init(allocator);
-    defer fixture.deinit();
-    const r = try fixture.execDirect("zle -N my-widget");
-    defer allocator.free(r.stdout);
-    defer allocator.free(r.stderr);
-
-    try test_utils.TestAssert.expectEqual(@as(u8, 2), r.exit_code);
-    try test_utils.TestAssert.expectContains(r.stderr, "bindkey");
-}
-
 test "builtin type: reports bindkey as a shell builtin" {
     const allocator = std.testing.allocator;
     var fixture = try test_utils.DenShellFixture.init(allocator);
@@ -1294,4 +1282,120 @@ test "shell builtins: an unknown name is still not found" {
 
     try test_utils.TestAssert.expectEqual(@as(u8, 127), r.exit_code);
     try test_utils.TestAssert.expectContains(r.stderr, "command not found");
+}
+
+// ---------------------------------------------------------------------------
+// zle: widgets made from shell functions
+//
+// These cover the registry and the diagnostics, which `den -c` can reach.
+// Actually running a widget needs a line editor, so that is covered by driving
+// a pty instead.
+// ---------------------------------------------------------------------------
+
+test "builtin zle: -N defines a widget and -l lists it" {
+    const allocator = std.testing.allocator;
+    var fixture = try test_utils.DenShellFixture.init(allocator);
+    defer fixture.deinit();
+    const r = try fixture.execDirect("zle -N my-widget my-func; zle -l");
+    defer allocator.free(r.stdout);
+    defer allocator.free(r.stderr);
+
+    try test_utils.TestAssert.expectEqual(@as(u8, 0), r.exit_code);
+    try test_utils.TestAssert.expectContains(r.stdout, "my-widget");
+}
+
+test "builtin zle: the function defaults to the widget name" {
+    const allocator = std.testing.allocator;
+    var fixture = try test_utils.DenShellFixture.init(allocator);
+    defer fixture.deinit();
+    const r = try fixture.execDirect("zle -N solo; zle -l");
+    defer allocator.free(r.stdout);
+    defer allocator.free(r.stderr);
+
+    try test_utils.TestAssert.expectEqual(@as(u8, 0), r.exit_code);
+    try test_utils.TestAssert.expectContains(r.stdout, "solo");
+}
+
+test "builtin zle: -D removes a widget" {
+    const allocator = std.testing.allocator;
+    var fixture = try test_utils.DenShellFixture.init(allocator);
+    defer fixture.deinit();
+    const r = try fixture.execDirect("zle -N gone; zle -D gone; zle -l; echo end");
+    defer allocator.free(r.stdout);
+    defer allocator.free(r.stderr);
+
+    try test_utils.TestAssert.expectContains(r.stdout, "end");
+    try test_utils.TestAssert.expectEqual(@as(?usize, null), std.mem.indexOf(u8, r.stdout, "gone"));
+}
+
+test "builtin zle: -D on an unknown widget is a diagnostic" {
+    const allocator = std.testing.allocator;
+    var fixture = try test_utils.DenShellFixture.init(allocator);
+    defer fixture.deinit();
+    const r = try fixture.execDirect("zle -D nope");
+    defer allocator.free(r.stdout);
+    defer allocator.free(r.stderr);
+
+    try test_utils.TestAssert.expectEqual(@as(u8, 1), r.exit_code);
+    try test_utils.TestAssert.expectContains(r.stderr, "no such widget: nope");
+}
+
+test "builtin zle: invoking a widget outside one is refused" {
+    const allocator = std.testing.allocator;
+    var fixture = try test_utils.DenShellFixture.init(allocator);
+    defer fixture.deinit();
+    const r = try fixture.execDirect("zle beginning-of-line");
+    defer allocator.free(r.stdout);
+    defer allocator.free(r.stderr);
+
+    try test_utils.TestAssert.expectEqual(@as(u8, 1), r.exit_code);
+    try test_utils.TestAssert.expectContains(r.stderr, "can only be called from a widget");
+}
+
+test "builtin zle: a bad option prints usage" {
+    const allocator = std.testing.allocator;
+    var fixture = try test_utils.DenShellFixture.init(allocator);
+    defer fixture.deinit();
+    const r = try fixture.execDirect("zle -Q");
+    defer allocator.free(r.stdout);
+    defer allocator.free(r.stderr);
+
+    try test_utils.TestAssert.expectEqual(@as(u8, 2), r.exit_code);
+    try test_utils.TestAssert.expectContains(r.stderr, "bad option: -Q");
+}
+
+test "builtin bindkey: binds a widget defined by zle -N" {
+    const allocator = std.testing.allocator;
+    var fixture = try test_utils.DenShellFixture.init(allocator);
+    defer fixture.deinit();
+    const r = try fixture.execDirect("zle -N mine my-func; bindkey '^X^F' mine; bindkey '^X^F'");
+    defer allocator.free(r.stdout);
+    defer allocator.free(r.stderr);
+
+    try test_utils.TestAssert.expectEqual(@as(u8, 0), r.exit_code);
+    try test_utils.TestAssert.expectContains(r.stdout, "\"^X^F\" mine");
+}
+
+test "builtin bindkey: -L prints a user widget by its own name" {
+    const allocator = std.testing.allocator;
+    var fixture = try test_utils.DenShellFixture.init(allocator);
+    defer fixture.deinit();
+    const r = try fixture.execDirect("zle -N mine my-func; bindkey '^X^F' mine; bindkey -L");
+    defer allocator.free(r.stdout);
+    defer allocator.free(r.stderr);
+
+    try test_utils.TestAssert.expectEqual(@as(u8, 0), r.exit_code);
+    try test_utils.TestAssert.expectContains(r.stdout, "bindkey \"^X^F\" mine");
+}
+
+test "builtin bindkey: a shell function points at zle -N" {
+    const allocator = std.testing.allocator;
+    var fixture = try test_utils.DenShellFixture.init(allocator);
+    defer fixture.deinit();
+    const r = try fixture.execDirect("myfn() { echo hi; }; bindkey '^T' myfn");
+    defer allocator.free(r.stdout);
+    defer allocator.free(r.stderr);
+
+    try test_utils.TestAssert.expectEqual(@as(u8, 1), r.exit_code);
+    try test_utils.TestAssert.expectContains(r.stderr, "zle -N myfn");
 }

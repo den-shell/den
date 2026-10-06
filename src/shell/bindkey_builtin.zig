@@ -38,6 +38,7 @@ fn unsupported(self: *Shell, flag: u8) !void {
 
 /// Print one binding, in the form `bindkey -L` and the plain listing share.
 const Printer = struct {
+    shell: *Shell,
     maps: *const keymap.KeymapSet,
     /// `bindkey -L` prefixes each line so the output can be re-run.
     dump: bool,
@@ -56,6 +57,15 @@ const Printer = struct {
             try IO.print("-s \"{s}\" \"{s}\"\n", .{ shown.slice(), escaped });
             return;
         }
+        if (binding.widget == .user_widget) {
+            // Print the name it was defined under, so the line can be re-run.
+            const widgets = self.shell.user_widgets.items;
+            const name = if (binding.index < widgets.len) widgets[binding.index].name else "";
+            if (name.len == 0) return; // undefined by `zle -D`
+            try IO.print("\"{s}\" {s}\n", .{ shown.slice(), name });
+            return;
+        }
+
         try IO.print("\"{s}\" {s}\n", .{ shown.slice(), keymap.widgetName(binding.widget) });
     }
 };
@@ -225,6 +235,7 @@ pub fn builtinBindkey(self: *Shell, cmd: *types.ParsedCommand) !void {
     // Listing: no operands, with or without -L.
     if (operands.len == 0) {
         const printer = Printer{
+            .shell = self,
             .maps = &self.keymaps,
             .dump = dump,
             .qualify = if (dump) qualifierFor(self, id) else null,
@@ -250,6 +261,7 @@ pub fn builtinBindkey(self: *Shell, cmd: *types.ParsedCommand) !void {
         switch (map.lookup(seq.slice())) {
             .exact, .exact_prefix => |binding| {
                 const printer = Printer{
+                    .shell = self,
                     .maps = &self.keymaps,
                     .dump = dump,
                     .qualify = if (dump) qualifierFor(self, id) else null,
@@ -273,6 +285,13 @@ pub fn builtinBindkey(self: *Shell, cmd: *types.ParsedCommand) !void {
         self.last_exit_code = 1;
         return;
     };
+    // A widget defined by `zle -N` is bound by its index in the shell's list.
+    if (self.findUserWidget(operands[1])) |index| {
+        try self.keymaps.get(id).bind(self.allocator, seq.slice(), .user_widget, index);
+        self.last_exit_code = 0;
+        return;
+    }
+
     const widget = keymap.resolveWidget(operands[1]);
     if (widget == .unknown or widget == .user_widget or widget == .push_input) {
         try IO.eprint("den: bindkey: no such widget: {s}\n", .{operands[1]});
@@ -280,8 +299,8 @@ pub fn builtinBindkey(self: *Shell, cmd: *types.ParsedCommand) !void {
         // rather than leaving them to guess.
         if (self.function_manager.hasFunction(operands[1])) {
             try IO.eprint(
-                "den: bindkey: a shell function of that name exists, but user-defined widgets (zle -N) are not implemented\n",
-                .{},
+                "den: bindkey: {s} is a shell function; make it a widget first with `zle -N {s}`\n",
+                .{ operands[1], operands[1] },
             );
         }
         self.last_exit_code = 1;
@@ -292,16 +311,92 @@ pub fn builtinBindkey(self: *Shell, cmd: *types.ParsedCommand) !void {
     self.last_exit_code = 0;
 }
 
-/// `zle` exists only to explain itself. Registering the name means the most
-/// copied line in any zsh plugin reports the real limitation instead of
-/// "command not found", and makes a future implementation a non-breaking
-/// addition rather than a new builtin.
+const zle_usage =
+    "usage: zle -N widget [function] | zle -D widget ... | zle -l | zle -R | zle widget\n";
+
+/// `zle`: define widgets from shell functions, and invoke widgets from inside one.
 pub fn builtinZle(self: *Shell, cmd: *types.ParsedCommand) !void {
-    _ = cmd;
-    try IO.eprint("den: zle: user-defined widgets are not implemented\n", .{});
-    try IO.eprint(
-        "den: zle: built-in widgets can be bound with `bindkey`; see docs/LINE_EDITING.md\n",
-        .{},
-    );
-    self.last_exit_code = 2;
+    if (cmd.args.len == 0) {
+        try IO.eprint(zle_usage, .{});
+        self.last_exit_code = 1;
+        return;
+    }
+
+    const first = cmd.args[0];
+    if (first.len >= 2 and first[0] == '-') {
+        const operands = cmd.args[1..];
+        switch (first[1]) {
+            'N' => {
+                if (operands.len < 1 or operands.len > 2) {
+                    try IO.eprint(zle_usage, .{});
+                    self.last_exit_code = 1;
+                    return;
+                }
+                const name = operands[0];
+                // The function defaults to the widget's own name, as in zsh.
+                const func = if (operands.len == 2) operands[1] else name;
+                _ = self.addUserWidget(name, func) catch {
+                    try IO.eprint("den: zle: cannot define {s}\n", .{name});
+                    self.last_exit_code = 1;
+                    return;
+                };
+                self.last_exit_code = 0;
+            },
+            'D' => {
+                if (operands.len == 0) {
+                    try IO.eprint(zle_usage, .{});
+                    self.last_exit_code = 1;
+                    return;
+                }
+                var ok = true;
+                for (operands) |name| {
+                    if (!self.removeUserWidget(name)) {
+                        try IO.eprint("den: zle: no such widget: {s}\n", .{name});
+                        ok = false;
+                    }
+                }
+                self.last_exit_code = if (ok) 0 else 1;
+            },
+            'l' => {
+                for (self.user_widgets.items) |w| {
+                    if (w.name.len > 0) try IO.print("{s}\n", .{w.name});
+                }
+                self.last_exit_code = 0;
+            },
+            'R' => {
+                // Only meaningful while a widget is running.
+                if (!self.in_user_widget) {
+                    try IO.eprint("den: zle: can only be called from a widget\n", .{});
+                    self.last_exit_code = 1;
+                    return;
+                }
+                self.last_exit_code = 0;
+            },
+            else => {
+                try IO.eprint("den: zle: bad option: -{c}\n", .{first[1]});
+                try IO.eprint(zle_usage, .{});
+                self.last_exit_code = 2;
+            },
+        }
+        return;
+    }
+
+    // `zle <widget>` runs a widget, which only makes sense from inside one.
+    if (!self.in_user_widget) {
+        try IO.eprint("den: zle: {s}: can only be called from a widget\n", .{first});
+        self.last_exit_code = 1;
+        return;
+    }
+    const editor = if (self.line_editor) |*e| e else {
+        self.last_exit_code = 1;
+        return;
+    };
+    const widget = keymap.resolveWidget(first);
+    if (widget == .unknown or widget == .user_widget or widget == .push_input) {
+        try IO.eprint("den: zle: no such widget: {s}\n", .{first});
+        self.last_exit_code = 1;
+        return;
+    }
+    _ = try editor.invokeWidget(widget, "");
+    self.last_exit_code = 0;
 }

@@ -327,6 +327,13 @@ pub const Shell = struct {
     // Interactive mode
     is_interactive: bool,
     line_editor: ?LineEditor,
+    /// Widgets defined by `zle -N`. Append-only while a binding may hold an
+    /// index into it; removing one clears its name rather than shifting the rest.
+    user_widgets: std.ArrayList(UserWidget),
+    /// Set while a user widget's function is running. A widget that reaches
+    /// `zle` again must not start a second line editor inside the first.
+    in_user_widget: bool = false,
+
     /// Keymaps for the interactive line editor.
     ///
     /// These live here rather than on the editor because `bindkey` has to work
@@ -669,6 +676,7 @@ pub const Shell = struct {
             .call_stack_depth = 0,
             .loadable_builtins = LoadableBuiltins.init(allocator),
             .keymaps = keymap.KeymapSet.init(),
+            .user_widgets = .empty,
         };
 
         // Detect setuid condition and drop privileges
@@ -784,6 +792,11 @@ pub const Shell = struct {
         // Clean up function manager
         self.function_manager.deinit();
         self.keymaps.deinit(self.allocator);
+        for (self.user_widgets.items) |w| {
+            self.allocator.free(w.name);
+            self.allocator.free(w.func);
+        }
+        self.user_widgets.deinit(self.allocator);
 
         // Clean up the directory recorded for the chpwd hooks
         dir_hooks.reset(self);
@@ -1033,6 +1046,7 @@ pub const Shell = struct {
                             .vi => editor.setEditingMode(.vi),
                         }
                         editor.keymaps = &self.keymaps;
+                        editor.user_widget_fn = userWidgetCallback;
                         editor.setHistory(&self.history, &self.history_count);
                         // Same buffer the inline suggestion reads, so Tab and
                         // ghost text agree on what "recently used" means.
@@ -3268,6 +3282,114 @@ pub const Shell = struct {
     }
 
     /// Load aliases from configuration
+    /// A widget made from a shell function by `zle -N`.
+    pub const UserWidget = struct {
+        name: []u8,
+        func: []u8,
+    };
+
+    /// Index of the user widget called `name`, if there is one.
+    pub fn findUserWidget(self: *Shell, name: []const u8) ?u16 {
+        for (self.user_widgets.items, 0..) |w, i| {
+            if (w.name.len > 0 and std.mem.eql(u8, w.name, name)) return @intCast(i);
+        }
+        return null;
+    }
+
+    /// Define a user widget, or point an existing one at a different function.
+    pub fn addUserWidget(self: *Shell, name: []const u8, func: []const u8) !u16 {
+        if (self.findUserWidget(name)) |i| {
+            const slot = &self.user_widgets.items[i];
+            self.allocator.free(slot.func);
+            slot.func = try self.allocator.dupe(u8, func);
+            return i;
+        }
+        if (self.user_widgets.items.len >= std.math.maxInt(u16)) return error.TooManyWidgets;
+        try self.user_widgets.append(self.allocator, .{
+            .name = try self.allocator.dupe(u8, name),
+            .func = try self.allocator.dupe(u8, func),
+        });
+        return @intCast(self.user_widgets.items.len - 1);
+    }
+
+    /// Undefine a user widget. The slot stays, since a key may still be bound to
+    /// its index; an empty name marks it gone.
+    pub fn removeUserWidget(self: *Shell, name: []const u8) bool {
+        const i = self.findUserWidget(name) orelse return false;
+        const slot = &self.user_widgets.items[i];
+        self.allocator.free(slot.name);
+        slot.name = self.allocator.dupe(u8, "") catch return false;
+        return true;
+    }
+
+    /// Run a user widget's function with the line exposed to it.
+    ///
+    /// The function sees `$BUFFER` and `$CURSOR`, and `$LBUFFER`/`$RBUFFER` as
+    /// the halves either side of the cursor. Whichever of those it changes is
+    /// what comes back: the halves win if they moved, since a widget that sets
+    /// LBUFFER means the cursor to follow it.
+    pub fn runUserWidget(self: *Shell, editor: *LineEditor, index: u16) !void {
+        if (index >= self.user_widgets.items.len) return;
+        if (self.in_user_widget) return; // no widget inside a widget
+        const widget = self.user_widgets.items[index];
+        if (widget.name.len == 0) return; // undefined by `zle -D`
+
+        const line = editor.lineContents();
+        const at = @min(editor.cursor, line.len);
+
+        var cursor_text: [24]u8 = undefined;
+        const cursor_str = std.fmt.bufPrint(&cursor_text, "{d}", .{at}) catch "0";
+        try self.setVariableValue("BUFFER", line);
+        try self.setVariableValue("CURSOR", cursor_str);
+        try self.setVariableValue("LBUFFER", line[0..at]);
+        try self.setVariableValue("RBUFFER", line[at..]);
+
+        const before_buffer = try self.allocator.dupe(u8, line);
+        defer self.allocator.free(before_buffer);
+        const before_left = try self.allocator.dupe(u8, line[0..at]);
+        defer self.allocator.free(before_left);
+
+        self.in_user_widget = true;
+        try editor.pauseForWidget();
+        const status = self.function_manager.executeFunction(self, widget.func, &.{}) catch |err| blk: {
+            if (err == error.FunctionNotFound) {
+                try IO.eprint("den: zle: {s}: no such function\n", .{widget.func});
+            } else {
+                try IO.eprint("den: zle: {s}: {s}\n", .{ widget.name, @errorName(err) });
+            }
+            break :blk @as(i32, 1);
+        };
+        _ = status;
+        self.in_user_widget = false;
+
+        // Take back whatever the function left.
+        const new_left = self.getVariableValue("LBUFFER") orelse "";
+        const new_right = self.getVariableValue("RBUFFER") orelse "";
+        const new_buffer = self.getVariableValue("BUFFER") orelse "";
+
+        if (!std.mem.eql(u8, new_left, before_left) or
+            !std.mem.eql(u8, new_buffer, before_buffer))
+        {
+            if (!std.mem.eql(u8, new_left, before_left)) {
+                // The halves moved, so they define both line and cursor.
+                const joined = try std.fmt.allocPrint(self.allocator, "{s}{s}", .{ new_left, new_right });
+                defer self.allocator.free(joined);
+                editor.setLineContents(joined, new_left.len);
+            } else {
+                var cursor_at = new_buffer.len;
+                if (self.getVariableValue("CURSOR")) |c| {
+                    cursor_at = std.fmt.parseInt(usize, std.mem.trim(u8, c, " \t"), 10) catch new_buffer.len;
+                }
+                editor.setLineContents(new_buffer, cursor_at);
+            }
+        } else if (self.getVariableValue("CURSOR")) |c| {
+            const moved = std.fmt.parseInt(usize, std.mem.trim(u8, c, " \t"), 10) catch at;
+            editor.cursor = @min(moved, editor.length);
+        }
+
+        try editor.resumeAfterWidget();
+    }
+
     /// Whether `name` is a shell-level builtin -- one implemented on the Shell
     /// rather than in the executor.
     ///
@@ -3455,6 +3577,11 @@ pub const Shell = struct {
 /// Tab completion function for line editor
 /// Callback to refresh the prompt (e.g., when Cmd+K clears screen)
 /// Uses the shell's full prompt renderer for consistent display
+fn userWidgetCallback(editor: *LineEditor, index: u16) anyerror!void {
+    const shell_ptr: *Shell = @ptrCast(@alignCast(editor.user_data orelse return));
+    try shell_ptr.runUserWidget(editor, index);
+}
+
 fn refreshPromptCallback(editor: *LineEditor) !void {
     const shell_ptr: *Shell = @ptrCast(@alignCast(editor.user_data orelse return));
 

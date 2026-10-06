@@ -352,6 +352,11 @@ pub const LineEditor = struct {
     input_queue_len: usize = 0,
 
     // --- key dispatch ---
+    /// Runs a user-defined widget (`zle -N`) by its index in the shell's list.
+    /// Set by the shell, which owns the widgets and the functions behind them;
+    /// the editor only knows how to ask. Same seam as prompt_refresh_fn.
+    user_widget_fn: ?*const fn (*LineEditor, u16) anyerror!void = null,
+
     /// Keymaps to consult, owned by the shell. Null disables the keymap and
     /// leaves every key to the built-in handling below, which is the case
     /// before the shell has any (and in tests that do not set it).
@@ -745,6 +750,40 @@ pub const LineEditor = struct {
     }
 
     // Vi mode transitions.
+
+    /// Step out of line editing so a shell function can run: leave raw mode,
+    /// stop bracketed paste, and move off the prompt line.
+    pub fn pauseForWidget(self: *LineEditor) !void {
+        self.clearSuggestion();
+        self.writeBytes("\x1B[?2004l") catch {};
+        try self.writeBytes("\r\n");
+        try self.terminal.disableRawMode();
+    }
+
+    /// Step back in afterwards and repaint the line.
+    pub fn resumeAfterWidget(self: *LineEditor) !void {
+        try self.terminal.enableRawMode();
+        self.writeBytes("\x1B[?2004h") catch {};
+        self.resetRenderedRowToPrompt();
+        try self.displayPrompt();
+        if (self.length > 0) try self.writeBytes(self.buffer[0..self.length]);
+        if (self.cursor < self.length) {
+            var i = self.length - self.cursor;
+            while (i > 0) : (i -= 1) try self.writeBytes("\x1B[D");
+        }
+    }
+
+    /// Replace the line with what a widget left behind.
+    pub fn setLineContents(self: *LineEditor, text: []const u8, cursor: usize) void {
+        self.length = @min(text.len, self.buffer.len);
+        @memcpy(self.buffer[0..self.length], text[0..self.length]);
+        self.cursor = @min(cursor, self.length);
+    }
+
+    /// The line as it stands, for a widget to read.
+    pub fn lineContents(self: *const LineEditor) []const u8 {
+        return self.buffer[0..self.length];
+    }
 
     /// Whether this widget's job is to build the numeric argument, in which case
     /// running it must not clear what it has built so far.
@@ -1572,12 +1611,17 @@ pub const LineEditor = struct {
             if (maps.getString(binding.index)) |text| self.pushBack(text);
             return .cont;
         }
-        return self.invokeWidget(binding.widget, key);
+        return self.invokeWidgetIndexed(binding.widget, key, binding.index);
     }
 
     /// Run a widget. `key` is the byte sequence that triggered it, which the
     /// inserting widgets need (zsh calls it $KEYS).
     pub fn invokeWidget(self: *LineEditor, widget: Widget, key: []const u8) !Flow {
+        return self.invokeWidgetIndexed(widget, key, 0);
+    }
+
+    /// As invokeWidget, with the binding's index for the widgets that need it.
+    pub fn invokeWidgetIndexed(self: *LineEditor, widget: Widget, key: []const u8, key_index: u16) !Flow {
         // yank-pop only means something directly after a yank, so any other
         // action ends the run.
         if (widget != .yank and widget != .yank_pop) self.last_yank_at = null;
@@ -1777,10 +1821,10 @@ pub const LineEditor = struct {
             // index they need.
             .push_input => {},
 
-            // `zle -N` is not implemented, so nothing ever binds these. The
-            // builtin rejects the attempt with an explanation rather than
-            // letting a key quietly do nothing.
-            .user_widget, .unknown => {},
+            .user_widget => {
+                if (self.user_widget_fn) |run| try run(self, key_index);
+            },
+            .unknown => {},
         }
         return .cont;
     }
