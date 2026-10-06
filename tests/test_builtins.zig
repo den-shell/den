@@ -1399,3 +1399,238 @@ test "builtin bindkey: a shell function points at zle -N" {
     try test_utils.TestAssert.expectEqual(@as(u8, 1), r.exit_code);
     try test_utils.TestAssert.expectContains(r.stderr, "zle -N myfn");
 }
+
+// ---------------------------------------------------------------------------
+// zstyle
+// ---------------------------------------------------------------------------
+
+test "builtin zstyle: sets a style and lists it" {
+    const allocator = std.testing.allocator;
+    var fixture = try test_utils.DenShellFixture.init(allocator);
+    defer fixture.deinit();
+    const r = try fixture.execDirect("zstyle ':completion:*' verbose yes; zstyle");
+    defer allocator.free(r.stdout);
+    defer allocator.free(r.stderr);
+
+    try test_utils.TestAssert.expectEqual(@as(u8, 0), r.exit_code);
+    try test_utils.TestAssert.expectContains(r.stdout, "zstyle ':completion:*' verbose yes");
+}
+
+test "builtin zstyle: -L output quotes what the shell would otherwise expand" {
+    const allocator = std.testing.allocator;
+    var fixture = try test_utils.DenShellFixture.init(allocator);
+    defer fixture.deinit();
+    const r = try fixture.execDirect("zstyle ':completion:*' matcher-list '' 'm:{a-z}={A-Z}'; zstyle -L");
+    defer allocator.free(r.stdout);
+    defer allocator.free(r.stderr);
+
+    try test_utils.TestAssert.expectEqual(@as(u8, 0), r.exit_code);
+    // The pattern has a `*` and the matcher has braces; both must come back quoted.
+    try test_utils.TestAssert.expectContains(r.stdout, "zstyle ':completion:*' matcher-list '' 'm:{a-z}={A-Z}'");
+}
+
+test "builtin zstyle: -L output re-runs to the same thing" {
+    const allocator = std.testing.allocator;
+    var fixture = try test_utils.DenShellFixture.init(allocator);
+    defer fixture.deinit();
+    const r = try fixture.exec(
+        "zstyle ':completion:*' matcher-list '' 'm:{a-z}={A-Z}'; zstyle ':zle:*' x 1; " ++
+            "zstyle -L > a.txt; zstyle -d; source a.txt; zstyle -L > b.txt; diff a.txt b.txt && echo identical",
+    );
+    defer allocator.free(r.stdout);
+    defer allocator.free(r.stderr);
+
+    try test_utils.TestAssert.expectEqual(@as(u8, 0), r.exit_code);
+    try test_utils.TestAssert.expectContains(r.stdout, "identical");
+}
+
+test "builtin zstyle: the most specific pattern wins" {
+    const allocator = std.testing.allocator;
+    var fixture = try test_utils.DenShellFixture.init(allocator);
+    defer fixture.deinit();
+    const r = try fixture.execDirect(
+        "zstyle '*' v broad; zstyle ':completion:*' v narrow; zstyle -s ':completion:x' v OUT; echo got=$OUT",
+    );
+    defer allocator.free(r.stdout);
+    defer allocator.free(r.stderr);
+
+    try test_utils.TestAssert.expectContains(r.stdout, "got=narrow");
+}
+
+test "builtin zstyle: -t tests a style, -T defaults an unset one to true" {
+    const allocator = std.testing.allocator;
+    var fixture = try test_utils.DenShellFixture.init(allocator);
+    defer fixture.deinit();
+    const r = try fixture.execDirect(
+        "zstyle ':completion:*' menu select; zstyle -t ':completion:x' menu select; echo a=$?; " ++
+            "zstyle -t ':completion:x' absent; echo b=$?; zstyle -T ':completion:x' absent; echo c=$?",
+    );
+    defer allocator.free(r.stdout);
+    defer allocator.free(r.stderr);
+
+    try test_utils.TestAssert.expectContains(r.stdout, "a=0");
+    try test_utils.TestAssert.expectContains(r.stdout, "b=1");
+    try test_utils.TestAssert.expectContains(r.stdout, "c=0");
+}
+
+test "builtin zstyle: -b reads a style as a boolean" {
+    const allocator = std.testing.allocator;
+    var fixture = try test_utils.DenShellFixture.init(allocator);
+    defer fixture.deinit();
+    const r = try fixture.execDirect(
+        "zstyle ':completion:*' flag on; zstyle -b ':completion:x' flag B; echo b=$B; " ++
+            "zstyle ':completion:*' flag off; zstyle -b ':completion:x' flag C; echo c=$C",
+    );
+    defer allocator.free(r.stdout);
+    defer allocator.free(r.stderr);
+
+    try test_utils.TestAssert.expectContains(r.stdout, "b=yes");
+    try test_utils.TestAssert.expectContains(r.stdout, "c=no");
+}
+
+test "builtin zstyle: -g collects patterns, styles and values" {
+    const allocator = std.testing.allocator;
+    var fixture = try test_utils.DenShellFixture.init(allocator);
+    defer fixture.deinit();
+    const r = try fixture.execDirect(
+        "zstyle ':completion:*' a 1; zstyle ':completion:*' b 2; zstyle ':zle:*' c 3; " ++
+            // Quoted: the collected patterns contain `*`, which would otherwise
+            // be split and globbed before echo saw it.
+            "zstyle -g P; echo \"p=$P\"; zstyle -g S ':completion:*'; echo \"s=$S\"; " ++
+            "zstyle -g V ':completion:*' b; echo \"v=$V\"",
+    );
+    defer allocator.free(r.stdout);
+    defer allocator.free(r.stderr);
+
+    // A pattern carrying two styles is collected once, as zsh reports it.
+    try test_utils.TestAssert.expectContains(r.stdout, "p=:completion:* :zle:*");
+    try test_utils.TestAssert.expectContains(r.stdout, "s=a b");
+    try test_utils.TestAssert.expectContains(r.stdout, "v=2");
+}
+
+test "builtin zstyle: -g succeeds when listing, fails only on a missing style" {
+    const allocator = std.testing.allocator;
+    var fixture = try test_utils.DenShellFixture.init(allocator);
+    defer fixture.deinit();
+    // Only the three-argument form is a lookup. Collecting patterns or style
+    // names reports success even with nothing to collect, matching zsh -- a
+    // `.zshrc` that guards on `zstyle -g` must not take the failure branch.
+    const r = try fixture.execDirect(
+        "zstyle -g A; echo \"empty=$?\"; zstyle ':x:*' s v; " ++
+            "zstyle -g B ':y:*'; echo \"nomatch=$?\"; " ++
+            "zstyle -g C ':x:*' nosuch; echo \"nostyle=$?\"; " ++
+            "zstyle -g D ':x:*' s; echo \"hit=$? v=$D\"",
+    );
+    defer allocator.free(r.stdout);
+    defer allocator.free(r.stderr);
+
+    try test_utils.TestAssert.expectContains(r.stdout, "empty=0");
+    try test_utils.TestAssert.expectContains(r.stdout, "nomatch=0");
+    try test_utils.TestAssert.expectContains(r.stdout, "nostyle=1");
+    try test_utils.TestAssert.expectContains(r.stdout, "hit=0 v=v");
+}
+
+test "builtin zstyle: -g matches the stored pattern, not a context" {
+    const allocator = std.testing.allocator;
+    var fixture = try test_utils.DenShellFixture.init(allocator);
+    defer fixture.deinit();
+    // Unlike -s/-b/-t, -g's second argument is the pattern as stored: zsh does
+    // not match a context against it, so a real context finds nothing.
+    const r = try fixture.execDirect(
+        "zstyle ':completion:*' b 2; " ++
+            "zstyle -g V ':completion:xx' b; echo \"ctx=$? v=[$V]\"; " ++
+            "zstyle -g W ':completion:*' b; echo \"lit=$? w=[$W]\"",
+    );
+    defer allocator.free(r.stdout);
+    defer allocator.free(r.stderr);
+
+    try test_utils.TestAssert.expectContains(r.stdout, "ctx=1 v=[]");
+    try test_utils.TestAssert.expectContains(r.stdout, "lit=0 w=[2]");
+}
+
+test "builtin zstyle: -d removes styles" {
+    const allocator = std.testing.allocator;
+    var fixture = try test_utils.DenShellFixture.init(allocator);
+    defer fixture.deinit();
+    const r = try fixture.execDirect(
+        "zstyle ':completion:*' a 1; zstyle ':completion:*' b 2; zstyle -d ':completion:*' a; zstyle -L; echo end",
+    );
+    defer allocator.free(r.stdout);
+    defer allocator.free(r.stderr);
+
+    try test_utils.TestAssert.expectContains(r.stdout, "end");
+    try test_utils.TestAssert.expectContains(r.stdout, " b 2");
+    try test_utils.TestAssert.expectEqual(@as(?usize, null), std.mem.indexOf(u8, r.stdout, " a 1"));
+}
+
+test "builtin zstyle: -m matches a style's value" {
+    const allocator = std.testing.allocator;
+    var fixture = try test_utils.DenShellFixture.init(allocator);
+    defer fixture.deinit();
+    const r = try fixture.execDirect(
+        "zstyle ':completion:*' matcher-list 'm:{a-z}={A-Z}'; zstyle -m ':completion:x' matcher-list '*a-z*'; echo hit=$?; " ++
+            "zstyle -m ':completion:x' matcher-list '*nope*'; echo miss=$?",
+    );
+    defer allocator.free(r.stdout);
+    defer allocator.free(r.stderr);
+
+    try test_utils.TestAssert.expectContains(r.stdout, "hit=0");
+    try test_utils.TestAssert.expectContains(r.stdout, "miss=1");
+}
+
+test "builtin zstyle: -e says it is unsupported" {
+    const allocator = std.testing.allocator;
+    var fixture = try test_utils.DenShellFixture.init(allocator);
+    defer fixture.deinit();
+    const r = try fixture.execDirect("zstyle -e ':completion:*' x 'reply=(1)'");
+    defer allocator.free(r.stdout);
+    defer allocator.free(r.stderr);
+
+    try test_utils.TestAssert.expectEqual(@as(u8, 2), r.exit_code);
+    try test_utils.TestAssert.expectContains(r.stderr, "not supported");
+}
+
+test "builtin zstyle: a bad option prints usage" {
+    const allocator = std.testing.allocator;
+    var fixture = try test_utils.DenShellFixture.init(allocator);
+    defer fixture.deinit();
+    const r = try fixture.execDirect("zstyle -Q");
+    defer allocator.free(r.stdout);
+    defer allocator.free(r.stderr);
+
+    try test_utils.TestAssert.expectEqual(@as(u8, 2), r.exit_code);
+    try test_utils.TestAssert.expectContains(r.stderr, "bad option: -Q");
+}
+
+test "builtin zstyle: a real zshrc completion block is accepted" {
+    const allocator = std.testing.allocator;
+    var fixture = try test_utils.DenShellFixture.init(allocator);
+    defer fixture.deinit();
+
+    // The lines people actually paste. None of these should error.
+    const r = try fixture.execDirect(
+        "zstyle ':completion:*' menu select; " ++
+            "zstyle ':completion:*' matcher-list '' 'm:{a-zA-Z}={A-Za-z}'; " ++
+            "zstyle ':completion:*' list-colors ''; " ++
+            "zstyle ':completion:*:descriptions' format '%B%d%b'; " ++
+            "zstyle ':completion:*' use-cache on; echo ok",
+    );
+    defer allocator.free(r.stdout);
+    defer allocator.free(r.stderr);
+
+    try test_utils.TestAssert.expectEqual(@as(u8, 0), r.exit_code);
+    try test_utils.TestAssert.expectContains(r.stdout, "ok");
+    try test_utils.TestAssert.expectEqual(@as(usize, 0), r.stderr.len);
+}
+
+test "builtin type: reports zstyle as a shell builtin" {
+    const allocator = std.testing.allocator;
+    var fixture = try test_utils.DenShellFixture.init(allocator);
+    defer fixture.deinit();
+    const r = try fixture.execDirect("type zstyle");
+    defer allocator.free(r.stdout);
+    defer allocator.free(r.stderr);
+
+    try test_utils.TestAssert.expectEqual(@as(u8, 0), r.exit_code);
+    try test_utils.TestAssert.expectContains(r.stdout, "shell builtin");
+}

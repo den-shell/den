@@ -122,6 +122,7 @@ const Terminal = @import("utils/terminal.zig");
 const LineEditor = Terminal.LineEditor;
 const keymap = Terminal.keymap;
 const bindkey_spec = @import("compat/bindkey.zig");
+const zstyle_mod = @import("compat/zstyle.zig");
 const Completion = @import("utils/completion.zig").Completion;
 const Expansion = @import("utils/expansion.zig").Expansion;
 const Glob = @import("utils/glob.zig").Glob;
@@ -333,6 +334,9 @@ pub const Shell = struct {
     /// Set while a user widget's function is running. A widget that reaches
     /// `zle` again must not start a second line editor inside the first.
     in_user_widget: bool = false,
+
+    /// `zstyle` database: values keyed by context pattern and style name.
+    zstyles: zstyle_mod.Store,
 
     /// Keymaps for the interactive line editor.
     ///
@@ -677,6 +681,7 @@ pub const Shell = struct {
             .loadable_builtins = LoadableBuiltins.init(allocator),
             .keymaps = keymap.KeymapSet.init(),
             .user_widgets = .empty,
+            .zstyles = .{},
         };
 
         // Detect setuid condition and drop privileges
@@ -792,6 +797,7 @@ pub const Shell = struct {
         // Clean up function manager
         self.function_manager.deinit();
         self.keymaps.deinit(self.allocator);
+        self.zstyles.deinit(self.allocator);
         for (self.user_widgets.items) |w| {
             self.allocator.free(w.name);
             self.allocator.free(w.func);
@@ -3282,6 +3288,36 @@ pub const Shell = struct {
     }
 
     /// Load aliases from configuration
+    /// Act on the `zstyle` settings den can act on.
+    ///
+    /// Almost every style configures zsh's own completion system, which den does
+    /// not have, so they are stored and queryable but change nothing. Only one
+    /// maps exactly onto something den has, and it is applied whenever a style is
+    /// set so a `.denrc` line takes effect without a restart.
+    ///
+    /// Deliberately not mapped: `verbose` and `use-cache`, because the settings
+    /// they would set are read by nothing; and `list-max`, because in zsh it is
+    /// the point at which listing asks first, not a cap on what is offered, and
+    /// treating it as a cap would invent a behaviour rather than honour one.
+    pub fn applyZstyles(self: *Shell) void {
+        const ctx = ":completion:::::";
+
+        // zsh has no "case insensitive" style; the idiom is a matcher-list with a
+        // case-folding spec, so look for one rather than inventing a style name.
+        if (self.zstyles.get(ctx, "matcher-list")) |specs| {
+            for (specs) |spec| {
+                if (std.mem.indexOf(u8, spec, "{a-z}={A-Z}") != null or
+                    std.mem.indexOf(u8, spec, "{a-zA-Z}={A-Za-z}") != null or
+                    std.mem.indexOf(u8, spec, "{A-Z}={a-z}") != null)
+                {
+                    self.config.completion.case_sensitive = false;
+                    shell_mod.setCompletionConfig(self.config.completion);
+                    return;
+                }
+            }
+        }
+    }
+
     /// A widget made from a shell function by `zle -N`.
     pub const UserWidget = struct {
         name: []u8,
