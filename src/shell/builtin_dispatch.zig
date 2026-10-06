@@ -64,7 +64,7 @@ pub fn isShellBuiltin(name: []const u8) bool {
         "add-zsh-hook",
         // zsh startup preamble
         "compinit",   "bashcompinit", "compdef",
-        "zmodload",   "emulate",      "is-at-least",
+        "zmodload",   "emulate",      "is-at-least",  "autoload",
     };
     for (shell_builtins) |b| {
         if (std.mem.eql(u8, name, b)) return true;
@@ -374,6 +374,10 @@ pub fn dispatchBuiltin(self: *Shell, cmd: *types.ParsedCommand) !DispatchResult 
     }
     if (std.mem.eql(u8, name, "is-at-least")) {
         try shell_mod.builtinIsAtLeast(self, cmd);
+        return .handled;
+    }
+    if (std.mem.eql(u8, name, "autoload")) {
+        try shell_mod.builtinAutoload(self, cmd);
         return .handled;
     }
     if (std.mem.eql(u8, name, "setopt")) {

@@ -25,6 +25,7 @@ const BuiltinContext = builtins.BuiltinContext;
 
 // Forward declaration for Shell type
 const Shell = @import("../shell.zig").Shell;
+const autoload_builtin = @import("../shell/autoload_builtin.zig");
 
 // Plugin hook types for command_not_found hook
 const HookType = @import("../plugins/interface.zig").HookType;
@@ -496,7 +497,10 @@ pub const Executor = struct {
                     } else {
                         std.c._exit(1);
                     }
-                } else if (self.shell != null and self.shell.?.function_manager.hasFunction(cmd.name)) {
+                } else if (self.shell != null and
+                    (self.shell.?.function_manager.hasFunction(cmd.name) or
+                        self.shell.?.resolveAutoload(cmd.name) == .defined))
+                {
                     // User-defined function in pipeline
                     const shell = self.shell.?;
                     const exit_code = shell.function_manager.executeFunction(shell, cmd.name, cmd.args) catch 1;
@@ -856,6 +860,18 @@ pub const Executor = struct {
 
         // Check if it's a user-defined function (POSIX: functions before builtins)
         if (self.shell) |shell| {
+            // An `autoload`ed name is not a function until something calls it,
+            // so its `fpath` file is read here, on that first call. Costs one
+            // `count()` when nothing was ever autoloaded.
+            if (!shell.function_manager.hasFunction(command.name)) {
+                if (shell.resolveAutoload(command.name) == .missing_file) {
+                    // zsh reports this rather than `command not found`, which is
+                    // the more useful failure: the name was known, the path is
+                    // wrong.
+                    autoload_builtin.reportMissing(command.name);
+                    return 1;
+                }
+            }
             if (shell.function_manager.hasFunction(command.name)) {
                 // If function has redirections, save/restore fds around execution
                 if (command.redirections.len > 0) {

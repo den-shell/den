@@ -170,6 +170,7 @@ const shell_mod = @import("shell/mod.zig");
 const compound_exec = @import("shell/compound_execution.zig");
 const compound_parser = @import("parser/compound.zig");
 const dir_hooks = @import("shell/dir_hooks.zig");
+const autoload_builtin = @import("shell/autoload_builtin.zig");
 const build_options = @import("build_options");
 
 /// Hard limit for in-memory history entries.
@@ -337,6 +338,10 @@ pub const Shell = struct {
 
     /// `zstyle` database: values keyed by context pattern and style name.
     zstyles: zstyle_mod.Store,
+    /// Names marked by `autoload`, awaiting their first call. Empty for
+    /// any shell that never autoloads, which is what keeps the lookup in
+    /// the executor's command path free.
+    autoloads: std.StringHashMap(void),
 
     /// Keymaps for the interactive line editor.
     ///
@@ -682,6 +687,7 @@ pub const Shell = struct {
             .keymaps = keymap.KeymapSet.init(),
             .user_widgets = .empty,
             .zstyles = .{},
+            .autoloads = std.StringHashMap(void).init(allocator),
         };
 
         // Detect setuid condition and drop privileges
@@ -798,6 +804,9 @@ pub const Shell = struct {
         self.function_manager.deinit();
         self.keymaps.deinit(self.allocator);
         self.zstyles.deinit(self.allocator);
+        var autoload_iter = self.autoloads.keyIterator();
+        while (autoload_iter.next()) |key| self.allocator.free(key.*);
+        self.autoloads.deinit();
         for (self.user_widgets.items) |w| {
             self.allocator.free(w.name);
             self.allocator.free(w.func);
@@ -3322,6 +3331,14 @@ pub const Shell = struct {
                 }
             }
         }
+    }
+
+    /// Define an `autoload`ed name from `$fpath`, on its first call.
+    ///
+    /// Lives here rather than in the executor so both the plain and the
+    /// pipeline command paths can reach the same rule.
+    pub fn resolveAutoload(self: *Shell, name: []const u8) autoload_builtin.Outcome {
+        return autoload_builtin.resolve(self, name);
     }
 
     /// A widget made from a shell function by `zle -N`.

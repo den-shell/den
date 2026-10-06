@@ -116,6 +116,10 @@ pub const builtinZmodload = zsh_setup_builtins.builtinZmodload;
 pub const builtinEmulate = zsh_setup_builtins.builtinEmulate;
 pub const builtinIsAtLeast = zsh_setup_builtins.builtinIsAtLeast;
 
+// Re-export autoload
+pub const autoload_builtin = @import("autoload_builtin.zig");
+pub const builtinAutoload = autoload_builtin.builtinAutoload;
+
 // Re-export AI completion builtin
 pub const ai_builtin = @import("ai_builtin.zig");
 pub const builtinAi = ai_builtin.builtinAi;
