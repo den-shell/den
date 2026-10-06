@@ -198,14 +198,12 @@ while the names configs actually autoload -- `compinit`, `add-zsh-hook`,
 `bashcompinit`, `is-at-least` -- are builtins here. Not shadowing them is what
 makes `autoload -Uz compinit; compinit` work.
 
-**Known limitation.** Array assignment does not expand its elements yet, so
-`fpath=(~/funcs $fpath)` stores the literal `~/funcs`. Until that is fixed, use a
-literal path in the array, or `FPATH`, which is a scalar and does expand:
+Both forms of the search path work, since array elements are expanded like any
+other word:
 
 ```sh
-export FPATH=$HOME/funcs    # works today
-fpath=(/home/you/funcs)     # works today
-fpath=(~/funcs)             # does NOT expand yet
+fpath=(~/funcs $fpath)      # tilde, and the previous value
+export FPATH=$HOME/funcs    # the scalar form
 ```
 
 #### Hooks

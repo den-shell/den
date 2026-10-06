@@ -652,10 +652,8 @@ forward.
 | `is-at-least 5.1` | Works with two operands; false with one |
 | `add-zsh-hook precmd fn` | Works; `chpwd`, `precmd`, `preexec`, `zshexit` |
 
-Note that array assignment does not expand its elements yet, so a `fpath` array
-written with `~` stores the tilde literally. Use a literal path, or `FPATH`,
-which is a scalar and does expand. See
-[Extended Features](./EXTENDED_FEATURES.md#startup-autoload-compinit-and-hooks).
+See [Extended Features](./EXTENDED_FEATURES.md#startup-autoload-compinit-and-hooks)
+for the whole startup surface.
 
 #### `zstyle`
 

@@ -2376,3 +2376,164 @@ test "redirection: an unopenable target fails without ending the shell" {
     try test_utils.TestAssert.expectContains(r.stdout, "input=1");
     try test_utils.TestAssert.expectContains(r.stdout, "STILL_RUNNING");
 }
+
+test "array assignment: elements expand variables, tildes and arithmetic" {
+    const allocator = std.testing.allocator;
+    var fixture = try test_utils.DenShellFixture.init(allocator);
+    defer fixture.deinit();
+    // Array elements used to be duped verbatim: nothing expanded at all, so
+    // `fpath=(~/funcs $fpath)` stored a literal tilde.
+    const r = try fixture.execDirect(
+        "Y=solo; a=($Y); echo \"var=[${a[0]}]\"; " ++
+            "b=($((1+2))); echo \"arith=[${b[0]}]\"; " ++
+            "HOME=/tmp/denhome-test; c=(~/x); echo \"tilde=[${c[0]}]\"",
+    );
+    defer allocator.free(r.stdout);
+    defer allocator.free(r.stderr);
+
+    try test_utils.TestAssert.expectContains(r.stdout, "var=[solo]");
+    try test_utils.TestAssert.expectContains(r.stdout, "arith=[3]");
+    try test_utils.TestAssert.expectContains(r.stdout, "tilde=[/tmp/denhome-test/x]");
+}
+
+test "array assignment: an unquoted expansion field-splits, a quoted one does not" {
+    const allocator = std.testing.allocator;
+    var fixture = try test_utils.DenShellFixture.init(allocator);
+    defer fixture.deinit();
+    // bash semantics, which is what den's 0-indexed arrays follow.
+    const r = try fixture.execDirect(
+        "X=\"a b\"; u=($X); q=(\"$X\"); " ++
+            "echo \"unquoted=${#u[@]} quoted=${#q[@]} q0=[${q[0]}]\"",
+    );
+    defer allocator.free(r.stdout);
+    defer allocator.free(r.stderr);
+
+    try test_utils.TestAssert.expectContains(r.stdout, "unquoted=2 quoted=1 q0=[a b]");
+}
+
+test "array assignment: a command substitution is one word that splits" {
+    const allocator = std.testing.allocator;
+    var fixture = try test_utils.DenShellFixture.init(allocator);
+    defer fixture.deinit();
+    // The scanner has to treat $(...), ${...} and backticks as single words even
+    // though they contain spaces, then let field splitting divide the result.
+    const r = try fixture.execDirect(
+        "a=($(echo p q)); echo \"dollar=${#a[@]} [${a[@]}]\"; " ++
+            "b=(`echo p q`); echo \"backtick=${#b[@]} [${b[@]}]\"; " ++
+            "c=(${NOPE:-d e}); echo \"braced=${#c[@]} [${c[@]}]\"; " ++
+            "d=($(echo $(echo x)) y); echo \"nested=${#d[@]} [${d[@]}]\"",
+    );
+    defer allocator.free(r.stdout);
+    defer allocator.free(r.stderr);
+
+    try test_utils.TestAssert.expectContains(r.stdout, "dollar=2 [p q]");
+    try test_utils.TestAssert.expectContains(r.stdout, "backtick=2 [p q]");
+    try test_utils.TestAssert.expectContains(r.stdout, "braced=2 [d e]");
+    try test_utils.TestAssert.expectContains(r.stdout, "nested=2 [x y]");
+}
+
+test "array assignment: globs expand, and quotes stop them" {
+    const allocator = std.testing.allocator;
+    var fixture = try test_utils.DenShellFixture.init(allocator);
+    defer fixture.deinit();
+    const p1 = try fixture.createFile("one.dat", "");
+    allocator.free(p1);
+    const p2 = try fixture.createFile("two.dat", "");
+    allocator.free(p2);
+
+    const script = try std.fmt.allocPrint(
+        allocator,
+        // Separated by `;` rather than `&&` on purpose: an array assignment is
+        // not recognised as a chain segment, which is a separate defect.
+        "cd {s}; g=(*.dat); echo \"glob=${{#g[@]}}\"; " ++
+            "q=(\"*.dat\"); echo \"dq=${{#q[@]}} [${{q[0]}}]\"; " ++
+            "s=('*.dat'); echo \"sq=${{#s[@]}} [${{s[0]}}]\"; " ++
+            "n=(no_such_*); echo \"nomatch=${{#n[@]}} [${{n[0]}}]\"",
+        .{fixture.temp_dir.path},
+    );
+    defer allocator.free(script);
+
+    const r = try fixture.execDirect(script);
+    defer allocator.free(r.stdout);
+    defer allocator.free(r.stderr);
+
+    try test_utils.TestAssert.expectContains(r.stdout, "glob=2");
+    // A quoted pattern is a literal, in either quote style.
+    try test_utils.TestAssert.expectContains(r.stdout, "dq=1 [*.dat]");
+    try test_utils.TestAssert.expectContains(r.stdout, "sq=1 [*.dat]");
+    try test_utils.TestAssert.expectContains(r.stdout, "nomatch=1 [no_such_*]");
+}
+
+test "array assignment: single quotes keep everything literal" {
+    const allocator = std.testing.allocator;
+    var fixture = try test_utils.DenShellFixture.init(allocator);
+    defer fixture.deinit();
+    const r = try fixture.execDirect(
+        "Y=solo; a=('$Y' lit); echo \"n=${#a[@]} zero=[${a[0]}] one=[${a[1]}]\"",
+    );
+    defer allocator.free(r.stdout);
+    defer allocator.free(r.stderr);
+
+    try test_utils.TestAssert.expectContains(r.stdout, "n=2 zero=[$Y] one=[lit]");
+}
+
+test "array assignment: a word mixing quoting stays one element" {
+    const allocator = std.testing.allocator;
+    var fixture = try test_utils.DenShellFixture.init(allocator);
+    defer fixture.deinit();
+    // The old scanner stopped at the closing quote and started a new element, so
+    // `("x"y)` produced two. Quoting is tracked per run now.
+    const r = try fixture.execDirect(
+        "X=\"a b\"; m=(pre\"$X\"post); echo \"mixed=${#m[@]} [${m[0]}]\"; " ++
+            "n=(\"x\"y); echo \"adjacent=${#n[@]} [${n[0]}]\"",
+    );
+    defer allocator.free(r.stdout);
+    defer allocator.free(r.stderr);
+
+    try test_utils.TestAssert.expectContains(r.stdout, "mixed=1 [prea bpost]");
+    try test_utils.TestAssert.expectContains(r.stdout, "adjacent=1 [xy]");
+}
+
+test "array assignment: fpath with a tilde reaches autoload" {
+    const allocator = std.testing.allocator;
+    var fixture = try test_utils.DenShellFixture.init(allocator);
+    defer fixture.deinit();
+    // The idiom that motivated this: the standard zsh fpath line, which stored a
+    // literal `~/funcs` before and so could never find a function.
+    const dir = try std.fs.path.join(allocator, &.{ fixture.temp_dir.path, "funcs" });
+    defer allocator.free(dir);
+    try std.Io.Dir.cwd().createDirPath(std.Options.debug_io, dir);
+    const fn_path = try std.fs.path.join(allocator, &.{ dir, "hello_fn" });
+    defer allocator.free(fn_path);
+    {
+        const f = try std.Io.Dir.cwd().createFile(std.Options.debug_io, fn_path, .{ .truncate = true });
+        defer f.close(std.Options.debug_io);
+        try f.writeStreamingAll(std.Options.debug_io, "echo FROM_FPATH\n");
+    }
+
+    const script = try std.fmt.allocPrint(
+        allocator,
+        "HOME={s}; fpath=(~/funcs); autoload -Uz hello_fn; hello_fn",
+        .{fixture.temp_dir.path},
+    );
+    defer allocator.free(script);
+
+    const r = try fixture.execDirect(script);
+    defer allocator.free(r.stdout);
+    defer allocator.free(r.stderr);
+
+    try test_utils.TestAssert.expectContains(r.stdout, "FROM_FPATH");
+}
+
+test "command arguments: a backtick substitution field-splits" {
+    const allocator = std.testing.allocator;
+    var fixture = try test_utils.DenShellFixture.init(allocator);
+    defer fixture.deinit();
+    // The splitting guard only looked for `$`, so `$(...)` split and backticks
+    // did not. This was wrong for command arguments too, not just arrays.
+    const r = try fixture.execDirect("printf '[%s]' `echo p q`; echo; printf '[%s]' $(echo p q); echo");
+    defer allocator.free(r.stdout);
+    defer allocator.free(r.stderr);
+
+    try test_utils.TestAssert.expectContains(r.stdout, "[p][q]");
+}
