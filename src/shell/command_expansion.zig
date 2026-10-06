@@ -26,33 +26,38 @@ pub fn expandCommandChain(self: *Shell, chain: *types.CommandChain) !void {
 /// lets the executor defer expansion to execution time so each segment of a
 /// chain (`a && b`, `a; b`) expands against the environment as mutated by
 /// prior segments, while still being safe if the shell expanded it up-front.
-pub fn expandCommand(self: *Shell, cmd: *types.ParsedCommand) !void {
-    if (cmd.expanded) return;
-    // Collect positional params for the expander
-    // If inside a function, use function's positional params instead of shell's
-    var positional_params_slice: [64][]const u8 = undefined;
-    var param_count: usize = 0;
+/// Storage an expander borrows. Declared by the caller so the expander's
+/// `positional_params` slice outlives the call that built it.
+pub const ExpanderStorage = struct {
+    positional: [64][]const u8 = undefined,
+};
 
+/// Build an expander configured from the shell: positional parameters, the
+/// command-substitution callback, arrays, nameref attributes, `set -u`, and the
+/// current function frame's locals.
+///
+/// Shared so that anything expanding a word -- command arguments, array
+/// assignment elements -- gets the same view of the shell rather than its own
+/// partial copy.
+pub fn makeExpander(self: *Shell, storage: *ExpanderStorage) Expansion {
+    var param_count: usize = 0;
     if (self.function_manager.currentFrame()) |frame| {
-        // Inside a function - use function's positional params
         var i: usize = 0;
         while (i < frame.positional_params_count) : (i += 1) {
             if (frame.positional_params[i]) |param| {
-                positional_params_slice[param_count] = param;
+                storage.positional[param_count] = param;
                 param_count += 1;
             }
         }
     } else {
-        // Not inside a function - use shell's positional params
         for (self.positional_params) |maybe_param| {
             if (maybe_param) |param| {
-                positional_params_slice[param_count] = param;
+                storage.positional[param_count] = param;
                 param_count += 1;
             }
         }
     }
 
-    // Convert PID to i32 for expansion (0 on Windows where we don't track PIDs)
     const pid_for_expansion: i32 = if (builtin.os.tag == .windows)
         0
     else
@@ -62,7 +67,7 @@ pub fn expandCommand(self: *Shell, cmd: *types.ParsedCommand) !void {
         self.allocator,
         &self.environment,
         self.last_exit_code,
-        positional_params_slice[0..param_count],
+        storage.positional[0..param_count],
         self.shell_name,
         pid_for_expansion,
         self.last_arg,
@@ -70,14 +75,138 @@ pub fn expandCommand(self: *Shell, cmd: *types.ParsedCommand) !void {
     );
     const shell_mod = @import("../shell.zig");
     expander.exec_command_fn = &shell_mod.execCommandCallback;
-    expander.arrays = &self.arrays; // Add indexed array support
-    expander.assoc_arrays = &self.assoc_arrays; // Add associative array support
-    expander.var_attributes = &self.var_attributes; // Add nameref support
-    expander.option_nounset = self.option_nounset; // Pass set -u flag
-    // Set local vars pointer if inside a function
+    expander.arrays = &self.arrays;
+    expander.assoc_arrays = &self.assoc_arrays;
+    expander.var_attributes = &self.var_attributes;
+    expander.option_nounset = self.option_nounset;
     if (self.function_manager.currentFrame()) |frame| {
         expander.local_vars = &frame.local_vars;
     }
+    return expander;
+}
+
+/// How a word was quoted in the source, which decides what happens to it.
+pub const Quoting = enum {
+    /// Unquoted: everything applies, including splitting and globbing.
+    none,
+    /// Double-quoted: parameters and substitutions expand, but the result is
+    /// one word and is not globbed, and a leading `~` stays literal.
+    double,
+    /// Double-quoted in a word whose quoting the tokenizer already encoded as
+    /// backslash escapes in front of glob characters -- which is how a command's
+    /// arguments arrive. Brace and glob expansion still run, because that is
+    /// what consumes those escapes.
+    ///
+    /// It is also why `printf "[%s]" "{a,b}"` brace-expands in den where bash
+    /// leaves it alone. That divergence predates this function; it is named here
+    /// rather than quietly folded into `double`, whose meaning is the correct
+    /// one and which is what array elements use.
+    double_pre_escaped,
+    /// Single-quoted: nothing applies at all.
+    single,
+};
+
+/// Run one word through the expansion pipeline, appending the results to `out`.
+///
+/// The order is the shell's: parameter, command and arithmetic expansion (with
+/// tilde expansion unless the word was quoted), then IFS field splitting of an
+/// unquoted result, then brace expansion, then globbing, then stripping the
+/// escapes the tokenizer added in front of quoted glob characters.
+///
+/// One word can therefore produce several, or none at all. `out` takes
+/// ownership of every string appended to it.
+pub fn expandWordInto(
+    self: *Shell,
+    expander: *Expansion,
+    brace: *BraceExpander,
+    glob: *Glob,
+    cwd: []const u8,
+    word: []const u8,
+    quoting: Quoting,
+    out: *std.ArrayListUnmanaged([]const u8),
+) !void {
+    if (quoting == .single) {
+        // Nothing expands inside single quotes, not even a tilde. The escapes
+        // the tokenizer puts in front of glob characters still come off, or the
+        // backslashes would reach the command.
+        const literal = try stripGlobEscapes(self.allocator, word);
+        errdefer self.allocator.free(literal);
+        try out.append(self.allocator, literal);
+        return;
+    }
+
+    expander.skip_tilde = quoting != .none;
+    const expanded = try expander.expand(word);
+    expander.skip_tilde = false;
+
+    if (quoting == .double) {
+        // One word, and nothing further applies to it.
+        defer self.allocator.free(expanded);
+        const element = try stripGlobEscapes(self.allocator, expanded);
+        errdefer self.allocator.free(element);
+        try out.append(self.allocator, element);
+        return;
+    }
+
+    // Split only when the word was unquoted, something in it expanded, and the
+    // result actually changed. A literal word containing spaces was already one
+    // word by construction.
+    const should_split = quoting == .none and
+        containsExpansion(word) and !std.mem.eql(u8, word, expanded);
+
+    if (should_split) {
+        const ifs = self.environment.get("IFS") orelse " \t\n";
+        const WordSplitter = @import("../utils/expansion.zig").WordSplitter;
+        var splitter = WordSplitter.initWithIfs(self.allocator, ifs);
+        const fields = try splitter.split(expanded);
+        defer self.allocator.free(fields);
+        // Fields point into `expanded`, so it is freed once, after they are used.
+        defer self.allocator.free(expanded);
+
+        for (fields) |field| {
+            if (field.len == 0) continue;
+            try braceAndGlobInto(self, brace, glob, cwd, field, out);
+        }
+        return;
+    }
+
+    defer self.allocator.free(expanded);
+    try braceAndGlobInto(self, brace, glob, cwd, expanded, out);
+}
+
+/// Brace-expand a field, glob each result, and append what comes out.
+fn braceAndGlobInto(
+    self: *Shell,
+    brace: *BraceExpander,
+    glob: *Glob,
+    cwd: []const u8,
+    field: []const u8,
+    out: *std.ArrayListUnmanaged([]const u8),
+) !void {
+    const brace_exp = try brace.expand(field);
+    defer {
+        for (brace_exp) |item| self.allocator.free(item);
+        self.allocator.free(brace_exp);
+    }
+    for (brace_exp) |brace_item| {
+        const glob_exp = try glob.expand(brace_item, cwd);
+        defer {
+            for (glob_exp) |p| self.allocator.free(p);
+            self.allocator.free(glob_exp);
+        }
+        for (glob_exp) |path| {
+            const stripped = try stripGlobEscapes(self.allocator, path);
+            errdefer self.allocator.free(stripped);
+            try out.append(self.allocator, stripped);
+        }
+    }
+}
+
+pub fn expandCommand(self: *Shell, cmd: *types.ParsedCommand) !void {
+    if (cmd.expanded) return;
+
+    var storage: ExpanderStorage = .{};
+    var expander = makeExpander(self, &storage);
     var glob = Glob.init(self.allocator);
     glob.qualifiers_enabled = self.config.zsh.enabled and self.config.zsh.glob_qualifiers;
     var brace = BraceExpander.init(self.allocator);
@@ -154,94 +283,33 @@ pub fn expandCommand(self: *Shell, cmd: *types.ParsedCommand) !void {
                 }
             }
 
-            // First expand variables (unless this is a -v operand in [[ ]])
-            // Suppress tilde expansion for quoted arguments (bash behavior:
-            // echo "~" prints literal ~, echo ~ expands to home directory)
-            expander.skip_tilde = arg_was_quoted;
-            const var_expanded = if (skip_expansion)
-                try self.allocator.dupe(u8, arg)
-            else
-                try expander.expand(arg);
-            expander.skip_tilde = false;
-
+            // For [[ ]] only variable expansion happens, so that a pattern
+            // like `a*` on the right of `==` survives to the matcher.
             if (skip_globs) {
-                // For [[ ]], only do variable expansion, no brace/glob expansion
+                const var_expanded = if (skip_expansion)
+                    try self.allocator.dupe(u8, arg)
+                else blk: {
+                    expander.skip_tilde = arg_was_quoted;
+                    defer expander.skip_tilde = false;
+                    break :blk try expander.expand(arg);
+                };
                 try expanded_args.append(self.allocator, var_expanded);
                 self.allocator.free(arg);
                 continue;
             }
 
-            // IFS word splitting: if the arg was unquoted and contained a variable
-            // reference that was expanded, split the result on IFS characters.
-            const should_ifs_split = !arg_was_quoted and containsVariableRef(arg) and
-                !std.mem.eql(u8, arg, var_expanded);
-
-            if (should_ifs_split) {
-                // Get IFS value (default: space, tab, newline)
-                const ifs = self.environment.get("IFS") orelse " \t\n";
-                const WordSplitter = @import("../utils/expansion.zig").WordSplitter;
-                var splitter = WordSplitter.initWithIfs(self.allocator, ifs);
-                const fields = try splitter.split(var_expanded);
-                defer self.allocator.free(fields);
-                // Note: fields are slices into var_expanded, so don't free individually.
-                // var_expanded is freed after we're done with the fields.
-                defer self.allocator.free(var_expanded);
-
-                for (fields) |field| {
-                    if (field.len == 0) continue;
-                    // Apply brace + glob expansion on each IFS field
-                    const brace_exp = try brace.expand(field);
-                    defer {
-                        for (brace_exp) |item| self.allocator.free(item);
-                        self.allocator.free(brace_exp);
-                    }
-                    for (brace_exp) |brace_item| {
-                        const glob_exp = try glob.expand(brace_item, cwd);
-                        defer {
-                            for (glob_exp) |p| self.allocator.free(p);
-                            self.allocator.free(glob_exp);
-                        }
-                        for (glob_exp) |path| {
-                            const stripped = try stripGlobEscapes(self.allocator, path);
-                            errdefer self.allocator.free(stripped);
-                            try expanded_args.append(self.allocator, stripped);
-                        }
-                    }
-                }
-                self.allocator.free(arg);
-                continue;
-            }
-
-            defer self.allocator.free(var_expanded);
-
-            // Then expand braces
-            const brace_expanded = try brace.expand(var_expanded);
-            defer {
-                for (brace_expanded) |item| {
-                    self.allocator.free(item);
-                }
-                self.allocator.free(brace_expanded);
-            }
-
-            // Then expand globs on each brace expansion result
-            for (brace_expanded) |brace_item| {
-                const glob_expanded = try glob.expand(brace_item, cwd);
-                defer {
-                    for (glob_expanded) |path| {
-                        self.allocator.free(path);
-                    }
-                    self.allocator.free(glob_expanded);
-                }
-
-                // Add all glob matches to args, stripping glob escape backslashes
-                for (glob_expanded) |path| {
-                    const stripped = try stripGlobEscapes(self.allocator, path);
-                    errdefer self.allocator.free(stripped);
-                    try expanded_args.append(self.allocator, stripped);
-                }
-            }
-
-            // Free original arg
+            // Everything else goes through the shared word pipeline, which is
+            // also what an array assignment's elements use.
+            try expandWordInto(
+                self,
+                &expander,
+                &brace,
+                &glob,
+                cwd,
+                arg,
+                if (arg_was_quoted) .double_pre_escaped else .none,
+                &expanded_args,
+            );
             self.allocator.free(arg);
         }
 
@@ -296,7 +364,7 @@ pub fn expandCommand(self: *Shell, cmd: *types.ParsedCommand) !void {
 
 /// Strip backslash escapes before glob metacharacters (*, ?, [)
 /// These are added by the tokenizer for quoted glob chars to prevent expansion
-fn stripGlobEscapes(allocator: std.mem.Allocator, input: []const u8) ![]u8 {
+pub fn stripGlobEscapes(allocator: std.mem.Allocator, input: []const u8) ![]u8 {
     var buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
     var len: usize = 0;
     var i: usize = 0;
@@ -444,12 +512,20 @@ fn isDenBuiltin(name: []const u8) bool {
 }
 
 /// Check if a string contains an unescaped variable reference ($var, ${var}, $(...), etc.)
-fn containsVariableRef(s: []const u8) bool {
+/// Whether a word contains something that expands, and so whether its result
+/// is a candidate for field splitting.
+///
+/// Backticks count. They did not before, so `printf "[%s]" \`echo p q\`` passed
+/// one argument where bash passes two -- `$(...)` split correctly only because
+/// it happens to contain a `$`.
+fn containsExpansion(s: []const u8) bool {
     var i: usize = 0;
     while (i < s.len) : (i += 1) {
-        if (s[i] == '$' and (i == 0 or s[i - 1] != '\\')) {
-            return true;
+        if (s[i] == '\\') {
+            i += 1;
+            continue;
         }
+        if (s[i] == '$' or s[i] == '`') return true;
     }
     return false;
 }
@@ -458,20 +534,20 @@ fn containsVariableRef(s: []const u8) bool {
 // Tests
 // ============================================================================
 
-test "containsVariableRef basic" {
-    try std.testing.expect(containsVariableRef("$var"));
-    try std.testing.expect(containsVariableRef("hello $VAR world"));
-    try std.testing.expect(containsVariableRef("${BRACED}"));
-    try std.testing.expect(containsVariableRef("$(cmd)"));
+test "containsExpansion basic" {
+    try std.testing.expect(containsExpansion("$var"));
+    try std.testing.expect(containsExpansion("hello $VAR world"));
+    try std.testing.expect(containsExpansion("${BRACED}"));
+    try std.testing.expect(containsExpansion("$(cmd)"));
 
-    try std.testing.expect(!containsVariableRef("plain text"));
-    try std.testing.expect(!containsVariableRef(""));
-    try std.testing.expect(!containsVariableRef("\\$escaped"));
+    try std.testing.expect(!containsExpansion("plain text"));
+    try std.testing.expect(!containsExpansion(""));
+    try std.testing.expect(!containsExpansion("\\$escaped"));
 }
 
 test "containsVariableRef mixed" {
     // $var with preceding \$ shouldn't match the \$, but should match the $var
-    try std.testing.expect(containsVariableRef("\\$first $real"));
+    try std.testing.expect(containsExpansion("\\$first $real"));
 }
 
 test "isDenBuiltin known builtins" {
