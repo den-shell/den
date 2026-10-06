@@ -329,7 +329,6 @@ pub fn expandAliases(self: *Shell, chain: *types.CommandChain) !void {
     for (chain.commands) |*cmd| {
         seen_count = 0; // Reset for each command
         var current_name = cmd.name;
-        var expanded = false;
 
         // Don't expand aliases that shadow den-specific structured data builtins.
         // These are new builtins (str, path, math, date, into, from, to, etc.) that
@@ -351,9 +350,15 @@ pub fn expandAliases(self: *Shell, chain: *types.CommandChain) !void {
                 }
             }
 
+            // The table's own key stays valid for as long as the entry, whereas
+            // `current_name` on the first pass is `cmd.name`, which the rewrite
+            // below frees. Both the cycle check and the self-reference check
+            // compare against this rather than the freed slice.
+            const stable_name = self.aliases.getKey(current_name) orelse current_name;
+
             // Track this alias
             if (seen_count < seen_aliases.len) {
-                seen_aliases[seen_count] = current_name;
+                seen_aliases[seen_count] = stable_name;
                 seen_count += 1;
             } else {
                 // Too many nested aliases
@@ -366,8 +371,15 @@ pub fn expandAliases(self: *Shell, chain: *types.CommandChain) !void {
             const first_space = std.mem.indexOfScalar(u8, trimmed, ' ');
             const first_word = if (first_space) |pos| trimmed[0..pos] else trimmed;
 
-            // Replace command name with expanded alias
-            if (!expanded) {
+            // Replace the command name with this step of the expansion.
+            //
+            // Every step has to be applied, not just the first: `alias s='e'`
+            // where `e` is itself an alias used to leave the name as `e`, which
+            // is not a command, so a chained alias reported "command not found".
+            // Each step prepends its own arguments ahead of what is already
+            // there, so `alias a='b X'; alias b='echo Y'; a Z` runs
+            // `echo Y X Z`, as zsh does.
+            {
                 // Split alias value into command name and extra args
                 const new_cmd_name = try self.allocator.dupe(u8, first_word);
                 self.allocator.free(cmd.name);
@@ -404,14 +416,12 @@ pub fn expandAliases(self: *Shell, chain: *types.CommandChain) !void {
                         }
                     }
                 }
-
-                expanded = true;
             }
 
             // POSIX behavior: if the first word of the expansion matches the
             // alias name, stop expanding to allow self-referencing aliases
             // like "ls" -> "ls --color=auto"
-            if (std.mem.eql(u8, first_word, current_name)) break;
+            if (std.mem.eql(u8, first_word, stable_name)) break;
 
             // Check if first word is also an alias
             current_name = first_word;
