@@ -367,6 +367,30 @@ pub const LineEditor = struct {
     /// inside of it, 'a' for the whole thing including its delimiters. Only
     /// reachable with an operator pending, since `diw` is the only way to ask.
     vi_textobj_pending: ?u8 = null,
+    /// A mark operation is waiting for the key naming the mark: 'm' to set it,
+    /// 'g' to go to it.
+    vi_mark_pending: ?u8 = null,
+    /// Where each mark `a`-`z` sits. Positions in the line being edited, so they
+    /// are cleared when a new line starts.
+    vi_marks: [26]?usize = @splat(null),
+
+    /// Counts edits to the line. Only ever compared against an earlier value.
+    edit_seq: usize = 0,
+    /// The keys of the command being typed in vi normal mode, kept so that one
+    /// which turns out to change the line can be replayed by `.`.
+    vi_change_keys: [128]u8 = undefined,
+    vi_change_len: usize = 0,
+    /// The last command that changed the line, as the keys that produced it.
+    /// Replaying the keys rather than the effect is what makes `.` repeat a
+    /// change with its original count and inserted text.
+    vi_last_change: [128]u8 = undefined,
+    vi_last_change_len: usize = 0,
+    /// Set while `.` is feeding those keys back, so the replay is not itself
+    /// recorded as the last change.
+    vi_replaying_change: bool = false,
+    /// How many replayed keys are still to come, so recording resumes once the
+    /// replay is spent.
+    vi_replay_remaining: usize = 0,
 
     /// Empty reads since the last byte arrived.
     idle_polls: u8 = 0,
@@ -908,12 +932,43 @@ pub const LineEditor = struct {
     /// the built-in path below -- which is every byte that begins no binding, so
     /// ordinary typing costs one lookup and nothing else.
     fn keymapProbe(self: *LineEditor, byte: u8) !?Flow {
+        // Accumulate the keys of a vi command, so one that turns out to change
+        // the line can be replayed by `.`. This comes first so that the keys
+        // consumed as data below -- a search target, a mark name, a text object
+        // -- are recorded too: without them `.` would replay `di` and not `diw`.
+        // Insert-mode keys count as well, being part of what `cw` did. `.`
+        // itself is never recorded, and neither is the replay it drives.
+        if (self.vi_replaying_change) {
+            if (self.vi_replay_remaining == 0) {
+                self.vi_replaying_change = false;
+            } else {
+                self.vi_replay_remaining -= 1;
+            }
+        }
+        const recording_vi = self.editing_mode == .vi and !self.vi_replaying_change;
+        if (recording_vi) {
+            const starting_command = self.vi_mode == .normal and !self.viCommandInFlight();
+            if (starting_command) self.vi_change_len = 0;
+            self.viRecordKey(byte);
+        }
+        const mode_before = self.vi_mode;
+        const edits_before = self.edit_seq;
+
         // A vi character search takes the next key as its target, not as a key.
         // This has to come before the keymap, or `df,` would look `,` up and
         // find the repeat-find binding instead of using it as the target.
         if (self.vi_find_pending) |kind| {
             self.vi_find_pending = null;
             try self.viRunFind(kind, byte);
+            if (recording_vi) self.viSettleChange(mode_before, edits_before);
+            return .cont;
+        }
+
+        // Likewise the key naming a mark.
+        if (self.vi_mark_pending) |kind| {
+            self.vi_mark_pending = null;
+            try self.viRunMark(kind, byte);
+            if (recording_vi) self.viSettleChange(mode_before, edits_before);
             return .cont;
         }
 
@@ -929,6 +984,7 @@ pub const LineEditor = struct {
                 }
             }
             self.vi_count = 0;
+            if (recording_vi) self.viSettleChange(mode_before, edits_before);
             return .cont;
         }
 
@@ -953,7 +1009,9 @@ pub const LineEditor = struct {
             .exact => |binding| {
                 self.clearPending();
                 if (try self.menuGuard(binding.widget)) return .cont;
-                return try self.invokeBinding(binding, probe.slice());
+                const flow = try self.invokeBinding(binding, probe.slice());
+                if (recording_vi) self.viSettleChange(mode_before, edits_before);
+                return flow;
             },
             .exact_prefix => |binding| {
                 // Wait for the longer binding, remembering this one.
@@ -967,7 +1025,11 @@ pub const LineEditor = struct {
                 return .cont;
             },
             .none => {
-                if (self.pending.len == 0) return try self.dispatchUnbound(probe.slice());
+                if (self.pending.len == 0) {
+                    const flow = try self.dispatchUnbound(probe.slice());
+                    if (recording_vi) self.viSettleChange(mode_before, edits_before);
+                    return flow;
+                }
                 // Mid-sequence and nothing matches. Hand what we have to the
                 // built-in escape parser, which understands the sequences the
                 // keymap does not enumerate, and let it keep accumulating.
@@ -1015,11 +1077,115 @@ pub const LineEditor = struct {
             // Run the shorter binding and re-dispatch whatever followed it.
             if (seq.len > fallback_len) self.pushBack(seq.slice()[fallback_len..]);
             if (try self.menuGuard(binding.widget)) return .cont;
-            return try self.invokeBinding(binding, seq.slice()[0..fallback_len]);
+
+            const recording_vi = self.editing_mode == .vi and !self.vi_replaying_change;
+            const mode_before = self.vi_mode;
+            const edits_before = self.edit_seq;
+            const flow = try self.invokeBinding(binding, seq.slice()[0..fallback_len]);
+            if (recording_vi) self.viSettleChange(mode_before, edits_before);
+            return flow;
         }
         if (seq.len == 1) return try self.dispatchUnbound(seq.slice());
         self.handOffToEscapeParser(seq);
         return .cont;
+    }
+
+    /// Remember the keys of a vi command so `.` can run it again.
+    ///
+    /// The command is accumulated as it is typed; once dispatch is done, whether
+    /// it changed the line decides if it becomes the last change. A `c` command
+    /// leaves insert mode open, so recording continues until normal mode returns
+    /// and the inserted text is part of what `.` replays.
+    fn viRecordKey(self: *LineEditor, byte: u8) void {
+        if (self.vi_change_len < self.vi_change_keys.len) {
+            self.vi_change_keys[self.vi_change_len] = byte;
+            self.vi_change_len += 1;
+        }
+    }
+
+    /// Decide what the key just dispatched means for `.`.
+    ///
+    /// Still inserting means the command is unfinished -- `cw` is not done until
+    /// Escape -- so keep accumulating. Otherwise a command that edited the line
+    /// becomes the last change, and one that only moved around is discarded.
+    fn viSettleChange(self: *LineEditor, mode_before: ViMode, edits_before: usize) void {
+        if (self.vi_mode == .insert or self.vi_mode == .replace) return;
+
+        // The command is still being typed: an operator waiting for its motion,
+        // a search or text object waiting for its key, a count part-way through,
+        // an unfinished key sequence. None of those change the line by
+        // themselves, so they must not be mistaken for a motion and discarded.
+        if (self.viCommandInFlight()) return;
+
+        const changed = self.edit_seq != edits_before;
+        const left_insert = mode_before != .normal and self.vi_mode == .normal;
+        if (changed or left_insert) {
+            self.viCommitChange();
+            return;
+        }
+        // A motion, or anything else that left the line alone.
+        self.vi_change_len = 0;
+    }
+
+    /// Whether a vi command is part-way through being typed.
+    fn viCommandInFlight(self: *const LineEditor) bool {
+        return self.vi_pending_op != null or
+            self.vi_find_pending != null or
+            self.vi_textobj_pending != null or
+            self.vi_mark_pending != null or
+            self.vi_count != 0 or
+            self.pending.len > 0;
+    }
+
+    fn viCommitChange(self: *LineEditor) void {
+        if (self.vi_change_len == 0) return;
+        @memcpy(self.vi_last_change[0..self.vi_change_len], self.vi_change_keys[0..self.vi_change_len]);
+        self.vi_last_change_len = self.vi_change_len;
+        self.vi_change_len = 0;
+    }
+
+    /// Feed the last change's keys back through dispatch.
+    fn viRepeatChange(self: *LineEditor) !void {
+        if (self.vi_last_change_len == 0) return;
+        self.vi_replaying_change = true;
+        self.vi_replay_remaining = self.vi_last_change_len;
+        self.pushBack(self.vi_last_change[0..self.vi_last_change_len]);
+    }
+
+    /// Record or jump to a mark.
+    ///
+    /// Only `a`-`z` are stored. Going to a mark is an exclusive motion, so
+    /// ``d`a`` covers the text between here and there without the character the
+    /// cursor sits on at the far end.
+    fn viRunMark(self: *LineEditor, kind: u8, name: u8) !void {
+        if (name < 'a' or name > 'z') {
+            self.vi_pending_op = null;
+            self.vi_count = 0;
+            return;
+        }
+        const slot = name - 'a';
+
+        if (kind == 'm') {
+            self.vi_marks[slot] = self.cursor;
+            return;
+        }
+
+        const target = self.vi_marks[slot] orelse {
+            // Vi does nothing for a mark that was never set.
+            self.vi_pending_op = null;
+            self.vi_count = 0;
+            return;
+        };
+        const to = @min(target, self.length);
+
+        if (self.vi_pending_op) |op| {
+            self.vi_pending_op = null;
+            try self.applyOperatorToRange(op, @min(self.cursor, to), @max(self.cursor, to));
+            return;
+        }
+
+        self.cursor = to;
+        try self.redrawLine();
     }
 
     /// The span a text object covers, or null when the cursor is not in one.
@@ -1315,6 +1481,7 @@ pub const LineEditor = struct {
                 .vi_till_char_back,
                 .vi_repeat_find,
                 .vi_repeat_find_reverse,
+                .vi_goto_mark,
                 => return self.invokeWidget(binding.widget, key),
                 else => {},
             }
@@ -1354,7 +1521,18 @@ pub const LineEditor = struct {
             }
 
             if (motionExtent(binding.widget)) |extent| {
-                try self.applyOperatorOverMotion(op, binding.widget, extent, key);
+                // Vi's one irregular pair: `cw` on a word behaves as `ce`, so it
+                // changes the word without swallowing the space after it. `dw`
+                // does take the space.
+                var motion = binding.widget;
+                var reach = extent;
+                if (op == 'c' and motion == .vi_forward_word and
+                    self.cursor < self.length and isWordChar(self.buffer[self.cursor]))
+                {
+                    motion = .vi_forward_word_end;
+                    reach = .inclusive;
+                }
+                try self.applyOperatorOverMotion(op, motion, reach, key);
                 return .cont;
             }
 
@@ -1499,6 +1677,9 @@ pub const LineEditor = struct {
 
             // A character search needs the key that follows it, so it arms the
             // pending state and the dispatcher feeds the next byte in.
+            .vi_repeat_change => try self.viRepeatChange(),
+            .vi_set_mark => self.vi_mark_pending = 'm',
+            .vi_goto_mark => self.vi_mark_pending = 'g',
             .vi_find_char => self.vi_find_pending = 'f',
             .vi_find_char_back => self.vi_find_pending = 'F',
             .vi_till_char => self.vi_find_pending = 't',
@@ -1698,6 +1879,12 @@ pub const LineEditor = struct {
         self.idle_polls = 0;
         self.vi_find_pending = null;
         self.vi_textobj_pending = null;
+        self.vi_mark_pending = null;
+        // Marks point into the line being edited, so a new line starts without any.
+        self.vi_marks = @splat(null);
+        self.vi_change_len = 0;
+        self.vi_replaying_change = false;
+        self.vi_replay_remaining = 0;
 
         while (true) {
             // Check for window resize (SIGWINCH)
@@ -3861,6 +4048,10 @@ pub const LineEditor = struct {
 
     /// Save current state to undo stack
     fn saveUndoState(self: *LineEditor) void {
+        // Bumped on every edit, so the `.` recorder can tell a change from a
+        // motion without comparing the whole buffer on each keystroke.
+        self.edit_seq +%= 1;
+
         if (self.undo_index < self.undo_stack_size) {
             self.undo_stack_size = self.undo_index;
         }
@@ -5344,8 +5535,9 @@ test "vi cw deletes the word and starts inserting" {
     var editor = viEditor(&sink, &maps, "alpha beta");
     defer editor.deinit();
 
+    // `cw` acts as `ce`: the word goes, the space after it stays.
     _ = try editor.feedKeys("cw");
-    try std.testing.expectEqualStrings("beta", editor.buffer[0..editor.length]);
+    try std.testing.expectEqualStrings(" beta", editor.buffer[0..editor.length]);
     try std.testing.expectEqual(ViMode.insert, editor.vi_mode);
 }
 
@@ -5711,4 +5903,164 @@ test "vi i still enters insert mode with no operator pending" {
     _ = try editor.feedKeys("i");
     try std.testing.expectEqual(ViMode.insert, editor.vi_mode);
     try std.testing.expectEqual(@as(?u8, null), editor.vi_textobj_pending);
+}
+
+test "vi marks record a position and go back to it" {
+    var sink: std.ArrayList(u8) = .empty;
+    defer sink.deinit(std.testing.allocator);
+    var maps = keymap.KeymapSet.init();
+    defer maps.deinit(std.testing.allocator);
+    var editor = viEditor(&sink, &maps, "alpha beta gamma");
+    defer editor.deinit();
+
+    editor.cursor = 6;
+    _ = try editor.feedKeys("ma");
+    _ = try editor.feedKeys("$");
+    try std.testing.expectEqual(@as(usize, 15), editor.cursor);
+    _ = try editor.feedKeys("`a");
+    try std.testing.expectEqual(@as(usize, 6), editor.cursor);
+    // `'` is the same jump here, there being only one line.
+    _ = try editor.feedKeys("$");
+    _ = try editor.feedKeys("'a");
+    try std.testing.expectEqual(@as(usize, 6), editor.cursor);
+}
+
+test "vi an operator reaches to a mark" {
+    var sink: std.ArrayList(u8) = .empty;
+    defer sink.deinit(std.testing.allocator);
+    var maps = keymap.KeymapSet.init();
+    defer maps.deinit(std.testing.allocator);
+    var editor = viEditor(&sink, &maps, "alpha beta gamma");
+    defer editor.deinit();
+
+    editor.cursor = 6;
+    _ = try editor.feedKeys("ma");
+    editor.cursor = 11;
+    _ = try editor.feedKeys("d`a");
+    try std.testing.expectEqualStrings("alpha gamma", editor.buffer[0..editor.length]);
+}
+
+test "vi a mark that was never set does nothing" {
+    var sink: std.ArrayList(u8) = .empty;
+    defer sink.deinit(std.testing.allocator);
+    var maps = keymap.KeymapSet.init();
+    defer maps.deinit(std.testing.allocator);
+    var editor = viEditor(&sink, &maps, "untouched");
+    defer editor.deinit();
+
+    editor.cursor = 4;
+    _ = try editor.feedKeys("d`z");
+    try std.testing.expectEqualStrings("untouched", editor.buffer[0..editor.length]);
+    try std.testing.expectEqual(@as(usize, 4), editor.cursor);
+    try std.testing.expectEqual(@as(?u8, null), editor.vi_pending_op);
+}
+
+test "vi a mark name is never read as a key binding" {
+    var sink: std.ArrayList(u8) = .empty;
+    defer sink.deinit(std.testing.allocator);
+    var maps = keymap.KeymapSet.init();
+    defer maps.deinit(std.testing.allocator);
+    var editor = viEditor(&sink, &maps, "alpha beta");
+    defer editor.deinit();
+
+    // `x` is bound to delete-char; as a mark name it is data.
+    editor.cursor = 4;
+    _ = try editor.feedKeys("mx");
+    try std.testing.expectEqualStrings("alpha beta", editor.buffer[0..editor.length]);
+    try std.testing.expectEqual(@as(?usize, 4), editor.vi_marks['x' - 'a']);
+}
+
+test "vi dot repeats a deletion" {
+    var sink: std.ArrayList(u8) = .empty;
+    defer sink.deinit(std.testing.allocator);
+    var maps = keymap.KeymapSet.init();
+    defer maps.deinit(std.testing.allocator);
+    var editor = viEditor(&sink, &maps, "one two three four");
+    defer editor.deinit();
+
+    _ = try editor.feedKeys("dw");
+    try std.testing.expectEqualStrings("two three four", editor.buffer[0..editor.length]);
+    _ = try editor.feedKeys(".");
+    try std.testing.expectEqualStrings("three four", editor.buffer[0..editor.length]);
+    _ = try editor.feedKeys(".");
+    try std.testing.expectEqualStrings("four", editor.buffer[0..editor.length]);
+}
+
+test "vi dot repeats with the original count" {
+    var sink: std.ArrayList(u8) = .empty;
+    defer sink.deinit(std.testing.allocator);
+    var maps = keymap.KeymapSet.init();
+    defer maps.deinit(std.testing.allocator);
+    var editor = viEditor(&sink, &maps, "abcdefghij");
+    defer editor.deinit();
+
+    _ = try editor.feedKeys("3x");
+    try std.testing.expectEqualStrings("defghij", editor.buffer[0..editor.length]);
+    // Replaying the keys carries the count, so this takes three more.
+    _ = try editor.feedKeys(".");
+    try std.testing.expectEqualStrings("ghij", editor.buffer[0..editor.length]);
+}
+
+test "vi dot repeats a change including the inserted text" {
+    var sink: std.ArrayList(u8) = .empty;
+    defer sink.deinit(std.testing.allocator);
+    var maps = keymap.KeymapSet.init();
+    defer maps.deinit(std.testing.allocator);
+    var editor = viEditor(&sink, &maps, "aaa bbb ccc");
+    defer editor.deinit();
+
+    // cw, type the replacement, Escape back to normal.
+    _ = try editor.feedKeys("cwXX\x1b");
+    try std.testing.expectEqualStrings("XX bbb ccc", editor.buffer[0..editor.length]);
+
+    // Move to the next word and do the same again.
+    _ = try editor.feedKeys("w");
+    _ = try editor.feedKeys(".");
+    try std.testing.expectEqualStrings("XX XX ccc", editor.buffer[0..editor.length]);
+}
+
+test "vi a motion is not something dot repeats" {
+    var sink: std.ArrayList(u8) = .empty;
+    defer sink.deinit(std.testing.allocator);
+    var maps = keymap.KeymapSet.init();
+    defer maps.deinit(std.testing.allocator);
+    var editor = viEditor(&sink, &maps, "one two three");
+    defer editor.deinit();
+
+    _ = try editor.feedKeys("dw");
+    try std.testing.expectEqualStrings("two three", editor.buffer[0..editor.length]);
+    // Moving around leaves the last change alone, so `.` still deletes a word.
+    _ = try editor.feedKeys("l");
+    _ = try editor.feedKeys("h");
+    _ = try editor.feedKeys(".");
+    try std.testing.expectEqualStrings("three", editor.buffer[0..editor.length]);
+}
+
+test "vi dot with nothing recorded does nothing" {
+    var sink: std.ArrayList(u8) = .empty;
+    defer sink.deinit(std.testing.allocator);
+    var maps = keymap.KeymapSet.init();
+    defer maps.deinit(std.testing.allocator);
+    var editor = viEditor(&sink, &maps, "unchanged");
+    defer editor.deinit();
+
+    _ = try editor.feedKeys(".");
+    try std.testing.expectEqualStrings("unchanged", editor.buffer[0..editor.length]);
+}
+
+test "vi dot repeats a text object change" {
+    var sink: std.ArrayList(u8) = .empty;
+    defer sink.deinit(std.testing.allocator);
+    var maps = keymap.KeymapSet.init();
+    defer maps.deinit(std.testing.allocator);
+    var editor = viEditor(&sink, &maps, "aa bb cc");
+    defer editor.deinit();
+
+    editor.cursor = 3; // inside "bb"
+    _ = try editor.feedKeys("diw");
+    try std.testing.expectEqualStrings("aa  cc", editor.buffer[0..editor.length]);
+
+    editor.cursor = 4; // inside "cc"
+    _ = try editor.feedKeys(".");
+    try std.testing.expectEqualStrings("aa  ", editor.buffer[0..editor.length]);
 }

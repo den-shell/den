@@ -832,6 +832,8 @@ list. The common ones:
 | `vi-find-next-char`, `vi-find-prev-char` | `f` and `F`: to the next/previous occurrence |
 | `vi-find-next-char-skip`, `vi-find-prev-char-skip` | `t` and `T`: stop beside it |
 | `vi-repeat-find`, `vi-rev-repeat-find` | `;` and `,` |
+| `vi-set-mark`, `vi-goto-mark` | `m` and backtick: record a position, go back to it |
+| `vi-repeat-change` | `.`: do the last change again |
 | `digit-argument` | Accumulate a numeric prefix (vi `1`-`9`) |
 | `vi-digit-or-beginning-of-line` | vi `0`: a count digit, or the start of the line |
 | `undefined-key` | Beep |
@@ -896,6 +898,22 @@ ways into insert mode.
 
 An object the cursor is not inside does nothing and drops the operator.
 
+One irregular pair, as in vi: `cw` on a word behaves as `ce`, changing the word
+without swallowing the space after it. `dw` does take the space.
+
+### Marks and repeating a change
+
+`m<letter>` records where the cursor is, and a backtick followed by that letter
+goes back to it; `'` does the same, there being only one line to go to. Marks hold positions in the
+line being edited, so they last as long as it does, and only `a`-`z` are stored.
+Going to a mark is a motion, so ``d`a`` covers the text between here and there.
+
+`.` repeats the last change. It replays the keys that made it rather than the
+effect, so the original count and any inserted text come with it: `3x` then `.`
+takes three more characters, and `cwXX` then Escape then `w` then `.` changes the
+next word to `XX` as well. Moving around does not count as a change, so `.` keeps
+repeating the last edit rather than the last keystroke.
+
 Names den does not have — `universal-argument`, `vi-repeat-change` — are reported
 as unknown rather than bound to something that quietly does nothing.
 
@@ -913,7 +931,6 @@ Future line editing features planned:
 - Multiple cursors
 - `zle -N` user-defined widgets backed by shell functions
 - `universal-argument`, and counts honoured by more widgets
-- Vi marks (`m`, backtick) and the `.` repeat
 - `yank-pop` and redo
 
 Stay tuned!

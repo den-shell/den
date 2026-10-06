@@ -141,6 +141,12 @@ pub const Widget = enum(u8) {
     /// `;` and `,`: do the last find again, forwards or the other way.
     vi_repeat_find,
     vi_repeat_find_reverse,
+    /// Vi's `m` and `` ` ``: each takes the next key as the mark's name. Marks
+    /// hold a position in the line being edited, so they last as long as it does.
+    vi_set_mark,
+    vi_goto_mark,
+    /// Vi's `.`: do the last change again.
+    vi_repeat_change,
 
     // Vi mode transitions
     vi_cmd_mode,
@@ -265,6 +271,9 @@ pub fn resolveWidget(name: []const u8) Widget {
         .{ "vi-find-prev-char", .vi_find_char_back },
         .{ "vi-find-next-char-skip", .vi_till_char },
         .{ "vi-find-prev-char-skip", .vi_till_char_back },
+        .{ "vi-repeat-change", .vi_repeat_change },
+        .{ "vi-set-mark", .vi_set_mark },
+        .{ "vi-goto-mark", .vi_goto_mark },
         .{ "vi-repeat-find", .vi_repeat_find },
         .{ "vi-rev-repeat-find", .vi_repeat_find_reverse },
 
@@ -375,6 +384,9 @@ pub fn widgetName(w: Widget) []const u8 {
         .vi_find_char_back => "vi-find-prev-char",
         .vi_till_char => "vi-find-next-char-skip",
         .vi_till_char_back => "vi-find-prev-char-skip",
+        .vi_repeat_change => "vi-repeat-change",
+        .vi_set_mark => "vi-set-mark",
+        .vi_goto_mark => "vi-goto-mark",
         .vi_repeat_find => "vi-repeat-find",
         .vi_repeat_find_reverse => "vi-rev-repeat-find",
         .digit_argument => "digit-argument",
@@ -652,6 +664,14 @@ const vicmd_defaults = buildKeymap(&[_]DefaultRow{
     .{ "T", .vi_till_char_back },
     .{ ";", .vi_repeat_find },
     .{ ",", .vi_repeat_find_reverse },
+
+    // Do the last change again.
+    .{ ".", .vi_repeat_change },
+
+    // Marks. Both consume the next key as the mark's name.
+    .{ "m", .vi_set_mark },
+    .{ "`", .vi_goto_mark },
+    .{ "'", .vi_goto_mark },
     .{ "u", .undo },
 
     .{ "i", .vi_insert },
