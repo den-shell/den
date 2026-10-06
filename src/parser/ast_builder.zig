@@ -142,7 +142,7 @@ pub const AstBuilder = struct {
 
     fn isRedirection(token_type: TokenType) bool {
         return switch (token_type) {
-            .redirect_out, .redirect_append, .redirect_in, .redirect_inout, .redirect_err, .redirect_both, .redirect_fd_dup, .heredoc, .herestring => true,
+            .redirect_out, .redirect_append, .redirect_in, .redirect_inout, .redirect_err, .redirect_err_append, .redirect_both, .redirect_fd_dup, .heredoc, .herestring => true,
             else => false,
         };
     }
@@ -472,6 +472,7 @@ pub const AstBuilder = struct {
             .redirect_in => .input,
             .redirect_inout => .input_output,
             .redirect_err => .output,
+            .redirect_err_append => .append,
             .redirect_both => .output,
             .heredoc => .heredoc,
             .herestring => .herestring,
@@ -485,7 +486,7 @@ pub const AstBuilder = struct {
 
         return .{
             .kind = kind,
-            .fd = if (tok.type == .redirect_err) @as(u32, 2) else null,
+            .fd = if (tok.type == .redirect_err or tok.type == .redirect_err_append) @as(u32, 2) else null,
             .target = target,
         };
     }

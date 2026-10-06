@@ -211,6 +211,22 @@ pub const Parser = struct {
                     redir_count += 1;
                     self.pos += 1;
                 },
+                .redirect_err_append => {
+                    // 2>> appends stderr to a file.
+                    self.pos += 1;
+                    if (self.pos >= self.tokens.len or !isRedirTarget(self.tokens[self.pos].type)) {
+                        return error.RedirectionMissingTarget;
+                    }
+                    const target = try self.allocator.dupe(u8, self.tokens[self.pos].value);
+                    if (redir_count >= redir_buffer.len) return error.TooManyRedirections;
+                    redir_buffer[redir_count] = .{
+                        .kind = .output_append,
+                        .fd = 2,
+                        .target = target,
+                    };
+                    redir_count += 1;
+                    self.pos += 1;
+                },
                 .heredoc => {
                     self.pos += 1;
                     if (self.pos >= self.tokens.len or self.tokens[self.pos].type != .word) {

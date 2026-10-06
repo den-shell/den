@@ -48,6 +48,7 @@ pub const TokenType = enum {
     redirect_in, // <
     redirect_inout, // <>
     redirect_err, // 2>
+    redirect_err_append, // 2>>
     redirect_both, // &>
     redirect_both_append, // &>>
     redirect_fd_dup, // N>&M or N<&M for FD duplication
@@ -254,6 +255,29 @@ pub const Tokenizer = struct {
                     return Token{
                         .type = .heredoc,
                         .value = "<<",
+                        .line = start_line,
+                        .column = start_col,
+                    };
+                }
+                // Special case for 2>> (append stderr). Without this the
+                // two-char match consumed `2>` and left a stray `>`, which the
+                // parser then read as a redirection with no target.
+                if (op.token_type == .redirect_err) {
+                    self.pos += 2;
+                    self.column += 2;
+                    if (self.pos < self.input.len and self.input[self.pos] == '>') {
+                        self.pos += 1;
+                        self.column += 1;
+                        return Token{
+                            .type = .redirect_err_append,
+                            .value = "2>>",
+                            .line = start_line,
+                            .column = start_col,
+                        };
+                    }
+                    return Token{
+                        .type = .redirect_err,
+                        .value = "2>",
                         .line = start_line,
                         .column = start_col,
                     };
