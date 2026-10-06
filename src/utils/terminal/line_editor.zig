@@ -1090,12 +1090,11 @@ pub const LineEditor = struct {
                     if (recording_vi) self.viSettleChange(mode_before, edits_before);
                     return flow;
                 }
-                // Mid-sequence and nothing matches. Hand what we have to the
-                // built-in escape parser, which understands the sequences the
-                // keymap does not enumerate, and let it keep accumulating.
-                self.handOffToEscapeParser(probe);
+                // Mid-sequence and nothing matches.
                 self.clearPending();
-                return .cont;
+                const flow = try self.flushUnmatched(probe);
+                if (recording_vi) self.viSettleChange(mode_before, edits_before);
+                return flow;
             },
         }
     }
@@ -1104,6 +1103,26 @@ pub const LineEditor = struct {
         self.pending.clear();
         self.pending_fallback = null;
         self.pending_fallback_len = 0;
+    }
+
+    /// Nothing matches this sequence and nothing will.
+    ///
+    /// Dispatch its first byte as an unbound key and put the rest back, so a
+    /// partially typed sequence is typed rather than lost: with only `éé` bound,
+    /// a single `é` followed by Enter used to discard both the character and the
+    /// Enter. Consuming the first byte guarantees progress.
+    fn flushUnmatched(self: *LineEditor, seq: keymap.KeySeq) !Flow {
+        if (seq.len == 0) return .cont;
+
+        // An escape sequence the tables do not list goes to the built-in parser,
+        // which understands the forms they leave out.
+        if (seq.bytes[0] == 0x1B) {
+            self.handOffToEscapeParser(seq);
+            return .cont;
+        }
+
+        if (seq.len > 1) self.pushBack(seq.slice()[1..]);
+        return self.dispatchUnbound(seq.slice()[0..1]);
     }
 
     /// Resume the built-in escape handling for a sequence the keymap rejected.
@@ -1145,9 +1164,7 @@ pub const LineEditor = struct {
             if (recording_vi) self.viSettleChange(mode_before, edits_before);
             return flow;
         }
-        if (seq.len == 1) return try self.dispatchUnbound(seq.slice());
-        self.handOffToEscapeParser(seq);
-        return .cont;
+        return self.flushUnmatched(seq);
     }
 
     /// Remember the keys of a vi command so `.` can run it again.
@@ -6572,4 +6589,61 @@ test "vi counts still work after the rename" {
     editor.cursor = 9;
     _ = try editor.feedKeys("4h");
     try std.testing.expectEqual(@as(usize, 5), editor.cursor);
+}
+
+test "a bound multibyte key sequence fires" {
+    var sink: std.ArrayList(u8) = .empty;
+    defer sink.deinit(std.testing.allocator);
+    var maps = keymap.KeymapSet.init();
+    defer maps.deinit(std.testing.allocator);
+    var editor = testKeyEditor(&sink, &maps, "gone");
+    defer editor.deinit();
+
+    // The two bytes of an accented e.
+    try maps.get(.emacs).bind(std.testing.allocator, "\xc3\xa9", .kill_whole_line, 0);
+    _ = try editor.feedKeys("\xc3\xa9");
+    try std.testing.expectEqual(@as(usize, 0), editor.length);
+}
+
+test "a part-typed sequence is typed rather than lost" {
+    var sink: std.ArrayList(u8) = .empty;
+    defer sink.deinit(std.testing.allocator);
+    var maps = keymap.KeymapSet.init();
+    defer maps.deinit(std.testing.allocator);
+    var editor = testKeyEditor(&sink, &maps, "");
+    defer editor.deinit();
+
+    // Only the doubled form is bound, so one of them has to be inserted.
+    try maps.get(.emacs).bind(std.testing.allocator, "\xc3\xa9\xc3\xa9", .kill_whole_line, 0);
+    _ = try editor.feedKeys("\xc3\xa9!");
+    try std.testing.expectEqualStrings("\xc3\xa9!", editor.buffer[0..editor.length]);
+}
+
+test "the key that breaks a sequence still runs" {
+    var sink: std.ArrayList(u8) = .empty;
+    defer sink.deinit(std.testing.allocator);
+    var maps = keymap.KeymapSet.init();
+    defer maps.deinit(std.testing.allocator);
+    var editor = testKeyEditor(&sink, &maps, "");
+    defer editor.deinit();
+
+    // `q` only begins `qz`, so typing `q1` must leave both characters.
+    try maps.get(.emacs).bind(std.testing.allocator, "qz", .kill_whole_line, 0);
+    _ = try editor.feedKeys("q1");
+    try std.testing.expectEqualStrings("q1", editor.buffer[0..editor.length]);
+}
+
+test "an unmatched control byte is still dropped" {
+    var sink: std.ArrayList(u8) = .empty;
+    defer sink.deinit(std.testing.allocator);
+    var maps = keymap.KeymapSet.init();
+    defer maps.deinit(std.testing.allocator);
+    var editor = testKeyEditor(&sink, &maps, "abc");
+    defer editor.deinit();
+
+    // Recovering a partial sequence must not start typing control characters:
+    // 0x1C has no fallback, so it goes nowhere.
+    try maps.get(.emacs).bind(std.testing.allocator, "\x1c\x1c", .kill_whole_line, 0);
+    _ = try editor.feedKeys("\x1c!");
+    try std.testing.expectEqualStrings("abc!", editor.buffer[0..editor.length]);
 }

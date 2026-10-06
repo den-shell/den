@@ -802,6 +802,15 @@ still works: with `^X(` bound, a lone `^X` waits briefly to see whether the rest
 arrives. The wait is one terminal read timeout, roughly 100ms, the same pause
 Escape has always had.
 
+A sequence that turns out to match nothing is not thrown away. Its first key is
+handled as if unbound — typed, if it is printable — and the rest is put back to be
+read again, so the key that broke the sequence still does its job. With `jjk`
+bound, typing `jj` then Enter leaves `jj` on the line and runs it.
+
+Characters outside ASCII can be bound, as themselves: `bindkey 'é' …` binds the
+two bytes the terminal sends for it, and a half-typed one is still inserted
+normally.
+
 ### Widget names
 
 `bindkey -L` prints every widget currently bound, which is the authoritative
