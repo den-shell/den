@@ -813,14 +813,16 @@ list. The common ones:
 | `backward-char`, `forward-char` | Move one character |
 | `backward-word`, `forward-word` | Move one word |
 | `up-line-or-history`, `down-line-or-history` | History navigation |
-| `history-incremental-search-backward` | Reverse search (Ctrl+R) |
+| `history-incremental-search-backward` | Reverse search (Ctrl+R; `/` in vi normal mode) |
 | `expand-or-complete`, `reverse-menu-complete` | Completion, forwards or back |
 | `backward-delete-char`, `delete-char` | Delete one character |
 | `kill-line`, `backward-kill-line`, `kill-whole-line` | Kill to end, to start, or all |
 | `kill-word`, `backward-kill-word` | Kill a word |
 | `yank` | Paste the last kill |
+| `yank-pop` | Replace a yank with the kill before it (**M-y**) |
 | `transpose-chars` | Swap the characters around the cursor |
 | `undo` | Undo the last edit |
+| `redo` | Step forward again (**Ctrl+R** in vi normal mode) |
 | `clear-screen`, `redisplay` | Repaint |
 | `accept-line` | Run the line |
 | `send-break` | Abandon the line (Ctrl+C) |
@@ -834,6 +836,15 @@ list. The common ones:
 | `vi-repeat-find`, `vi-rev-repeat-find` | `;` and `,` |
 | `vi-set-mark`, `vi-goto-mark` | `m` and backtick: record a position, go back to it |
 | `vi-repeat-change` | `.`: do the last change again |
+
+Killed text goes on a ring of the last 16 kills. **Ctrl+Y** pastes the newest and
+**M-y** straight after it swaps in the one before, repeatedly, wrapping round at
+the end. It only works directly after a yank; anything else ends the run and M-y
+beeps.
+
+**Ctrl+R** redoes in vi normal mode, as in vim. In emacs mode `redo` has no key of
+its own — bind one if you want it, e.g. `bindkey '^X^R' redo`. Editing after an
+undo replaces what redo would have replayed, as in any editor.
 | `digit-argument` | Accumulate a numeric prefix (vi `1`-`9`) |
 | `vi-digit-or-beginning-of-line` | vi `0`: a count digit, or the start of the line |
 | `undefined-key` | Beep |
@@ -931,6 +942,5 @@ Future line editing features planned:
 - Multiple cursors
 - `zle -N` user-defined widgets backed by shell functions
 - `universal-argument`, and counts honoured by more widgets
-- `yank-pop` and redo
 
 Stay tuned!

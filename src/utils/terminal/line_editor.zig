@@ -374,6 +374,12 @@ pub const LineEditor = struct {
     /// are cleared when a new line starts.
     vi_marks: [26]?usize = @splat(null),
 
+    /// Where the last yank put its text, and how much. Set by yank and yank-pop
+    /// and cleared by anything else, since yank-pop only means something
+    /// straight after a yank.
+    last_yank_at: ?usize = null,
+    last_yank_len: usize = 0,
+
     /// Counts edits to the line. Only ever compared against an earlier value.
     edit_seq: usize = 0,
     /// The keys of the command being typed in vi normal mode, kept so that one
@@ -1557,6 +1563,10 @@ pub const LineEditor = struct {
     /// Run a widget. `key` is the byte sequence that triggered it, which the
     /// inserting widgets need (zsh calls it $KEYS).
     pub fn invokeWidget(self: *LineEditor, widget: Widget, key: []const u8) !Flow {
+        // yank-pop only means something directly after a yank, so any other
+        // action ends the run.
+        if (widget != .yank and widget != .yank_pop) self.last_yank_at = null;
+
         switch (widget) {
             .accept_line => return self.acceptLine(),
             .send_break => return self.sendBreak(),
@@ -1642,6 +1652,8 @@ pub const LineEditor = struct {
             .autosuggest_accept => try self.acceptSuggestion(),
 
             .undo => try self.undo(),
+            .redo => try self.redo(),
+            .yank_pop => try self.yankPop(),
 
             .start_kbd_macro => try self.startMacroRecording(),
             .end_kbd_macro => {
@@ -2965,16 +2977,71 @@ pub const LineEditor = struct {
     fn pushToKillRing(self: *LineEditor, text: []const u8) void {
         if (text.len == 0 or text.len > 4096) return;
 
-        // Rotate ring if full
-        const idx = self.kill_ring_count % 16;
+        // The slot after the newest one. This used to be `count % 16`, and since
+        // `count` stops at 16 that meant every kill past the sixteenth
+        // overwrote slot 0 and the ring stopped rotating.
+        const idx = if (self.kill_ring_count == 0)
+            0
+        else
+            (self.kill_ring_index + 1) % self.kill_ring.len;
+
         @memcpy(self.kill_ring[idx][0..text.len], text);
         self.kill_ring_lens[idx] = text.len;
 
-        if (self.kill_ring_count < 16) {
+        if (self.kill_ring_count < self.kill_ring.len) {
             self.kill_ring_count += 1;
         }
-        // Reset yank-pop index to most recent
         self.kill_ring_index = idx;
+        // A fresh kill ends any yank-pop run.
+        self.last_yank_at = null;
+    }
+
+    /// Replace the text a yank just inserted with the entry before it in the
+    /// kill ring, which is what repeating yank-pop walks back through.
+    fn yankPop(self: *LineEditor) !void {
+        const at = self.last_yank_at orelse {
+            // Only meaningful straight after a yank.
+            try self.writeBytes("\x07");
+            return;
+        };
+        const populated = @min(self.kill_ring_count, self.kill_ring.len);
+        if (populated < 2) {
+            try self.writeBytes("\x07");
+            return;
+        }
+
+        self.saveUndoState();
+
+        // Drop what the last yank put in.
+        const old_len = self.last_yank_len;
+        const remaining = self.length - (at + old_len);
+        var i: usize = 0;
+        while (i < remaining) : (i += 1) {
+            self.buffer[at + i] = self.buffer[at + old_len + i];
+        }
+        self.length -= old_len;
+
+        // Step back one entry and insert that instead.
+        self.kill_ring_index = (self.kill_ring_index + populated - 1) % populated;
+        const len = self.kill_ring_lens[self.kill_ring_index];
+        if (self.length + len > self.buffer.len) {
+            self.cursor = at;
+            try self.redrawLine();
+            return;
+        }
+
+        var j = self.length;
+        while (j > at) {
+            j -= 1;
+            self.buffer[j + len] = self.buffer[j];
+        }
+        @memcpy(self.buffer[at .. at + len], self.kill_ring[self.kill_ring_index][0..len]);
+        self.length += len;
+        self.cursor = at + len;
+
+        self.last_yank_at = at;
+        self.last_yank_len = len;
+        try self.redrawLine();
     }
 
     /// Yank (paste) from kill ring (Ctrl+Y)
@@ -3001,6 +3068,8 @@ pub const LineEditor = struct {
         // Insert yanked text
         @memcpy(self.buffer[self.cursor .. self.cursor + len], self.kill_ring[idx][0..len]);
         self.length += len;
+        self.last_yank_at = self.cursor;
+        self.last_yank_len = len;
         self.cursor += len;
 
         // Redraw line
@@ -4086,11 +4155,28 @@ pub const LineEditor = struct {
         }
 
         self.undo_index -= 1;
+        try self.restoreUndoState(self.undo_stack[self.undo_index]);
+    }
 
-        const state = self.undo_stack[self.undo_index];
+    /// Step forward again through the undo stack.
+    ///
+    /// Undo leaves `undo_index` behind `undo_stack_size`, with the states it
+    /// stepped back over still above it, so redo is the mirror of that walk.
+    fn redo(self: *LineEditor) !void {
+        if (self.undo_index + 1 >= self.undo_stack_size) {
+            try self.writeBytes("\x07");
+            return;
+        }
+        self.undo_index += 1;
+        self.edit_seq +%= 1;
+        try self.restoreUndoState(self.undo_stack[self.undo_index]);
+    }
+
+    fn restoreUndoState(self: *LineEditor, state: UndoState) !void {
         self.buffer = state.buffer;
         self.length = state.length;
         self.cursor = state.cursor;
+        self.last_yank_at = null;
 
         try self.writeBytes("\r");
         try self.writeBytes("\x1B[K");
@@ -6063,4 +6149,185 @@ test "vi dot repeats a text object change" {
     editor.cursor = 4; // inside "cc"
     _ = try editor.feedKeys(".");
     try std.testing.expectEqualStrings("aa  ", editor.buffer[0..editor.length]);
+}
+
+test "redo steps forward through what undo stepped back over" {
+    var sink: std.ArrayList(u8) = .empty;
+    defer sink.deinit(std.testing.allocator);
+    var maps = keymap.KeymapSet.init();
+    defer maps.deinit(std.testing.allocator);
+    var editor = testKeyEditor(&sink, &maps, "");
+    defer editor.deinit();
+
+    try editor.insertChar('a');
+    try editor.insertChar('b');
+    try editor.insertChar('c');
+    try std.testing.expectEqualStrings("abc", editor.buffer[0..editor.length]);
+
+    _ = try editor.invokeWidget(.undo, "\x1f");
+    try std.testing.expectEqualStrings("ab", editor.buffer[0..editor.length]);
+    _ = try editor.invokeWidget(.undo, "\x1f");
+    try std.testing.expectEqualStrings("a", editor.buffer[0..editor.length]);
+
+    _ = try editor.invokeWidget(.redo, "\x12");
+    try std.testing.expectEqualStrings("ab", editor.buffer[0..editor.length]);
+    _ = try editor.invokeWidget(.redo, "\x12");
+    try std.testing.expectEqualStrings("abc", editor.buffer[0..editor.length]);
+}
+
+test "redo at the newest state beeps and changes nothing" {
+    var sink: std.ArrayList(u8) = .empty;
+    defer sink.deinit(std.testing.allocator);
+    var maps = keymap.KeymapSet.init();
+    defer maps.deinit(std.testing.allocator);
+    var editor = testKeyEditor(&sink, &maps, "");
+    defer editor.deinit();
+
+    try editor.insertChar('x');
+    sink.clearRetainingCapacity();
+    _ = try editor.invokeWidget(.redo, "\x12");
+    try std.testing.expectEqualStrings("x", editor.buffer[0..editor.length]);
+    try std.testing.expectEqualStrings("\x07", sink.items);
+}
+
+test "a new edit after undo drops what redo would have replayed" {
+    var sink: std.ArrayList(u8) = .empty;
+    defer sink.deinit(std.testing.allocator);
+    var maps = keymap.KeymapSet.init();
+    defer maps.deinit(std.testing.allocator);
+    var editor = testKeyEditor(&sink, &maps, "");
+    defer editor.deinit();
+
+    try editor.insertChar('a');
+    try editor.insertChar('b');
+    _ = try editor.invokeWidget(.undo, "\x1f");
+    try std.testing.expectEqualStrings("a", editor.buffer[0..editor.length]);
+
+    // Editing from here replaces the future, as it does in any editor.
+    try editor.insertChar('z');
+    try std.testing.expectEqualStrings("az", editor.buffer[0..editor.length]);
+    sink.clearRetainingCapacity();
+    _ = try editor.invokeWidget(.redo, "\x12");
+    try std.testing.expectEqualStrings("az", editor.buffer[0..editor.length]);
+    try std.testing.expectEqualStrings("\x07", sink.items);
+}
+
+test "yank-pop replaces the yank with the entry before it" {
+    var sink: std.ArrayList(u8) = .empty;
+    defer sink.deinit(std.testing.allocator);
+    var maps = keymap.KeymapSet.init();
+    defer maps.deinit(std.testing.allocator);
+    var editor = testKeyEditor(&sink, &maps, "");
+    defer editor.deinit();
+
+    editor.pushToKillRing("first");
+    editor.pushToKillRing("second");
+    editor.pushToKillRing("third");
+
+    _ = try editor.invokeWidget(.yank, "\x19");
+    try std.testing.expectEqualStrings("third", editor.buffer[0..editor.length]);
+
+    _ = try editor.invokeWidget(.yank_pop, "\x1by");
+    try std.testing.expectEqualStrings("second", editor.buffer[0..editor.length]);
+
+    _ = try editor.invokeWidget(.yank_pop, "\x1by");
+    try std.testing.expectEqualStrings("first", editor.buffer[0..editor.length]);
+
+    // It wraps round to the newest again.
+    _ = try editor.invokeWidget(.yank_pop, "\x1by");
+    try std.testing.expectEqualStrings("third", editor.buffer[0..editor.length]);
+}
+
+test "yank-pop keeps the text around it" {
+    var sink: std.ArrayList(u8) = .empty;
+    defer sink.deinit(std.testing.allocator);
+    var maps = keymap.KeymapSet.init();
+    defer maps.deinit(std.testing.allocator);
+    var editor = testKeyEditor(&sink, &maps, "[]");
+    defer editor.deinit();
+
+    editor.pushToKillRing("one");
+    editor.pushToKillRing("two");
+    editor.cursor = 1;
+
+    _ = try editor.invokeWidget(.yank, "\x19");
+    try std.testing.expectEqualStrings("[two]", editor.buffer[0..editor.length]);
+    _ = try editor.invokeWidget(.yank_pop, "\x1by");
+    try std.testing.expectEqualStrings("[one]", editor.buffer[0..editor.length]);
+    try std.testing.expectEqual(@as(usize, 4), editor.cursor);
+}
+
+test "yank-pop without a yank first beeps" {
+    var sink: std.ArrayList(u8) = .empty;
+    defer sink.deinit(std.testing.allocator);
+    var maps = keymap.KeymapSet.init();
+    defer maps.deinit(std.testing.allocator);
+    var editor = testKeyEditor(&sink, &maps, "text");
+    defer editor.deinit();
+
+    editor.pushToKillRing("a");
+    editor.pushToKillRing("b");
+    sink.clearRetainingCapacity();
+    _ = try editor.invokeWidget(.yank_pop, "\x1by");
+    try std.testing.expectEqualStrings("text", editor.buffer[0..editor.length]);
+    try std.testing.expectEqualStrings("\x07", sink.items);
+}
+
+test "anything between a yank and yank-pop ends the run" {
+    var sink: std.ArrayList(u8) = .empty;
+    defer sink.deinit(std.testing.allocator);
+    var maps = keymap.KeymapSet.init();
+    defer maps.deinit(std.testing.allocator);
+    var editor = testKeyEditor(&sink, &maps, "");
+    defer editor.deinit();
+
+    editor.pushToKillRing("one");
+    editor.pushToKillRing("two");
+    _ = try editor.invokeWidget(.yank, "\x19");
+    _ = try editor.invokeWidget(.backward_char, "\x02");
+
+    sink.clearRetainingCapacity();
+    _ = try editor.invokeWidget(.yank_pop, "\x1by");
+    try std.testing.expectEqualStrings("two", editor.buffer[0..editor.length]);
+    try std.testing.expectEqualStrings("\x07", sink.items);
+}
+
+test "the kill ring keeps rotating past its size" {
+    var sink: std.ArrayList(u8) = .empty;
+    defer sink.deinit(std.testing.allocator);
+    var maps = keymap.KeymapSet.init();
+    defer maps.deinit(std.testing.allocator);
+    var editor = testKeyEditor(&sink, &maps, "");
+    defer editor.deinit();
+
+    // Regression: the write slot was `count % 16`, and count stops at 16, so
+    // every kill past the sixteenth overwrote slot 0 and the older entries
+    // became unreachable.
+    var n: u8 = 0;
+    while (n < 20) : (n += 1) {
+        const text = [_]u8{ 'k', '0' + (n % 10) };
+        editor.pushToKillRing(&text);
+    }
+
+    _ = try editor.invokeWidget(.yank, "\x19");
+    try std.testing.expectEqualStrings("k9", editor.buffer[0..editor.length]);
+    // Walking back reaches the entry before it, not the same slot again.
+    _ = try editor.invokeWidget(.yank_pop, "\x1by");
+    try std.testing.expectEqualStrings("k8", editor.buffer[0..editor.length]);
+    _ = try editor.invokeWidget(.yank_pop, "\x1by");
+    try std.testing.expectEqualStrings("k7", editor.buffer[0..editor.length]);
+}
+
+test "emacs binds M-y to yank-pop and vicmd binds Ctrl+R to redo" {
+    var set = keymap.KeymapSet.init();
+    defer set.deinit(std.testing.allocator);
+
+    switch (set.getConst(.emacs).lookup("\x1by")) {
+        .exact, .exact_prefix => |b| try std.testing.expectEqual(keymap.Widget.yank_pop, b.widget),
+        else => return error.TestUnexpectedResult,
+    }
+    switch (set.getConst(.vicmd).lookup("\x12")) {
+        .exact, .exact_prefix => |b| try std.testing.expectEqual(keymap.Widget.redo, b.widget),
+        else => return error.TestUnexpectedResult,
+    }
 }

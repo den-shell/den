@@ -105,6 +105,10 @@ pub const Widget = enum(u8) {
 
     // Undo
     undo,
+    /// Step forward again through the undo history.
+    redo,
+    /// Replace the text a yank inserted with the kill-ring entry before it.
+    yank_pop,
 
     // Keyboard macros
     start_kbd_macro,
@@ -259,6 +263,9 @@ pub fn resolveWidget(name: []const u8) Widget {
 
         .{ "undo", .undo },
         .{ "vi-undo-change", .undo },
+        .{ "redo", .redo },
+        .{ "vi-redo", .redo },
+        .{ "yank-pop", .yank_pop },
 
         .{ "start-kbd-macro", .start_kbd_macro },
         .{ "end-kbd-macro", .end_kbd_macro },
@@ -371,6 +378,8 @@ pub fn widgetName(w: Widget) []const u8 {
         .reverse_menu_complete => "reverse-menu-complete",
         .autosuggest_accept => "autosuggest-accept",
         .undo => "undo",
+        .redo => "redo",
+        .yank_pop => "yank-pop",
         .start_kbd_macro => "start-kbd-macro",
         .end_kbd_macro => "end-kbd-macro",
         .call_last_kbd_macro => "call-last-kbd-macro",
@@ -600,6 +609,7 @@ const shared_rows = [_]DefaultRow{
     .{ "^[b", .backward_word },
     .{ "^[f", .forward_word },
     .{ "^[d", .kill_word },
+    .{ "^[y", .yank_pop },
     .{ "^[^?", .backward_kill_word },
     .{ "^[^H", .backward_kill_word },
 };
@@ -622,7 +632,8 @@ const vicmd_defaults = buildKeymap(&[_]DefaultRow{
     .{ "^J", .accept_line },
     .{ "^L", .clear_screen },
     .{ "^M", .accept_line },
-    .{ "^R", .history_incremental_search_backward },
+    // Vim binds Ctrl+R to redo in normal mode; `/` is still the search.
+    .{ "^R", .redo },
     .{ "^[", .ignore },
 
     .{ "h", .backward_char },
