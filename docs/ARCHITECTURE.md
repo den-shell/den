@@ -49,10 +49,10 @@ Den Shell follows a layered architecture with clear separation between component
 └──────────────────────────┬──────────────────────────────────┘
                            │
 ┌──────────────────────────▼──────────────────────────────────┐
-│                      REPL Layer                              │
-│                    (src/repl/)                               │
+│                   Line Editing Layer                         │
+│                 (src/utils/terminal/)                        │
 │  ┌──────────────────────────────────────────────────────┐  │
-│  │ Input │ Completion │ Highlighting │ Auto-suggest     │  │
+│  │ Input │ Keymaps │ Completion │ Highlight │ Suggest   │  │
 │  └──────────────────────────────────────────────────────┘  │
 └──────────────────────────┬──────────────────────────────────┘
                            │
@@ -190,16 +190,22 @@ Provides unified API for platform-specific operations:
 - **File Operations**: `fileExists`, `isDirectory`, `isExecutable`
 - **Signal Constants**: Platform-appropriate signal definitions
 
-### 3. REPL Layer (src/repl/)
+### 3. Line Editing Layer (src/utils/terminal/)
 
 **Purpose**: Interactive command-line interface
 
 **Key Components**:
 
-- `editor.zig`: Line editing with history navigation
-- Completion engine (src/completion/)
-- Syntax highlighting (plugins)
-- Auto-suggestions (plugins)
+- `line_editor.zig`: Line editing, history navigation, completion menu
+- `keymap.zig`: Keymaps and named widgets, the data behind `bindkey`
+- `escape.zig`: Terminal escape-sequence decoding
+- Completion sources (`src/utils/completion.zig`, `src/shell/tab_completion.zig`)
+- Syntax highlighting (`src/utils/syntax_highlight.zig`)
+
+The editor instance is owned by `Shell`, which creates it lazily at the first
+interactive prompt; its keymaps live on `Shell` so `bindkey` works before the
+editor exists. Pulling that wiring out into a coordinator of its own is still
+open work — see `.github/TODO.md`.
 
 **Responsibilities**:
 
