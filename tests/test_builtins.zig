@@ -2204,3 +2204,175 @@ test "builtin autoload: a zsh function den lacks fails informatively" {
     try test_utils.TestAssert.expectContains(r.stdout, "rc=1");
     try test_utils.TestAssert.expectContains(r.stderr, "function definition file not found");
 }
+
+test "redirection: a shell builtin's stderr goes to the file" {
+    const allocator = std.testing.allocator;
+    var fixture = try test_utils.DenShellFixture.init(allocator);
+    defer fixture.deinit();
+    // Shell-level builtins used to run through a second, hand-rolled
+    // redirection implementation that ignored the fd and always redirected
+    // stdout, so `2>` sent stdout to the file and left the diagnostic on the
+    // terminal. `cmd 2>/dev/null` is the standard rc-file guard, so it has to
+    // work for setopt and friends.
+    const path = try std.fs.path.join(allocator, &.{ fixture.temp_dir.path, "e.txt" });
+    defer allocator.free(path);
+
+    const script = try std.fmt.allocPrint(
+        allocator,
+        "setopt nosuchoption 2> {s}; cat {s}",
+        .{ path, path },
+    );
+    defer allocator.free(script);
+
+    const r = try fixture.execDirect(script);
+    defer allocator.free(r.stdout);
+    defer allocator.free(r.stderr);
+
+    try test_utils.TestAssert.expectContains(r.stdout, "no such option: nosuchoption");
+    // Nothing may be left on the real stderr.
+    try test_utils.TestAssert.expectEqual(@as(usize, 0), r.stderr.len);
+}
+
+test "redirection: 2>/dev/null silences a shell builtin" {
+    const allocator = std.testing.allocator;
+    var fixture = try test_utils.DenShellFixture.init(allocator);
+    defer fixture.deinit();
+    const r = try fixture.execDirect(
+        "bindkey -Q 2>/dev/null; zstyle -Q x 2>/dev/null; " ++
+            "add-zsh-hook nosuch f 2>/dev/null; autoload -Q f 2>/dev/null; echo done",
+    );
+    defer allocator.free(r.stdout);
+    defer allocator.free(r.stderr);
+
+    try test_utils.TestAssert.expectContains(r.stdout, "done");
+    try test_utils.TestAssert.expectEqual(@as(usize, 0), r.stderr.len);
+}
+
+test "redirection: 2>&1 on a shell builtin reaches stdout" {
+    const allocator = std.testing.allocator;
+    var fixture = try test_utils.DenShellFixture.init(allocator);
+    defer fixture.deinit();
+    // fd_duplicate was one of the four kinds the hand-rolled version did not
+    // implement at all, so this did nothing.
+    const r = try fixture.execDirect("setopt nosuchoption 2>&1 | cat");
+    defer allocator.free(r.stdout);
+    defer allocator.free(r.stderr);
+
+    try test_utils.TestAssert.expectContains(r.stdout, "no such option");
+}
+
+test "redirection: a shell builtin's stdout still redirects" {
+    const allocator = std.testing.allocator;
+    var fixture = try test_utils.DenShellFixture.init(allocator);
+    defer fixture.deinit();
+    const path = try std.fs.path.join(allocator, &.{ fixture.temp_dir.path, "o.txt" });
+    defer allocator.free(path);
+
+    const script = try std.fmt.allocPrint(
+        allocator,
+        "zstyle ':a:*' b c; zstyle -L > {s}; cat {s}",
+        .{ path, path },
+    );
+    defer allocator.free(script);
+
+    const r = try fixture.execDirect(script);
+    defer allocator.free(r.stdout);
+    defer allocator.free(r.stderr);
+
+    try test_utils.TestAssert.expectContains(r.stdout, "zstyle ':a:*' b c");
+}
+
+test "redirection: 2>> appends where 2> truncates" {
+    const allocator = std.testing.allocator;
+    var fixture = try test_utils.DenShellFixture.init(allocator);
+    defer fixture.deinit();
+    // `2>>` was a parse error for every command, not just builtins: the
+    // tokenizer matched `2>` and left a stray `>` with no target.
+    const path = try std.fs.path.join(allocator, &.{ fixture.temp_dir.path, "a.txt" });
+    defer allocator.free(path);
+
+    const script = try std.fmt.allocPrint(
+        allocator,
+        "setopt nosuchoption 2>> {s}; setopt alsobad 2>> {s}; cat {s}",
+        .{ path, path, path },
+    );
+    defer allocator.free(script);
+
+    const r = try fixture.execDirect(script);
+    defer allocator.free(r.stdout);
+    defer allocator.free(r.stderr);
+
+    try test_utils.TestAssert.expectContains(r.stdout, "nosuchoption");
+    try test_utils.TestAssert.expectContains(r.stdout, "alsobad");
+}
+
+test "redirection: 2>> works for an external command too" {
+    const allocator = std.testing.allocator;
+    var fixture = try test_utils.DenShellFixture.init(allocator);
+    defer fixture.deinit();
+    const path = try std.fs.path.join(allocator, &.{ fixture.temp_dir.path, "x.txt" });
+    defer allocator.free(path);
+
+    const script = try std.fmt.allocPrint(
+        allocator,
+        "/bin/ls /nonexistent-aaa 2>> {s}; /bin/ls /nonexistent-bbb 2>> {s}; cat {s}",
+        .{ path, path, path },
+    );
+    defer allocator.free(script);
+
+    const r = try fixture.execDirect(script);
+    defer allocator.free(r.stdout);
+    defer allocator.free(r.stderr);
+
+    try test_utils.TestAssert.expectContains(r.stdout, "nonexistent-aaa");
+    try test_utils.TestAssert.expectContains(r.stdout, "nonexistent-bbb");
+}
+
+test "redirection: a noclobber violation does not end the shell" {
+    const allocator = std.testing.allocator;
+    var fixture = try test_utils.DenShellFixture.init(allocator);
+    defer fixture.deinit();
+    // The redirection failure paths used to _exit(1) unconditionally. That is
+    // right in a forked child and fatal in the parent: with `set -C`, one
+    // `echo x > existing` ended an interactive session outright.
+    const path = try fixture.createFile("exists.txt", "already here\n");
+    allocator.free(path);
+
+    const script = try std.fmt.allocPrint(
+        allocator,
+        "set -C; echo hi > {s}/exists.txt; echo \"rc=$?\"; echo STILL_RUNNING",
+        .{fixture.temp_dir.path},
+    );
+    defer allocator.free(script);
+
+    const r = try fixture.execDirect(script);
+    defer allocator.free(r.stdout);
+    defer allocator.free(r.stderr);
+
+    try test_utils.TestAssert.expectContains(r.stderr, "cannot overwrite existing file");
+    try test_utils.TestAssert.expectContains(r.stdout, "rc=1");
+    try test_utils.TestAssert.expectContains(r.stdout, "STILL_RUNNING");
+}
+
+test "redirection: an unopenable target fails without ending the shell" {
+    const allocator = std.testing.allocator;
+    var fixture = try test_utils.DenShellFixture.init(allocator);
+    defer fixture.deinit();
+    // Same story for a target that cannot be opened, on the builtin, the
+    // shell-builtin and the external paths. Status 1 each time, as bash and zsh
+    // both report.
+    const r = try fixture.execDirect(
+        "echo hi > /nonexistent-dir-xyz/f; echo \"builtin=$?\"; " ++
+            "setopt > /nonexistent-dir-xyz/f; echo \"shell=$?\"; " ++
+            "/bin/echo hi > /nonexistent-dir-xyz/f; echo \"external=$?\"; " ++
+            "cat < /nonexistent-file-xyz; echo \"input=$?\"; echo STILL_RUNNING",
+    );
+    defer allocator.free(r.stdout);
+    defer allocator.free(r.stderr);
+
+    try test_utils.TestAssert.expectContains(r.stdout, "builtin=1");
+    try test_utils.TestAssert.expectContains(r.stdout, "shell=1");
+    try test_utils.TestAssert.expectContains(r.stdout, "external=1");
+    try test_utils.TestAssert.expectContains(r.stdout, "input=1");
+    try test_utils.TestAssert.expectContains(r.stdout, "STILL_RUNNING");
+}
