@@ -1634,3 +1634,51 @@ test "builtin type: reports zstyle as a shell builtin" {
     try test_utils.TestAssert.expectEqual(@as(u8, 0), r.exit_code);
     try test_utils.TestAssert.expectContains(r.stdout, "shell builtin");
 }
+
+test "zshexit hook: a zshexit function runs as the shell exits" {
+    const allocator = std.testing.allocator;
+    var fixture = try test_utils.DenShellFixture.init(allocator);
+    defer fixture.deinit();
+    const r = try fixture.execDirect("zshexit() { echo BYE; }; echo main");
+    defer allocator.free(r.stdout);
+    defer allocator.free(r.stderr);
+
+    // Order is the point: the hook fires after the script body, not during it.
+    try test_utils.TestAssert.expectContains(r.stdout, "main");
+    try test_utils.TestAssert.expectContains(r.stdout, "BYE");
+    const main_at = std.mem.indexOf(u8, r.stdout, "main").?;
+    const bye_at = std.mem.indexOf(u8, r.stdout, "BYE").?;
+    try std.testing.expect(main_at < bye_at);
+}
+
+test "zshexit hook: zshexit_functions run in order" {
+    const allocator = std.testing.allocator;
+    var fixture = try test_utils.DenShellFixture.init(allocator);
+    defer fixture.deinit();
+    const r = try fixture.execDirect(
+        "a() { echo ONE; }; b() { echo TWO; }; zshexit_functions=(a b); echo main",
+    );
+    defer allocator.free(r.stdout);
+    defer allocator.free(r.stderr);
+
+    const one_at = std.mem.indexOf(u8, r.stdout, "ONE") orelse return error.MissingOne;
+    const two_at = std.mem.indexOf(u8, r.stdout, "TWO") orelse return error.MissingTwo;
+    try std.testing.expect(one_at < two_at);
+}
+
+test "zshexit hook: an EXIT trap still runs, and first" {
+    const allocator = std.testing.allocator;
+    var fixture = try test_utils.DenShellFixture.init(allocator);
+    defer fixture.deinit();
+    // Two mechanisms, bash's and zsh's. A config may set both, so neither may
+    // swallow the other.
+    const r = try fixture.execDirect(
+        "trap 'echo TRAP' EXIT; zshexit() { echo HOOK; }; echo main",
+    );
+    defer allocator.free(r.stdout);
+    defer allocator.free(r.stderr);
+
+    const trap_at = std.mem.indexOf(u8, r.stdout, "TRAP") orelse return error.MissingTrap;
+    const hook_at = std.mem.indexOf(u8, r.stdout, "HOOK") orelse return error.MissingHook;
+    try std.testing.expect(trap_at < hook_at);
+}

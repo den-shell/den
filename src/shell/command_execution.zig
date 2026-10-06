@@ -7,6 +7,7 @@ const types = @import("../types/mod.zig");
 const parser_mod = @import("../parser/mod.zig");
 const executor_mod = @import("../executor/mod.zig");
 const IO = @import("../utils/io.zig").IO;
+const dir_hooks = @import("dir_hooks.zig");
 const Shell = @import("../shell.zig").Shell;
 
 /// Try to execute a command via the fast path (for simple commands)
@@ -130,6 +131,10 @@ pub fn executeExitTrap(self: *Shell) void {
             self.executeCommand(handler) catch {};
         }
     }
+
+    // zsh's equivalent, which `add-zsh-hook zshexit` registers on. Every exit
+    // path already funnels through here, so this is the one place it belongs.
+    dir_hooks.runZshExitHooks(self);
 }
 
 /// Execute a command chain in the background

@@ -1188,6 +1188,12 @@ pub const Shell = struct {
                 break; // Exit loop and let deinit() handle cleanup
             }
 
+            // `preexec` fires after the line is read and before it runs, which
+            // is where a command timer starts and a terminal title is set. It
+            // goes after history expansion so the hook sees what will actually
+            // run, and interactive only: a script has no typed line to report.
+            if (self.is_interactive) dir_hooks.runPreexecHooks(self, command);
+
             // Execute command
             try self.executeCommand(command);
 

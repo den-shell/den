@@ -19,6 +19,7 @@
 //!
 //! `runPrecmdHooks` costs two hash lookups per prompt when no pre-prompt hook is
 //! defined, which is what an interactive shell that never uses them pays.
+//! `runPreexecHooks` costs the same per accepted command line.
 
 const std = @import("std");
 const Shell = @import("../shell.zig").Shell;
@@ -99,6 +100,38 @@ pub fn runPrecmdHooks(self: *Shell) void {
     }
 }
 
+/// Run `preexec` and `preexec_functions` after a line is read and before it is
+/// executed.
+///
+/// This is what a command timer, a terminal-title setter or a shell integration
+/// hooks: the line is known, nothing has run yet. zsh hands the hook three
+/// arguments -- the line as typed, a size-limited single-line form, and the full
+/// text being executed. Den has no separate elided or expanded form at this
+/// point, so all three are the same text rather than two of them being empty: a
+/// hook reading `$2` gets the command instead of nothing.
+pub fn runPreexecHooks(self: *Shell, command: []const u8) void {
+    if (in_hook) return;
+    in_hook = true;
+    defer in_hook = false;
+
+    const args = [_][]const u8{ command, command, command };
+    callFunctionWithArgs(self, "preexec", &args);
+    callFunctionListWithArgs(self, "preexec_functions", &args);
+}
+
+/// Run `zshexit` and `zshexit_functions` as the shell is about to exit.
+///
+/// Separate from the `EXIT` trap, which is bash's mechanism and keeps running
+/// first: a config may well set both, and neither should swallow the other.
+pub fn runZshExitHooks(self: *Shell) void {
+    if (in_hook) return;
+    in_hook = true;
+    defer in_hook = false;
+
+    callFunction(self, "zshexit");
+    callFunctionList(self, "zshexit_functions");
+}
+
 /// Forget the recorded directory. Called on `deinit`.
 pub fn reset(self: *Shell) void {
     if (self.last_hook_cwd) |previous| {
@@ -115,6 +148,22 @@ pub fn reset(self: *Shell) void {
 fn callFunction(self: *Shell, name: []const u8) void {
     if (!self.function_manager.hasFunction(name)) return;
     _ = self.function_manager.executeFunction(self, name, &[_][]const u8{}) catch {};
+}
+
+/// As `callFunction`, with arguments. Kept separate so the no-argument hooks
+/// stay a single call with no slice to build.
+fn callFunctionWithArgs(self: *Shell, name: []const u8, args: []const []const u8) void {
+    if (!self.function_manager.hasFunction(name)) return;
+    _ = self.function_manager.executeFunction(self, name, args) catch {};
+}
+
+/// As `callFunctionList`, with arguments passed to each function.
+fn callFunctionListWithArgs(self: *Shell, array_name: []const u8, args: []const []const u8) void {
+    const array = self.arrays.get(array_name) orelse return;
+    for (array.values) |name| {
+        if (name.len == 0) continue;
+        callFunctionWithArgs(self, name, args);
+    }
 }
 
 /// Call every function named in an array variable, in order, the way zsh walks
