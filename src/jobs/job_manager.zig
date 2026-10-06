@@ -216,6 +216,16 @@ pub const JobManager = struct {
         return null;
     }
 
+    /// Find a job by process id.
+    pub fn findByPid(self: *Self, pid: ProcessId) ?usize {
+        for (self.jobs, 0..) |maybe_job, i| {
+            if (maybe_job) |job| {
+                if (job.pid == pid) return i;
+            }
+        }
+        return null;
+    }
+
     /// Find the most recent job (highest job ID).
     pub fn findMostRecent(self: *Self) ?usize {
         var max_id: usize = 0;
@@ -511,47 +521,68 @@ pub const JobManager = struct {
             // Wait for specific job(s)
             var last_status: i32 = 0;
             for (args) |raw_arg| {
-                var arg = raw_arg;
-                if (arg.len > 0 and arg[0] == '%') {
-                    arg = arg[1..];
-                }
-                const job_id = std.fmt.parseInt(usize, arg, 10) catch {
+                const is_job_spec = raw_arg.len > 0 and raw_arg[0] == '%';
+                const arg = if (is_job_spec) raw_arg[1..] else raw_arg;
+                const number = std.fmt.parseInt(usize, arg, 10) catch {
                     try IO.eprint("den: wait: {s}: no such job\n", .{raw_arg});
                     last_status = 127;
                     continue;
                 };
 
-                const slot = self.findByJobId(job_id);
-                if (slot == null) {
-                    try IO.eprint("den: wait: {d}: no such job\n", .{job_id});
+                // `%n` is a job spec; a bare number is a process id, as in zsh
+                // and bash. Treating every number as a job id meant `wait $!`
+                // could never match, since a pid is not a job id.
+                const slot = if (is_job_spec)
+                    self.findByJobId(number)
+                else
+                    self.findByPid(@intCast(number));
+
+                if (slot) |found| {
+                    const job = self.jobs[found].?;
+                    var specific_wait_status: c_int = 0;
+                    _ = process.waitpidIntr(job.pid, &specific_wait_status, 0);
+                    last_status = getExitStatus(@as(u32, @bitCast(specific_wait_status)));
+                    self.remove(found);
+                    continue;
+                }
+
+                if (is_job_spec) {
+                    try IO.eprint("den: wait: {d}: no such job\n", .{number});
                     last_status = 127;
                     continue;
                 }
 
-                const job = self.jobs[slot.?].?;
-                var specific_wait_status: c_int = 0;
-                _ = process.waitpidIntr(job.pid, &specific_wait_status, 0);
-                last_status = getExitStatus(@as(u32, @bitCast(specific_wait_status)));
-                self.remove(slot.?);
+                // Not a job we track. It may still be a child of ours, which is
+                // what bash waits for; a pid that is not reports no such job.
+                var orphan_status: c_int = 0;
+                const reaped = process.waitpidIntr(@intCast(number), &orphan_status, 0);
+                if (reaped <= 0) {
+                    try IO.eprint("den: wait: {d}: no such job\n", .{number});
+                    last_status = 127;
+                    continue;
+                }
+                last_status = getExitStatus(@as(u32, @bitCast(orphan_status)));
             }
             return last_status;
         } else {
             // Wait for all background jobs
-            var last_status: i32 = 0;
             for (&self.jobs, 0..) |*maybe_job, i| {
                 if (maybe_job.*) |job| {
                     var all_wait_status: c_int = 0;
                     if (comptime builtin.os.tag != .windows) {
                         _ = process.waitpidIntr(job.pid, &all_wait_status, 0);
                     }
-                    last_status = getExitStatus(@as(u32, @bitCast(all_wait_status)));
                     self.allocator.free(job.command);
                     maybe_job.* = null;
                     self.job_count -= 1;
                     _ = i;
                 }
             }
-            return last_status;
+            // POSIX: `wait` with no operands exits zero once every job it knows
+            // about has finished, whatever those jobs exited with. zsh and bash
+            // both do this; returning the last job's status instead made
+            // `false & wait && ...` short-circuit where it should not.
+            return 0;
         }
     }
 };

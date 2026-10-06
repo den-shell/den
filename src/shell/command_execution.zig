@@ -147,8 +147,14 @@ pub fn executeInBackground(self: *Shell, chain: *types.CommandChain, original_in
     const pid: std.posix.pid_t = @intCast(fork_ret);
 
     if (pid == 0) {
-        // Child process - execute the chain
-        var executor = executor_mod.Executor.init(self.allocator, &self.environment);
+        // Child process - execute the chain.
+        //
+        // The executor needs the shell: without it, a shell-level builtin such
+        // as `sleep` or `basename` is recognised and then reported as "builtin
+        // not implemented", so `sleep 1 &` failed while `sleep 1` worked. This
+        // is a forked child that exits, so anything the builtin changes stays
+        // here rather than reaching the parent.
+        var executor = executor_mod.Executor.initWithShell(self.allocator, &self.environment, self);
         const exit_code = executor.executeChain(chain) catch 1;
         std.c._exit(@intCast(exit_code));
     } else {

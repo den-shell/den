@@ -9,7 +9,7 @@ const test_utils = @import("test_utils.zig");
 test "job control: run command in background" {
     const allocator = std.testing.allocator;
 
-    var fixture = try test_utils.ShellFixture.init(allocator);
+    var fixture = try test_utils.DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     const result = try fixture.exec("sleep 0.1 &");
@@ -23,7 +23,7 @@ test "job control: run command in background" {
 test "job control: jobs lists background jobs" {
     const allocator = std.testing.allocator;
 
-    var fixture = try test_utils.ShellFixture.init(allocator);
+    var fixture = try test_utils.DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     const result = try fixture.exec("sleep 1 & jobs");
@@ -37,7 +37,7 @@ test "job control: jobs lists background jobs" {
 test "job control: jobs shows job number" {
     const allocator = std.testing.allocator;
 
-    var fixture = try test_utils.ShellFixture.init(allocator);
+    var fixture = try test_utils.DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     const result = try fixture.exec("sleep 1 & jobs");
@@ -53,7 +53,7 @@ test "job control: jobs shows job number" {
 test "job control: wait for background job" {
     const allocator = std.testing.allocator;
 
-    var fixture = try test_utils.ShellFixture.init(allocator);
+    var fixture = try test_utils.DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     const result = try fixture.exec("sleep 0.1 & wait && echo done");
@@ -66,7 +66,7 @@ test "job control: wait for background job" {
 test "job control: wait for specific job" {
     const allocator = std.testing.allocator;
 
-    var fixture = try test_utils.ShellFixture.init(allocator);
+    var fixture = try test_utils.DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     const result = try fixture.exec("sleep 0.1 & wait %1 && echo waited");
@@ -79,7 +79,7 @@ test "job control: wait for specific job" {
 test "job control: multiple background jobs" {
     const allocator = std.testing.allocator;
 
-    var fixture = try test_utils.ShellFixture.init(allocator);
+    var fixture = try test_utils.DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     const result = try fixture.exec("sleep 0.1 & sleep 0.1 & jobs");
@@ -92,7 +92,7 @@ test "job control: multiple background jobs" {
 test "job control: kill background job" {
     const allocator = std.testing.allocator;
 
-    var fixture = try test_utils.ShellFixture.init(allocator);
+    var fixture = try test_utils.DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     const result = try fixture.exec("sleep 10 & kill %1");
@@ -105,7 +105,7 @@ test "job control: kill background job" {
 test "job control: kill with signal" {
     const allocator = std.testing.allocator;
 
-    var fixture = try test_utils.ShellFixture.init(allocator);
+    var fixture = try test_utils.DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     const result = try fixture.exec("sleep 10 & kill -9 %1");
@@ -118,7 +118,7 @@ test "job control: kill with signal" {
 test "job control: kill by PID" {
     const allocator = std.testing.allocator;
 
-    var fixture = try test_utils.ShellFixture.init(allocator);
+    var fixture = try test_utils.DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     // Use $! to get last background PID
@@ -132,7 +132,7 @@ test "job control: kill by PID" {
 test "job control: disown removes job from table" {
     const allocator = std.testing.allocator;
 
-    var fixture = try test_utils.ShellFixture.init(allocator);
+    var fixture = try test_utils.DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     const result = try fixture.exec("sleep 0.5 & disown && jobs");
@@ -146,7 +146,7 @@ test "job control: disown removes job from table" {
 test "job control: background command output" {
     const allocator = std.testing.allocator;
 
-    var fixture = try test_utils.ShellFixture.init(allocator);
+    var fixture = try test_utils.DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     const result = try fixture.exec("echo background & wait");
@@ -160,7 +160,7 @@ test "job control: background command output" {
 test "job control: background pipeline" {
     const allocator = std.testing.allocator;
 
-    var fixture = try test_utils.ShellFixture.init(allocator);
+    var fixture = try test_utils.DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     const result = try fixture.exec("echo test | cat & wait");
@@ -173,7 +173,7 @@ test "job control: background pipeline" {
 test "job control: jobs -l shows PIDs" {
     const allocator = std.testing.allocator;
 
-    var fixture = try test_utils.ShellFixture.init(allocator);
+    var fixture = try test_utils.DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     const result = try fixture.exec("sleep 1 & jobs -l");
@@ -184,28 +184,45 @@ test "job control: jobs -l shows PIDs" {
     try test_utils.TestAssert.expectEqual(@as(u8, 0), result.exit_code);
 }
 
-test "job control: exit code of background job" {
+test "job control: wait reports the status of a specific job" {
     const allocator = std.testing.allocator;
 
-    var fixture = try test_utils.ShellFixture.init(allocator);
+    var fixture = try test_utils.DenShellFixture.init(allocator);
     defer fixture.deinit();
 
-    const result = try fixture.exec("false & wait && echo $?");
+    // `wait <pid>` yields that job's exit status, so a failing job shows up.
+    //
+    // execInTempDir rather than exec: the latter prepends `cd <tmp> &&`, which
+    // makes the backgrounded command an AND-OR list, and a backgrounded list
+    // currently exits 0 whatever it contained. That is a separate bug; this test
+    // is about `wait`.
+    const result = try fixture.execInTempDir("false & PID=$! ; wait $PID ; echo status=$?");
     defer allocator.free(result.stdout);
     defer allocator.free(result.stderr);
 
-    // wait should return the exit code of the job
-    try test_utils.TestAssert.expectContains(result.stdout, "1");
+    try test_utils.TestAssert.expectContains(result.stdout, "status=1");
 }
 
-// ============================================================================
-// Enhanced Job Control Tests - Nested Jobs & Signal Handling
-// ============================================================================
+test "job control: bare wait exits zero whatever the jobs did" {
+    const allocator = std.testing.allocator;
 
+    var fixture = try test_utils.DenShellFixture.init(allocator);
+    defer fixture.deinit();
+
+    // POSIX, and both zsh and bash: `wait` with no operands exits zero once the
+    // jobs have finished, regardless of their status -- so this does not
+    // short-circuit on a job that failed.
+    const result = try fixture.exec("false & wait && echo reached");
+    defer allocator.free(result.stdout);
+    defer allocator.free(result.stderr);
+
+    try test_utils.TestAssert.expectEqual(@as(u8, 0), result.exit_code);
+    try test_utils.TestAssert.expectContains(result.stdout, "reached");
+}
 test "job control: nested background jobs" {
     const allocator = std.testing.allocator;
 
-    var fixture = try test_utils.ShellFixture.init(allocator);
+    var fixture = try test_utils.DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     // Start multiple nested background jobs
@@ -219,7 +236,7 @@ test "job control: nested background jobs" {
 test "job control: pipeline as background job" {
     const allocator = std.testing.allocator;
 
-    var fixture = try test_utils.ShellFixture.init(allocator);
+    var fixture = try test_utils.DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     const result = try fixture.exec("(echo foo | cat | cat) & wait");
@@ -232,7 +249,7 @@ test "job control: pipeline as background job" {
 test "job control: kill SIGTERM signal name" {
     const allocator = std.testing.allocator;
 
-    var fixture = try test_utils.ShellFixture.init(allocator);
+    var fixture = try test_utils.DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     const result = try fixture.exec("sleep 10 & kill -TERM %1 2>&1");
@@ -245,7 +262,7 @@ test "job control: kill SIGTERM signal name" {
 test "job control: kill SIGKILL signal name" {
     const allocator = std.testing.allocator;
 
-    var fixture = try test_utils.ShellFixture.init(allocator);
+    var fixture = try test_utils.DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     const result = try fixture.exec("sleep 10 & kill -KILL %1 2>&1");
@@ -258,7 +275,7 @@ test "job control: kill SIGKILL signal name" {
 test "job control: kill SIGHUP signal name" {
     const allocator = std.testing.allocator;
 
-    var fixture = try test_utils.ShellFixture.init(allocator);
+    var fixture = try test_utils.DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     const result = try fixture.exec("sleep 10 & kill -HUP %1 2>&1");
@@ -271,7 +288,7 @@ test "job control: kill SIGHUP signal name" {
 test "job control: wait for specific PID" {
     const allocator = std.testing.allocator;
 
-    var fixture = try test_utils.ShellFixture.init(allocator);
+    var fixture = try test_utils.DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     const result = try fixture.exec("sleep 0.1 & PID=$! ; wait $PID && echo waited_for_$PID");
@@ -284,7 +301,7 @@ test "job control: wait for specific PID" {
 test "job control: disown -h keeps job but removes from HUP" {
     const allocator = std.testing.allocator;
 
-    var fixture = try test_utils.ShellFixture.init(allocator);
+    var fixture = try test_utils.DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     const result = try fixture.exec("sleep 0.5 & disown -h %1");
@@ -297,7 +314,7 @@ test "job control: disown -h keeps job but removes from HUP" {
 test "job control: disown -a removes all jobs" {
     const allocator = std.testing.allocator;
 
-    var fixture = try test_utils.ShellFixture.init(allocator);
+    var fixture = try test_utils.DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     const result = try fixture.exec("sleep 0.5 & sleep 0.5 & disown -a && jobs");
@@ -311,7 +328,7 @@ test "job control: disown -a removes all jobs" {
 test "job control: jobs -p shows only PIDs" {
     const allocator = std.testing.allocator;
 
-    var fixture = try test_utils.ShellFixture.init(allocator);
+    var fixture = try test_utils.DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     const result = try fixture.exec("sleep 1 & jobs -p ; kill %1");
@@ -325,7 +342,7 @@ test "job control: jobs -p shows only PIDs" {
 test "job control: background job $! variable" {
     const allocator = std.testing.allocator;
 
-    var fixture = try test_utils.ShellFixture.init(allocator);
+    var fixture = try test_utils.DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     const result = try fixture.exec("sleep 0.1 & echo $!");
@@ -344,7 +361,7 @@ test "job control: background job $! variable" {
 test "job control: sequential background jobs" {
     const allocator = std.testing.allocator;
 
-    var fixture = try test_utils.ShellFixture.init(allocator);
+    var fixture = try test_utils.DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     const result = try fixture.exec("echo a & echo b & echo c & wait");
@@ -360,7 +377,7 @@ test "job control: sequential background jobs" {
 test "job control: background job with redirection" {
     const allocator = std.testing.allocator;
 
-    var fixture = try test_utils.ShellFixture.init(allocator);
+    var fixture = try test_utils.DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     const result = try fixture.exec("echo redirected > /dev/null & wait && echo done");

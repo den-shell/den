@@ -1792,14 +1792,50 @@ pub const Executor = struct {
     }
 
     /// Execute command in background (don't wait for it to complete)
+    /// Register a background child so `$!` and `wait <pid>` can see it, and
+    /// announce it the way an interactive shell does.
+    ///
+    /// Neither happened before: the job was never added, so `$!` kept whatever
+    /// value it already had -- reporting a pid that was not the job's -- and
+    /// `wait $!` said "no such job". The notice also went to stdout, where it
+    /// corrupted the output of anything reading the command's results; zsh and
+    /// bash print it to stderr and only when interactive.
+    fn registerBackgroundJob(self: *Executor, pid: std.posix.pid_t, command: *types.ParsedCommand) !void {
+        if (self.shell) |shell| {
+            shell.job_manager.add(pid, command.name) catch {};
+            if (shell.is_interactive) try IO.eprint("[{d}]\n", .{pid});
+            return;
+        }
+        try IO.eprint("[{d}]\n", .{pid});
+    }
+
     fn executeCommandBackground(self: *Executor, command: *types.ParsedCommand) !void {
         // Expand now (deferred from the shell for chains) before forking.
         try self.ensureExpanded(command);
 
-        // Check if it's a builtin - builtins can't run in background
+        // A builtin in the background runs in a forked child, as zsh and bash
+        // both do: `echo hi &` prints, it does not report an error. There is
+        // nothing to exec, so the child runs the builtin and exits; anything it
+        // changes stays in the child, which is what backgrounding means.
         if (self.isBuiltin(command.name)) {
-            try IO.eprint("den: cannot run builtin '{s}' in background\n", .{command.name});
-            return error.BuiltinBackground;
+            if (builtin.os.tag == .windows) {
+                // No fork on Windows; run it in the foreground rather than
+                // failing outright.
+                _ = try self.executeBuiltin(command);
+                return;
+            }
+            const builtin_fork = std.c.fork();
+            if (builtin_fork < 0) return error.Unexpected;
+            const builtin_pid: std.posix.pid_t = @intCast(builtin_fork);
+            if (builtin_pid == 0) {
+                self.applyRedirections(command.redirections) catch {
+                    std.c._exit(1);
+                };
+                const code = self.executeBuiltin(command) catch 1;
+                std.c._exit(@intCast(code));
+            }
+            try self.registerBackgroundJob(builtin_pid, command);
+            return;
         }
 
         if (builtin.os.tag == .windows) {
@@ -1850,8 +1886,8 @@ pub const Executor = struct {
             IO.eprint("den: {s}: command not found\n", .{command.name}) catch {};
             std.c._exit(127);
         } else {
-            // Parent process - DON'T wait, just print the PID
-            try IO.print("[{d}]\n", .{pid});
+            // Parent process - don't wait; record the job so `$!` and `wait` see it.
+            try self.registerBackgroundJob(pid, command);
         }
     }
 
