@@ -7,6 +7,9 @@ const types = @import("../types/mod.zig");
 const Shell = @import("../shell.zig").Shell;
 const HookContext = @import("../plugins/interface.zig").HookContext;
 const expansion = @import("../utils/expansion.zig");
+const cmd_exp = @import("command_expansion.zig");
+const Glob = @import("../utils/glob.zig").Glob;
+const BraceExpander = @import("../utils/brace.zig").BraceExpander;
 
 /// Resolve nameref chain to get the actual variable name
 pub fn resolveNameref(self: *Shell, name: []const u8) []const u8 {
@@ -231,6 +234,87 @@ pub fn isArrayAssignment(input: []const u8) bool {
 }
 
 /// Parse and execute array assignment (or array append with +=)
+/// If a substitution starts at `i`, advance past the whole of it.
+///
+/// `$(...)`, `${...}` and `` `...` `` are single words even when they contain
+/// spaces, so the scanner cannot simply stop at the next whitespace:
+/// `a=($(echo p q))` is one word that expands to two elements, not three words.
+/// Nesting is counted so that `$(echo $(echo x))` is handled.
+fn skipSubstitution(content: []const u8, i: *usize) bool {
+    const rest = content[i.*..];
+    if (rest.len >= 1 and rest[0] == '`') {
+        i.* += 1;
+        while (i.* < content.len and content[i.*] != '`') : (i.* += 1) {
+            // A backslash inside backticks escapes the next character.
+            if (content[i.*] == '\\' and i.* + 1 < content.len) i.* += 1;
+        }
+        if (i.* < content.len) i.* += 1;
+        return true;
+    }
+    if (rest.len >= 2 and rest[0] == '$' and (rest[1] == '(' or rest[1] == '{')) {
+        const open = rest[1];
+        const close: u8 = if (open == '(') ')' else '}';
+        i.* += 2;
+        var depth: usize = 1;
+        while (i.* < content.len and depth > 0) : (i.* += 1) {
+            if (content[i.*] == open) depth += 1 else if (content[i.*] == close) depth -= 1;
+        }
+        return true;
+    }
+    return false;
+}
+
+/// One run of characters inside an array element, and how it was quoted.
+const Segment = struct {
+    text: []const u8,
+    quoting: cmd_exp.Quoting,
+};
+
+/// Scan one whitespace-delimited word of an array literal into quoted and
+/// unquoted runs, advancing `i` past it.
+///
+/// Quoting is tracked per run rather than per word because the two differ:
+/// `a=("x"y)` is one element `xy`, not the two the old scanner produced by
+/// stopping at the closing quote and starting again at `y`.
+///
+/// An unterminated quote runs to the end of the literal, which is what the
+/// shell does with `a=("oops)`.
+fn scanWord(content: []const u8, i: *usize, out: *[32]Segment) usize {
+    var count: usize = 0;
+    while (i.* < content.len and !std.ascii.isWhitespace(content[i.*])) {
+        const c = content[i.*];
+        if (c == '"' or c == '\'') {
+            const quote = c;
+            i.* += 1;
+            const start = i.*;
+            while (i.* < content.len and content[i.*] != quote) : (i.* += 1) {}
+            if (count < out.len) {
+                out[count] = .{
+                    .text = content[start..i.*],
+                    .quoting = if (quote == '\'') .single else .double,
+                };
+                count += 1;
+            }
+            if (i.* < content.len) i.* += 1; // past the closing quote
+            continue;
+        }
+
+        const start = i.*;
+        while (i.* < content.len and
+            !std.ascii.isWhitespace(content[i.*]) and
+            content[i.*] != '"' and content[i.*] != '\'')
+        {
+            if (skipSubstitution(content, i)) continue;
+            i.* += 1;
+        }
+        if (count < out.len) {
+            out[count] = .{ .text = content[start..i.*], .quoting = .none };
+            count += 1;
+        }
+    }
+    return count;
+}
+
 pub fn executeArrayAssignment(self: *Shell, input: []const u8) !void {
     const eq_pos = std.mem.indexOfScalar(u8, input, '=') orelse return error.InvalidSyntax;
     const is_append = eq_pos > 0 and input[eq_pos - 1] == '+';
@@ -281,54 +365,84 @@ pub fn executeArrayAssignment(self: *Shell, input: []const u8) !void {
         return;
     }
 
-    // First pass: count elements (respecting quotes)
-    var count: usize = 0;
+    // Expand the elements.
+    //
+    // This used to dupe each word verbatim, so `fpath=(~/funcs $fpath)` stored
+    // a literal `~/funcs` and a command substitution was merely split on its
+    // own whitespace. Array elements are words like any other, so they go
+    // through the same pipeline as a command's arguments: parameter, tilde,
+    // command and arithmetic expansion, then field splitting of an unquoted
+    // result, then braces and globs.
+    //
+    // One word can therefore yield several elements (`a=($X)` with two fields)
+    // or none (`a=(*.nothing)` with nullglob), which is why the count is no
+    // longer worked out in advance.
+    var storage: cmd_exp.ExpanderStorage = .{};
+    var expander = cmd_exp.makeExpander(self, &storage);
+    var glob = Glob.init(self.allocator);
+    glob.qualifiers_enabled = self.config.zsh.enabled and self.config.zsh.glob_qualifiers;
+    var brace = BraceExpander.init(self.allocator);
+
+    var cwd_buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
+    const cwd_result = std.c.getcwd(&cwd_buf, cwd_buf.len) orelse return error.Unexpected;
+    const cwd = std.mem.sliceTo(@as([*:0]u8, @ptrCast(cwd_result)), 0);
+
+    var expanded: std.ArrayListUnmanaged([]const u8) = .empty;
+    errdefer {
+        for (expanded.items) |e| self.allocator.free(e);
+        expanded.deinit(self.allocator);
+    }
+
     {
         var ci: usize = 0;
         while (ci < content.len) {
-            // Skip whitespace between elements
             while (ci < content.len and std.ascii.isWhitespace(content[ci])) : (ci += 1) {}
             if (ci >= content.len) break;
-            count += 1;
-            // Skip this element
-            if (content[ci] == '"' or content[ci] == '\'') {
-                const quote = content[ci];
-                ci += 1; // skip opening quote
-                while (ci < content.len and content[ci] != quote) : (ci += 1) {}
-                if (ci < content.len) ci += 1; // skip closing quote
-            } else {
-                while (ci < content.len and !std.ascii.isWhitespace(content[ci])) : (ci += 1) {}
+
+            var segs: [32]Segment = undefined;
+            const seg_count = scanWord(content, &ci, &segs);
+            if (seg_count == 0) continue;
+
+            if (seg_count == 1) {
+                try cmd_exp.expandWordInto(
+                    self,
+                    &expander,
+                    &brace,
+                    &glob,
+                    cwd,
+                    segs[0].text,
+                    segs[0].quoting,
+                    &expanded,
+                );
+                continue;
             }
+
+            // A word that mixes quoting, such as `pre"$X"post`. Each run is
+            // expanded on its own and the results are joined into one element.
+            // Field splitting is not applied across such a word: knowing which
+            // part of the result came from the unquoted run needs markers
+            // through the expander that den does not carry.
+            var joined: std.ArrayList(u8) = .empty;
+            defer joined.deinit(self.allocator);
+            for (segs[0..seg_count]) |seg| {
+                if (seg.quoting == .single) {
+                    try joined.appendSlice(self.allocator, seg.text);
+                    continue;
+                }
+                expander.skip_tilde = seg.quoting != .none;
+                const piece = try expander.expand(seg.text);
+                expander.skip_tilde = false;
+                defer self.allocator.free(piece);
+                try joined.appendSlice(self.allocator, piece);
+            }
+            const element = try cmd_exp.stripGlobEscapes(self.allocator, joined.items);
+            errdefer self.allocator.free(element);
+            try expanded.append(self.allocator, element);
         }
     }
 
-    // Allocate array
-    const array = try self.allocator.alloc([]const u8, count);
+    const array = try expanded.toOwnedSlice(self.allocator);
     errdefer self.allocator.free(array);
-
-    // Second pass: extract elements (respecting quotes)
-    var i: usize = 0;
-    {
-        var ci: usize = 0;
-        while (ci < content.len) {
-            // Skip whitespace between elements
-            while (ci < content.len and std.ascii.isWhitespace(content[ci])) : (ci += 1) {}
-            if (ci >= content.len) break;
-            if (content[ci] == '"' or content[ci] == '\'') {
-                const quote = content[ci];
-                ci += 1; // skip opening quote
-                const start = ci;
-                while (ci < content.len and content[ci] != quote) : (ci += 1) {}
-                array[i] = try self.allocator.dupe(u8, content[start..ci]);
-                if (ci < content.len) ci += 1; // skip closing quote
-            } else {
-                const start = ci;
-                while (ci < content.len and !std.ascii.isWhitespace(content[ci])) : (ci += 1) {}
-                array[i] = try self.allocator.dupe(u8, content[start..ci]);
-            }
-            i += 1;
-        }
-    }
 
     if (is_append) {
         // Append to existing array: new elements take subscripts after the
