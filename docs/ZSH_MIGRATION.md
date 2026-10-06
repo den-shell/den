@@ -24,7 +24,7 @@ alias gs='git status'
 | Configuration | `.zshrc` | `den.jsonc` | JSON + shell scripts |
 | Scripting | Zsh/POSIX | Full POSIX | Bash-compatible |
 | Plugins | Oh-My-Zsh, etc. | Native support | Hot-reload |
-| Completion | zstyle-based | Bash-compatible | Simpler syntax |
+| Completion | zstyle-based | Built-in, context-aware | No setup; `zstyle` accepted |
 
 ## Syntax Compatibility
 
@@ -253,7 +253,8 @@ You can also use shell scripts with Den - it sources `~/.denrc` if it exists.
 
 **Zsh:** Uses `compinit`, `zstyle`, complex completion system
 
-**Den:** Uses Bash-compatible `complete` commands
+**Den:** Context-aware completion with no setup, plus Bash-compatible
+`complete` commands
 
 ```bash
 # Zsh style
@@ -263,6 +264,13 @@ compinit
 # Den style (Bash-compatible)
 complete -F _git_complete git
 ```
+
+`zstyle` itself is implemented, so the lines above are accepted rather than
+reported as unknown commands, and `zstyle -s`/`-t` read styles back. But den's
+completion engine does not consult them: `menu select` changes nothing, and that
+behaviour belongs in the `completion` section of `den.jsonc`. The exception is
+`matcher-list`, where a case-folding spec turns case sensitivity off. See
+[Extended Features](./EXTENDED_FEATURES.md#zstyle).
 
 ### 4. History
 

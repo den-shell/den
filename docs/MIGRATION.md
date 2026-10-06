@@ -637,8 +637,28 @@ forward.
 |-----|-----|
 | `compinit` | Automatic, no setup needed |
 | `_git`, `_docker` | Built-in context-aware completion |
-| `zstyle ':completion:*'` | Use `completion` config section |
+| `zstyle ':completion:*'` | Runs as written; see below |
 | `fpath+=` | Use `plugins` config |
+
+#### `zstyle`
+
+`zstyle` exists, with the same context patterns, specificity ordering and query
+forms (`-t`, `-s`, `-b`, `-a`, `-g`, `-m`, `-d`, `-L`) as zsh, so a completion
+block copied out of a `.zshrc` is accepted and a function that reads its own
+configuration through `zstyle -s` sees it.
+
+What it does not do is drive completion. Styles are stored and readable, but
+den's completion engine does not consult them, so `menu select`, `verbose yes`
+and `list-max` change nothing on their own — configure that behaviour in the
+`completion` section of `den.jsonc`. The one style that has an effect is
+`matcher-list`: a case-folding spec turns case sensitivity off.
+
+```sh
+zstyle ':completion:*' matcher-list 'm:{a-zA-Z}={A-Za-z}'   # case-insensitive
+```
+
+`zstyle -e` is refused rather than silently stored, since the store holds values
+and not code to evaluate on each lookup.
 
 ### History
 

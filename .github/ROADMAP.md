@@ -40,7 +40,7 @@ Den is currently in active development with core shell functionality complete an
 - [x] Extended globbing (extglob)
 - [x] Configuration file support (JSONC)
 - [x] Hot-reload configuration
-- [x] Full zsh compatibility layer (`setopt`/`unsetopt`, `bindkey` with named widgets and keymaps, `%`-prompt escapes, glob qualifiers, arrays, associative arrays, named directories, auto-cd, global/suffix aliases — see `src/compat/zsh.zig`)
+- [x] Full zsh compatibility layer (`setopt`/`unsetopt`, `bindkey` with named widgets and keymaps, `zstyle`, `%`-prompt escapes, glob qualifiers, arrays, associative arrays, named directories, auto-cd, global/suffix aliases — see `src/compat/zsh.zig`)
 - [x] Fish-style autosuggestions (wired into the line editor, config-driven via `line_editor.autosuggestions`)
 - [x] Syntax highlighting (wired into the line editor, config-driven via `line_editor.syntax_highlighting`)
 

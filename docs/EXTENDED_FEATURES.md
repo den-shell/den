@@ -104,6 +104,46 @@ The function reads and writes the line through `$BUFFER`, `$CURSOR`, `$LBUFFER`
 and `$RBUFFER`. See [Line Editing](./LINE_EDITING.md#customizing-keybindings-with-bindkey)
 for the full option and widget reference.
 
+### `zstyle`
+
+Zsh's pattern-keyed style database. Styles are set against a context pattern and
+read back by the most specific pattern that matches, so a `.zshrc` completion
+block is accepted as written instead of failing line by line:
+
+```sh
+zstyle ':completion:*' menu select
+zstyle ':completion:*' matcher-list 'm:{a-zA-Z}={A-Za-z}'
+zstyle ':completion:*:*:git:*' verbose yes
+zstyle -L                           # dump as re-runnable zstyle commands
+```
+
+The query forms are there too, which is what makes a function that configures
+itself through styles work rather than silently seeing nothing:
+
+| Form | Meaning |
+|---|---|
+| `-t ctx style [val...]` | true if set and true, or one of the given values |
+| `-T ctx style` | as `-t`, but an unset style is true |
+| `-b ctx style var` | `yes`/`no` into `var` |
+| `-s ctx style var` | the values, joined, into `var` |
+| `-a ctx style var` | the values into `var` |
+| `-m ctx style pattern` | true if a value matches the pattern |
+| `-g var [pattern [style]]` | collect patterns, style names, or values |
+| `-d [pattern [style...]]` | delete |
+
+Be aware of what this does and does not do. Styles are stored, matched and
+readable, and `zstyle` itself behaves as zsh's does — but **den's completion
+engine does not consult them.** Setting `menu select` or `verbose yes` changes
+nothing; the behaviour they ask for is configured under the `completion` section
+of `den.jsonc`. The one exception is `matcher-list`: a case-folding spec such as
+`m:{a-z}={A-Z}` turns completion's case sensitivity off, taking effect on the
+next completion. The styles are kept so that migration is not lossy and so a
+function can read its own configuration, not because each one is honoured.
+
+Two further limits: `-e` is refused rather than accepted, because a style holds
+values and not code to be evaluated on each lookup; and `-a`/`-g` join their
+values with spaces, since den has no array assignment from a builtin.
+
 ## AI-assisted completions
 
 The `ai` builtin turns a natural-language description into a shell command using
