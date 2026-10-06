@@ -191,12 +191,7 @@ test "job control: wait reports the status of a specific job" {
     defer fixture.deinit();
 
     // `wait <pid>` yields that job's exit status, so a failing job shows up.
-    //
-    // execInTempDir rather than exec: the latter prepends `cd <tmp> &&`, which
-    // makes the backgrounded command an AND-OR list, and a backgrounded list
-    // currently exits 0 whatever it contained. That is a separate bug; this test
-    // is about `wait`.
-    const result = try fixture.execInTempDir("false & PID=$! ; wait $PID ; echo status=$?");
+    const result = try fixture.exec("false & PID=$! ; wait $PID ; echo status=$?");
     defer allocator.free(result.stdout);
     defer allocator.free(result.stderr);
 
@@ -385,4 +380,43 @@ test "job control: background job with redirection" {
     defer allocator.free(result.stderr);
 
     try test_utils.TestAssert.expectContains(result.stdout, "done");
+}
+
+test "job control: a backgrounded AND-OR list reports its own status" {
+    const allocator = std.testing.allocator;
+
+    var fixture = try test_utils.DenShellFixture.init(allocator);
+    defer fixture.deinit();
+
+    // The `&` used to be left on the chain handed to the forked child, so the
+    // child backgrounded its own last command and exited 0 whatever that
+    // command did: `true && false &` looked successful while a bare `false &`
+    // did not.
+    const failing = try fixture.execInTempDir("true && false & PID=$! ; wait $PID ; echo status=$?");
+    defer allocator.free(failing.stdout);
+    defer allocator.free(failing.stderr);
+    try test_utils.TestAssert.expectContains(failing.stdout, "status=1");
+
+    const passing = try fixture.execInTempDir("true && true & PID=$! ; wait $PID ; echo status=$?");
+    defer allocator.free(passing.stdout);
+    defer allocator.free(passing.stderr);
+    try test_utils.TestAssert.expectContains(passing.stdout, "status=0");
+}
+
+test "job control: backgrounding a list runs it once, not twice" {
+    const allocator = std.testing.allocator;
+
+    var fixture = try test_utils.DenShellFixture.init(allocator);
+    defer fixture.deinit();
+
+    // Dropping the trailing `&` in the child must not turn into running the
+    // last command twice: one line of output, not two.
+    const result = try fixture.execInTempDir("true && echo once & wait");
+    defer allocator.free(result.stdout);
+    defer allocator.free(result.stderr);
+
+    var count: usize = 0;
+    var i: usize = 0;
+    while (std.mem.indexOfPos(u8, result.stdout, i, "once")) |pos| : (i = pos + 1) count += 1;
+    try test_utils.TestAssert.expectEqual(@as(usize, 1), count);
 }

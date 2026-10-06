@@ -155,6 +155,17 @@ pub fn executeInBackground(self: *Shell, chain: *types.CommandChain, original_in
         // is a forked child that exits, so anything the builtin changes stays
         // here rather than reaching the parent.
         var executor = executor_mod.Executor.initWithShell(self.allocator, &self.environment, self);
+
+        // The `&` that sent us here is still on the chain. Leaving it there made
+        // the child background its own last command and report 0 whatever that
+        // command did, so `cd /tmp && false &` looked successful while a bare
+        // `false &` did not. Drop it: in here the chain runs to completion, and
+        // its status is what the job exited with. Only this child's view of the
+        // slice changes, and it exits immediately afterwards.
+        if (chain.operators.len > 0 and chain.operators[chain.operators.len - 1] == .background) {
+            chain.operators = chain.operators[0 .. chain.operators.len - 1];
+        }
+
         const exit_code = executor.executeChain(chain) catch 1;
         std.c._exit(@intCast(exit_code));
     } else {
