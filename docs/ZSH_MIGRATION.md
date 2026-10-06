@@ -253,6 +253,8 @@ You can also use shell scripts with Den - it sources `~/.denrc` if it exists.
 
 **Zsh:** Uses `compinit`, `zstyle`, complex completion system
 
+**Den:** Accepts all of it; completion itself needs no setup
+
 **Den:** Context-aware completion with no setup, plus Bash-compatible
 `complete` commands
 

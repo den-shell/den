@@ -144,6 +144,93 @@ Two further limits: `-e` is refused rather than accepted, because a style holds
 values and not code to be evaluated on each lookup; and `-a`/`-g` join their
 values with spaces, since den has no array assignment from a builtin.
 
+### Startup: `autoload`, `compinit` and hooks
+
+The lines at the top of a `.zshrc`, above anything interesting. These used to be
+a wall of `command not found` before the `setopt`, `bindkey` and `zstyle` lines
+den does implement:
+
+```sh
+autoload -Uz compinit && compinit
+autoload -Uz bashcompinit && bashcompinit
+zmodload zsh/complist
+emulate -L zsh
+is-at-least 5.1 && setopt extendedglob
+compdef _git g
+```
+
+Most of these are setup for machinery den does not have, and the honest answer is
+that no setup is needed rather than that the command is missing: completion is
+always on, there are no loadable modules, and there is one set of semantics. So
+they succeed and do nothing, silently -- they run while an rc file is sourced, so
+a note per line would print on every shell start.
+
+Where that is not true, they say so:
+
+| Command | Behaviour |
+|---|---|
+| `compinit`, `bashcompinit`, `compdef` | Succeed; completion needs no setup |
+| `zmodload` | Succeeds; `-e` reports no module is loaded |
+| `emulate sh`/`ksh`/`zsh` | Succeeds; `csh` is refused |
+| `is-at-least a b` | Real comparison, numeric per component |
+| `is-at-least a` | False: den reports itself as den, not a zsh version |
+
+#### `autoload`
+
+Marks a name to be defined from `$fpath` on first use, and is the only thing that
+gives `fpath` a meaning -- den accepted the array but nothing read it.
+
+```sh
+fpath=(/usr/local/share/den/functions $fpath)
+autoload -Uz my_helper      # not read yet
+my_helper arg               # read and defined now
+```
+
+Lazy, as zsh is: the file is read on the first call, so a config can autoload
+dozens of names and pay for none at startup. The file holds a function *body*,
+not a `name() { ... }` wrapper, which is zsh's convention. Both the `fpath` array
+and `FPATH` are searched. A missing definition file is reported as zsh words it,
+with status 1 rather than 127 -- the name was known, the search path is wrong.
+
+One deliberate divergence: a name den already provides is not marked. zsh's
+placeholder shadows even a builtin, so `autoload -Uz echo` breaks `echo` there,
+while the names configs actually autoload -- `compinit`, `add-zsh-hook`,
+`bashcompinit`, `is-at-least` -- are builtins here. Not shadowing them is what
+makes `autoload -Uz compinit; compinit` work.
+
+**Known limitation.** Array assignment does not expand its elements yet, so
+`fpath=(~/funcs $fpath)` stores the literal `~/funcs`. Until that is fixed, use a
+literal path in the array, or `FPATH`, which is a scalar and does expand:
+
+```sh
+export FPATH=$HOME/funcs    # works today
+fpath=(/home/you/funcs)     # works today
+fpath=(~/funcs)             # does NOT expand yet
+```
+
+#### Hooks
+
+Den runs `chpwd`, `precmd`, `preexec` and `zshexit`, each as a bare function and
+as a `<name>_functions` array, and `add-zsh-hook` registers on them:
+
+```sh
+timer_start() { TIMER=$SECONDS }
+add-zsh-hook preexec timer_start
+add-zsh-hook -L precmd        # list, as a re-runnable declaration
+add-zsh-hook -d precmd fn     # remove one
+add-zsh-hook -D precmd 'f*'   # remove by pattern
+```
+
+`preexec` fires after history expansion, so it sees the line that will actually
+run rather than the `!!` that was typed, and is handed that line as `$1`. zsh also
+passes a size-limited and a full form; den has no distinct forms here, so all
+three arguments carry the same text. `zshexit` runs after the bash-style `EXIT`
+trap rather than instead of it.
+
+`periodic`, `zshaddhistory` and `zsh_directory_name` are refused rather than
+accepted as zsh does: den fires none of them, so a function registered there
+would silently never run.
+
 ## AI-assisted completions
 
 The `ai` builtin turns a natural-language description into a shell command using

@@ -635,10 +635,27 @@ forward.
 
 | Zsh | Den |
 |-----|-----|
-| `compinit` | Automatic, no setup needed |
+| `compinit` | Accepted; completion needs no setup |
 | `_git`, `_docker` | Built-in context-aware completion |
 | `zstyle ':completion:*'` | Runs as written; see below |
 | `fpath+=` | Use `plugins` config |
+
+#### Startup lines
+
+| Zsh | Den |
+|-----|-----|
+| `autoload -Uz name` | Works; defines from `$fpath` on first use |
+| `compinit`, `bashcompinit` | Accepted; nothing to set up |
+| `compdef _git g` | Accepted; completion is context-aware already |
+| `zmodload zsh/complist` | Accepted; no loadable modules |
+| `emulate -L zsh` | Accepted (`csh` is refused) |
+| `is-at-least 5.1` | Works with two operands; false with one |
+| `add-zsh-hook precmd fn` | Works; `chpwd`, `precmd`, `preexec`, `zshexit` |
+
+Note that array assignment does not expand its elements yet, so a `fpath` array
+written with `~` stores the tilde literally. Use a literal path, or `FPATH`,
+which is a scalar and does expand. See
+[Extended Features](./EXTENDED_FEATURES.md#startup-autoload-compinit-and-hooks).
 
 #### `zstyle`
 
