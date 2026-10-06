@@ -2334,88 +2334,52 @@ pub const Shell = struct {
                         }
                     }
                 }
-                // Shell-level builtin with redirections: apply redirections manually
-                // Skip on Windows (fd-level redirections not supported)
+                // Shell-level builtins go through the same redirection code
+                // as every other command.
+                //
+                // This used to be a second, hand-rolled implementation, and it
+                // was wrong in the way a parallel implementation usually is: it
+                // ignored `redir.fd` and always dup2'd onto stdout, so
+                // `setopt bad 2>/dev/null` sent *stdout* to the file and left
+                // the diagnostic on the terminal. It also knew only four of the
+                // eight redirection kinds -- no `2>&1`, no heredoc, no fd close
+                // -- and its stderr save slot was never used, so stderr could
+                // not have been restored even if it had been redirected.
+                //
+                // Windows is still skipped here, as it was: fd-level
+                // redirection is not available there.
                 if (comptime builtin.os.tag != .windows) {
-                    var saved_fds: [3]c_int = .{ -1, -1, -1 };
-                    var applied = false;
-                    for (cmd.redirections) |redir| {
-                        switch (redir.kind) {
-                            .input => {
-                                const path_z = self.allocator.dupeSentinel(u8, redir.target, 0) catch continue;
-                                defer self.allocator.free(path_z);
-                                const fd = std.c.open(path_z, .{}, @as(c_uint, 0));
-                                if (fd >= 0) {
-                                    saved_fds[0] = std.c.dup(std.posix.STDIN_FILENO);
-                                    _ = std.c.dup2(fd, std.posix.STDIN_FILENO);
-                                    _ = std.c.close(fd);
-                                    applied = true;
-                                }
-                            },
-                            .output_truncate, .output_append, .output_clobber => {
-                                const path_z = self.allocator.dupeSentinel(u8, redir.target, 0) catch continue;
-                                defer self.allocator.free(path_z);
-                                const flags: std.c.O = if (redir.kind == .output_append)
-                                    .{ .ACCMODE = .WRONLY, .CREAT = true, .APPEND = true }
-                                else
-                                    .{ .ACCMODE = .WRONLY, .CREAT = true, .TRUNC = true };
-                                const fd = std.c.open(path_z, flags, @as(c_uint, 0o644));
-                                if (fd >= 0) {
-                                    saved_fds[1] = std.c.dup(std.posix.STDOUT_FILENO);
-                                    _ = std.c.dup2(fd, std.posix.STDOUT_FILENO);
-                                    _ = std.c.close(fd);
-                                    applied = true;
-                                }
-                            },
-                            .herestring => {
-                                // Create pipe, write herestring content + newline to it, redirect stdin
-                                var pipe_fds: [2]std.posix.fd_t = undefined;
-                                if (std.c.pipe(&pipe_fds) == 0) {
-                                    const read_fd = pipe_fds[0];
-                                    const write_fd = pipe_fds[1];
-                                    // Strip surrounding quotes if present
-                                    const target = redir.target;
-                                    const unquoted = if (target.len >= 2 and
-                                        ((target[0] == '"' and target[target.len - 1] == '"') or
-                                            (target[0] == '\'' and target[target.len - 1] == '\'')))
-                                        target[1 .. target.len - 1]
-                                    else
-                                        target;
-                                    // Write content + newline
-                                    const hs_file = std.Io.File{ .handle = write_fd, .flags = .{ .nonblocking = false } };
-                                    hs_file.writeStreamingAll(std.Options.debug_io, unquoted) catch {};
-                                    hs_file.writeStreamingAll(std.Options.debug_io, "\n") catch {};
-                                    _ = std.c.close(write_fd);
-                                    // Redirect stdin
-                                    saved_fds[0] = std.c.dup(std.posix.STDIN_FILENO);
-                                    _ = std.c.dup2(read_fd, std.posix.STDIN_FILENO);
-                                    _ = std.c.close(read_fd);
-                                    applied = true;
-                                }
-                            },
-                            else => {},
+                    const expansion_context: redirection.ExpansionContext = .{
+                        .option_nounset = self.option_nounset,
+                        .option_noclobber = self.option_noclobber,
+                        .var_attributes = &self.var_attributes,
+                        .arrays = &self.arrays,
+                        .assoc_arrays = &self.assoc_arrays,
+                    };
+
+                    var saved = redirection.SavedFds.save();
+                    redirection.applyRedirections(
+                        self.allocator,
+                        cmd.redirections,
+                        &self.environment,
+                        expansion_context,
+                    ) catch {
+                        saved.restore();
+                        self.last_exit_code = 1;
+                        return;
+                    };
+
+                    const result = shell_mod.dispatchBuiltin(self, cmd) catch .not_builtin;
+                    saved.restore();
+
+                    if (result == .handled) {
+                        // A simple builtin refreshes PIPESTATUS to a one-element array == $?.
+                        const ps = [_]i32{self.last_exit_code};
+                        self.setPipeStatus(&ps);
+                        if (self.last_exit_code != 0) {
+                            shell_mod.executeErrTrap(self);
                         }
-                    }
-                    if (applied) {
-                        const result = shell_mod.dispatchBuiltin(self, cmd) catch .not_builtin;
-                        // Restore saved fds — saved_fds is [3]c_int, so no @intCast needed
-                        if (saved_fds[0] >= 0) {
-                            _ = std.c.dup2(saved_fds[0], std.posix.STDIN_FILENO);
-                            _ = std.c.close(saved_fds[0]);
-                        }
-                        if (saved_fds[1] >= 0) {
-                            _ = std.c.dup2(saved_fds[1], std.posix.STDOUT_FILENO);
-                            _ = std.c.close(saved_fds[1]);
-                        }
-                        if (result == .handled) {
-                            // A simple builtin refreshes PIPESTATUS to a one-element array == $?.
-                            const ps = [_]i32{self.last_exit_code};
-                            self.setPipeStatus(&ps);
-                            if (self.last_exit_code != 0) {
-                                shell_mod.executeErrTrap(self);
-                            }
-                            return;
-                        }
+                        return;
                     }
                 } // end !windows
             }
