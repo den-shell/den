@@ -98,7 +98,7 @@ pub fn builtinEnable(self: *Shell, cmd: *types.ParsedCommand) !void {
             "trap",     "times",  "umask",   "getopts",   "clear",    "time",
             "hash",     "return", "local",   "declare",   "readonly", "typeset",
             "let",      "shopt",  "mapfile", "readarray", "caller",   "compgen",
-            "complete", "enable",  "bindkey", "zle",
+            "complete", "enable",  "bindkey", "zle",       "zstyle",
         };
         try IO.print("Built-in commands:\n", .{});
         for (builtin_names) |name| {

@@ -357,7 +357,7 @@ pub fn builtinCompgen(shell: *Shell, cmd: *types.ParsedCommand) !void {
                 "return", "break",   "continue", "local",     "declare", "typeset", "readonly",
                 "let",    "shopt",   "mapfile",  "readarray", "caller",  "compgen", "complete",
                 "exec",   "wait",    "kill",     "disown",    "getopts", "times",   "builtin",
-                "jobs",   "fg",      "bg",       "bindkey",   "zle",
+                "jobs",   "fg",      "bg",       "bindkey",   "zle",     "zstyle",
             };
             for (builtins_list) |b| {
                 if (prefix.len == 0 or std.mem.startsWith(u8, b, prefix)) {

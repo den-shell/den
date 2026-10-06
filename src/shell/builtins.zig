@@ -418,9 +418,11 @@ pub fn builtinHelp(shell: *Shell, cmd: *types.ParsedCommand) !void {
     try IO.print("\nLine Editing:\n", .{});
     try IO.print("  bindkey [seq wid] Bind keys to editing widgets\n", .{});
     try IO.print("  zle -N wid [fn]   Make a shell function a widget\n", .{});
+    try IO.print("\nZsh Compatibility:\n", .{});
+    try IO.print("  zstyle ctx style  Set or query pattern-keyed styles\n", .{});
     // Counts the entries actually listed above. It read 54 while 56 were
     // enumerated; the docs' separate figure of 58 is unverified and left alone.
-    try IO.print("\nTotal: 58 builtin commands available\n", .{});
+    try IO.print("\nTotal: 59 builtin commands available\n", .{});
     try IO.print("For more help, use 'man bash' or visit docs.den.sh\n", .{});
 }
 
