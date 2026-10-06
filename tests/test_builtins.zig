@@ -1859,3 +1859,115 @@ test "builtin add-zsh-hook: -d does not treat its operand as a pattern" {
 
     try test_utils.TestAssert.expectContains(r.stdout, "precmd_functions=( f1 )");
 }
+
+test "zsh preamble: the setup lines of a real zshrc are accepted" {
+    const allocator = std.testing.allocator;
+    var fixture = try test_utils.DenShellFixture.init(allocator);
+    defer fixture.deinit();
+    // The top of nearly every .zshrc. None of it needs to do anything; it needs
+    // to stop being a wall of `command not found` above the lines that matter.
+    const r = try fixture.execDirect(
+        "compinit; bashcompinit; compinit -d /tmp/zcompdump-den-test; " ++
+            "zmodload zsh/complist; zmodload -i zsh/parameter; " ++
+            "emulate -L zsh; compdef _git g; echo ok",
+    );
+    defer allocator.free(r.stdout);
+    defer allocator.free(r.stderr);
+
+    try test_utils.TestAssert.expectEqual(@as(u8, 0), r.exit_code);
+    try test_utils.TestAssert.expectContains(r.stdout, "ok");
+    // Silence matters as much as success: these run while an rc file is being
+    // sourced, so a note per line would print on every shell start.
+    try test_utils.TestAssert.expectEqual(@as(usize, 0), r.stderr.len);
+}
+
+test "zsh preamble: zmodload -e reports no module is loaded" {
+    const allocator = std.testing.allocator;
+    var fixture = try test_utils.DenShellFixture.init(allocator);
+    defer fixture.deinit();
+    // A config that tests before using a module should take its fallback path,
+    // since den has no loadable modules.
+    const r = try fixture.execDirect("zmodload -e zsh/complist; echo \"e=$?\"");
+    defer allocator.free(r.stdout);
+    defer allocator.free(r.stderr);
+
+    try test_utils.TestAssert.expectContains(r.stdout, "e=1");
+}
+
+test "zsh preamble: emulate refuses csh but accepts sh and ksh" {
+    const allocator = std.testing.allocator;
+    var fixture = try test_utils.DenShellFixture.init(allocator);
+    defer fixture.deinit();
+    // csh's word splitting and history are nothing like den's, so a function
+    // that asked for them and carried on would quietly do the wrong thing.
+    const r = try fixture.execDirect(
+        "emulate -L sh; echo \"sh=$?\"; emulate -L ksh; echo \"ksh=$?\"; " ++
+            "emulate csh; echo \"csh=$?\"",
+    );
+    defer allocator.free(r.stdout);
+    defer allocator.free(r.stderr);
+
+    try test_utils.TestAssert.expectContains(r.stdout, "sh=0");
+    try test_utils.TestAssert.expectContains(r.stdout, "ksh=0");
+    try test_utils.TestAssert.expectContains(r.stdout, "csh=1");
+    try test_utils.TestAssert.expectContains(r.stderr, "csh semantics are not available");
+}
+
+test "builtin is-at-least: two operands compare as zsh does" {
+    const allocator = std.testing.allocator;
+    var fixture = try test_utils.DenShellFixture.init(allocator);
+    defer fixture.deinit();
+    const r = try fixture.execDirect(
+        "is-at-least 4.3 5.9; echo \"a=$?\"; is-at-least 6.0 5.9; echo \"b=$?\"; " ++
+            // Numeric per component: 5.10 is above 5.9.
+            "is-at-least 5.9 5.10; echo \"c=$?\"; is-at-least 5.9.1 5.9; echo \"d=$?\"",
+    );
+    defer allocator.free(r.stdout);
+    defer allocator.free(r.stderr);
+
+    try test_utils.TestAssert.expectContains(r.stdout, "a=0");
+    try test_utils.TestAssert.expectContains(r.stdout, "b=1");
+    try test_utils.TestAssert.expectContains(r.stdout, "c=0");
+    try test_utils.TestAssert.expectContains(r.stdout, "d=1");
+}
+
+test "builtin is-at-least: one operand is false without a ZSH_VERSION" {
+    const allocator = std.testing.allocator;
+    var fixture = try test_utils.DenShellFixture.init(allocator);
+    defer fixture.deinit();
+    // Den reports itself as den rather than claiming to be zsh, so there is no
+    // zsh version to be at least. False sends a config down its older-zsh
+    // branch, which is the conservative direction.
+    const r = try fixture.execDirect("is-at-least 5.0; echo \"rc=$?\"");
+    defer allocator.free(r.stdout);
+    defer allocator.free(r.stderr);
+
+    try test_utils.TestAssert.expectContains(r.stdout, "rc=1");
+}
+
+test "builtin is-at-least: honours ZSH_VERSION when something sets it" {
+    const allocator = std.testing.allocator;
+    var fixture = try test_utils.DenShellFixture.init(allocator);
+    defer fixture.deinit();
+    const r = try fixture.execDirect(
+        "export ZSH_VERSION=5.9; is-at-least 5.0; echo \"old=$?\"; " ++
+            "is-at-least 9.9; echo \"new=$?\"",
+    );
+    defer allocator.free(r.stdout);
+    defer allocator.free(r.stderr);
+
+    try test_utils.TestAssert.expectContains(r.stdout, "old=0");
+    try test_utils.TestAssert.expectContains(r.stdout, "new=1");
+}
+
+test "builtin is-at-least: no operand is a usage error" {
+    const allocator = std.testing.allocator;
+    var fixture = try test_utils.DenShellFixture.init(allocator);
+    defer fixture.deinit();
+    const r = try fixture.execDirect("is-at-least");
+    defer allocator.free(r.stdout);
+    defer allocator.free(r.stderr);
+
+    try test_utils.TestAssert.expectEqual(@as(u8, 2), r.exit_code);
+    try test_utils.TestAssert.expectContains(r.stderr, "usage:");
+}

@@ -107,6 +107,15 @@ pub const builtinZstyle = zstyle_builtin.builtinZstyle;
 pub const zsh_hooks_builtin = @import("zsh_hooks_builtin.zig");
 pub const builtinAddZshHook = zsh_hooks_builtin.builtinAddZshHook;
 
+// Re-export the zsh startup-preamble builtins
+pub const zsh_setup_builtins = @import("zsh_setup_builtins.zig");
+pub const builtinCompinit = zsh_setup_builtins.builtinCompinit;
+pub const builtinBashcompinit = zsh_setup_builtins.builtinBashcompinit;
+pub const builtinCompdef = zsh_setup_builtins.builtinCompdef;
+pub const builtinZmodload = zsh_setup_builtins.builtinZmodload;
+pub const builtinEmulate = zsh_setup_builtins.builtinEmulate;
+pub const builtinIsAtLeast = zsh_setup_builtins.builtinIsAtLeast;
+
 // Re-export AI completion builtin
 pub const ai_builtin = @import("ai_builtin.zig");
 pub const builtinAi = ai_builtin.builtinAi;

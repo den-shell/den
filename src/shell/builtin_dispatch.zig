@@ -62,6 +62,9 @@ pub fn isShellBuiltin(name: []const u8) bool {
         "bindkey",   "zle",      "zstyle",
         // Hooks
         "add-zsh-hook",
+        // zsh startup preamble
+        "compinit",   "bashcompinit", "compdef",
+        "zmodload",   "emulate",      "is-at-least",
     };
     for (shell_builtins) |b| {
         if (std.mem.eql(u8, name, b)) return true;
@@ -347,6 +350,30 @@ pub fn dispatchBuiltin(self: *Shell, cmd: *types.ParsedCommand) !DispatchResult 
     }
     if (std.mem.eql(u8, name, "add-zsh-hook")) {
         try shell_mod.builtinAddZshHook(self, cmd);
+        return .handled;
+    }
+    if (std.mem.eql(u8, name, "compinit")) {
+        try shell_mod.builtinCompinit(self, cmd);
+        return .handled;
+    }
+    if (std.mem.eql(u8, name, "bashcompinit")) {
+        try shell_mod.builtinBashcompinit(self, cmd);
+        return .handled;
+    }
+    if (std.mem.eql(u8, name, "compdef")) {
+        try shell_mod.builtinCompdef(self, cmd);
+        return .handled;
+    }
+    if (std.mem.eql(u8, name, "zmodload")) {
+        try shell_mod.builtinZmodload(self, cmd);
+        return .handled;
+    }
+    if (std.mem.eql(u8, name, "emulate")) {
+        try shell_mod.builtinEmulate(self, cmd);
+        return .handled;
+    }
+    if (std.mem.eql(u8, name, "is-at-least")) {
+        try shell_mod.builtinIsAtLeast(self, cmd);
         return .handled;
     }
     if (std.mem.eql(u8, name, "setopt")) {
