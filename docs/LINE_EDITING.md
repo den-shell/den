@@ -945,16 +945,47 @@ as unknown rather than bound to something that quietly does nothing.
 
 ### User-defined widgets
 
-`zle -N my-widget my-function` is not implemented, so a widget cannot yet be a
-shell function. `zle` is a recognised command that says so, and binding a name
-that happens to be a shell function points this out rather than just reporting an
-unknown widget.
+A shell function can be a widget:
+
+```sh
+insert-date() { LBUFFER="$LBUFFER$(date +%F)" }
+zle -N insert-date
+bindkey '^X^D' insert-date
+```
+
+| Form | Does |
+|------|------|
+| `zle -N <widget> [function]` | Define a widget; the function defaults to the widget's name |
+| `zle -D <widget>...` | Undefine. A key still bound to it then does nothing |
+| `zle -l` | List the widgets defined this way |
+| `zle <widget>` | Run a built-in widget — only from inside a widget |
+| `zle -R` | Redisplay — only from inside a widget |
+
+The function sees the line in four variables, and whatever it changes is what
+comes back:
+
+| Variable | Is |
+|----------|-----|
+| `BUFFER` | The whole line |
+| `CURSOR` | The cursor's offset into it |
+| `LBUFFER` | The part before the cursor |
+| `RBUFFER` | The part after it |
+
+If `LBUFFER` moved, it and `RBUFFER` define both the line and the cursor — which
+is what lets a widget append text and leave the cursor after it. Otherwise
+`BUFFER` and `CURSOR` are used. Setting only `CURSOR` moves the cursor without
+touching the line.
+
+Raw mode is dropped while the function runs, so it can print, read, or start a
+full-screen program, and the line is repainted afterwards. A widget cannot run
+inside another: `zle <widget>` from a function that is itself a widget does
+nothing rather than starting a second editor. Binding a name that is a shell
+function but not yet a widget says so and names the `zle -N` to run.
 
 ## What's Next
 
 Future line editing features planned:
 
 - Multiple cursors
-- `zle -N` user-defined widgets backed by shell functions
 
 Stay tuned!

@@ -414,7 +414,7 @@ Features not available in Den:
 | Glob qualifiers `*(.)` | Not planned | Use `find` |
 | Zsh modules (zmodload) | Not planned | Use builtins |
 | `bindkey` | Supported | zsh notation, widget names and keymaps |
-| `zle -N` user widgets | Not yet | `bindkey` binds the built-in widgets |
+| `zle -N` user widgets | Supported | Shell functions as widgets, with `$BUFFER`/`$CURSOR` |
 | `vared` | Not planned | Use `read` |
 | Floating point arithmetic | Not planned | Use `bc` or `awk` |
 | `zparseopts` | Not planned | Use `getopts` |

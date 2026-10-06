@@ -623,7 +623,7 @@ See [Line Editing](./LINE_EDITING.md#customizing-keybindings-with-bindkey).
 | `bindkey -A` / `-N` / `-D` | Rejected: den has a fixed set of keymaps |
 | `bindkey -m` | Rejected: den decodes Meta as an ESC prefix, so bind `\e<key>` |
 | `bindkey -p` / `-R` | Rejected: use `bindkey -L` and filter, or bind keys individually |
-| `zle -N my-widget my-func` | Not implemented; `zle` reports this |
+| `zle -N my-widget my-func` | Works as written; `$BUFFER`, `$CURSOR`, `$LBUFFER`, `$RBUFFER` |
 
 Two deliberate differences. `\M-x` binds the ESC prefix (`ESC x`) rather than
 setting the high bit, which is what a terminal actually sends for Option/Alt;

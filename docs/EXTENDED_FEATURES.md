@@ -92,8 +92,16 @@ Two deliberate divergences: `\M-x` binds the ESC prefix rather than setting the
 high bit, matching what terminals actually send for Option; and key sequences are
 capped at 8 bytes, with longer specs rejected rather than truncated.
 
-`zle -N` user-defined widgets are not implemented; `zle` is registered and
-reports that. See [Line Editing](./LINE_EDITING.md#customizing-keybindings-with-bindkey)
+A shell function can be a widget, as in zsh:
+
+```sh
+insert-date() { LBUFFER="$LBUFFER$(date +%F)" }
+zle -N insert-date
+bindkey '^X^D' insert-date
+```
+
+The function reads and writes the line through `$BUFFER`, `$CURSOR`, `$LBUFFER`
+and `$RBUFFER`. See [Line Editing](./LINE_EDITING.md#customizing-keybindings-with-bindkey)
 for the full option and widget reference.
 
 ## AI-assisted completions
