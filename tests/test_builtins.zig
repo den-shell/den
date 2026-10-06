@@ -1971,3 +1971,236 @@ test "builtin is-at-least: no operand is a usage error" {
     try test_utils.TestAssert.expectEqual(@as(u8, 2), r.exit_code);
     try test_utils.TestAssert.expectContains(r.stderr, "usage:");
 }
+
+test "builtin autoload: defines a function from fpath on first call" {
+    const allocator = std.testing.allocator;
+    var fixture = try test_utils.DenShellFixture.init(allocator);
+    defer fixture.deinit();
+    // The file holds a body, not a `name() { ... }` wrapper. That is zsh's
+    // convention and what a real fpath directory contains.
+    const path = try fixture.createFile("greet", "echo \"greeted $1\"\n");
+    allocator.free(path);
+
+    const script = try std.fmt.allocPrint(
+        allocator,
+        "fpath=({s}); autoload -Uz greet; echo \"mark=$?\"; greet world",
+        .{fixture.temp_dir.path},
+    );
+    defer allocator.free(script);
+
+    const r = try fixture.execDirect(script);
+    defer allocator.free(r.stdout);
+    defer allocator.free(r.stderr);
+
+    try test_utils.TestAssert.expectContains(r.stdout, "mark=0");
+    try test_utils.TestAssert.expectContains(r.stdout, "greeted world");
+}
+
+test "builtin autoload: the file is read on the call, not on the mark" {
+    const allocator = std.testing.allocator;
+    var fixture = try test_utils.DenShellFixture.init(allocator);
+    defer fixture.deinit();
+    // Laziness is the whole point: a config autoloads many names and pays for
+    // none of them at startup. Writing the file after the autoload line proves
+    // nothing was read early.
+    const script = try std.fmt.allocPrint(
+        allocator,
+        "fpath=({s}); autoload -Uz later; printf 'echo LATE\\n' > {s}/later; later",
+        .{ fixture.temp_dir.path, fixture.temp_dir.path },
+    );
+    defer allocator.free(script);
+
+    const r = try fixture.execDirect(script);
+    defer allocator.free(r.stdout);
+    defer allocator.free(r.stderr);
+
+    try test_utils.TestAssert.expectContains(r.stdout, "LATE");
+}
+
+test "builtin autoload: marking a missing name succeeds, calling it does not" {
+    const allocator = std.testing.allocator;
+    var fixture = try test_utils.DenShellFixture.init(allocator);
+    defer fixture.deinit();
+    // zsh's timing: the mark cannot fail because fpath may still change.
+    const script = try std.fmt.allocPrint(
+        allocator,
+        "fpath=({s}); autoload -Uz nosuch; echo \"mark=$?\"; nosuch; echo \"call=$?\"",
+        .{fixture.temp_dir.path},
+    );
+    defer allocator.free(script);
+
+    const r = try fixture.execDirect(script);
+    defer allocator.free(r.stdout);
+    defer allocator.free(r.stderr);
+
+    try test_utils.TestAssert.expectContains(r.stdout, "mark=0");
+    // 1, not 127: the name was known and the search path is what is wrong, so
+    // this is not `command not found`.
+    try test_utils.TestAssert.expectContains(r.stdout, "call=1");
+    try test_utils.TestAssert.expectContains(r.stderr, "function definition file not found");
+}
+
+test "builtin autoload: +X loads immediately and reports a missing file" {
+    const allocator = std.testing.allocator;
+    var fixture = try test_utils.DenShellFixture.init(allocator);
+    defer fixture.deinit();
+    const script = try std.fmt.allocPrint(
+        allocator,
+        "fpath=({s}); autoload +X nosuch; echo \"rc=$?\"",
+        .{fixture.temp_dir.path},
+    );
+    defer allocator.free(script);
+
+    const r = try fixture.execDirect(script);
+    defer allocator.free(r.stdout);
+    defer allocator.free(r.stderr);
+
+    try test_utils.TestAssert.expectContains(r.stdout, "rc=1");
+    try test_utils.TestAssert.expectContains(r.stderr, "function definition file not found");
+}
+
+test "builtin autoload: FPATH is searched as well as the fpath array" {
+    const allocator = std.testing.allocator;
+    var fixture = try test_utils.DenShellFixture.init(allocator);
+    defer fixture.deinit();
+    const path = try fixture.createFile("fromenv", "echo ENVHIT\n");
+    allocator.free(path);
+
+    // zsh keeps fpath and FPATH tied; den reads both, so either works.
+    const script = try std.fmt.allocPrint(
+        allocator,
+        "export FPATH={s}; autoload -Uz fromenv; fromenv",
+        .{fixture.temp_dir.path},
+    );
+    defer allocator.free(script);
+
+    const r = try fixture.execDirect(script);
+    defer allocator.free(r.stdout);
+    defer allocator.free(r.stderr);
+
+    try test_utils.TestAssert.expectContains(r.stdout, "ENVHIT");
+}
+
+test "builtin autoload: an existing function is not replaced" {
+    const allocator = std.testing.allocator;
+    var fixture = try test_utils.DenShellFixture.init(allocator);
+    defer fixture.deinit();
+    const path = try fixture.createFile("greet", "echo FROMFILE\n");
+    allocator.free(path);
+
+    // A config that defines a function and then autoloads the name keeps the
+    // definition it just made.
+    const script = try std.fmt.allocPrint(
+        allocator,
+        "fpath=({s}); greet() {{ echo MINE; }}; autoload -Uz greet; greet",
+        .{fixture.temp_dir.path},
+    );
+    defer allocator.free(script);
+
+    const r = try fixture.execDirect(script);
+    defer allocator.free(r.stdout);
+    defer allocator.free(r.stderr);
+
+    try test_utils.TestAssert.expectContains(r.stdout, "MINE");
+    try std.testing.expect(std.mem.indexOf(u8, r.stdout, "FROMFILE") == null);
+}
+
+test "builtin autoload: an autoloaded function works in a pipeline" {
+    const allocator = std.testing.allocator;
+    var fixture = try test_utils.DenShellFixture.init(allocator);
+    defer fixture.deinit();
+    const path = try fixture.createFile("shout", "echo hello\n");
+    allocator.free(path);
+
+    // The pipeline path resolves commands separately, so it needs its own hook.
+    const script = try std.fmt.allocPrint(
+        allocator,
+        "fpath=({s}); autoload -Uz shout; shout | tr a-z A-Z",
+        .{fixture.temp_dir.path},
+    );
+    defer allocator.free(script);
+
+    const r = try fixture.execDirect(script);
+    defer allocator.free(r.stdout);
+    defer allocator.free(r.stderr);
+
+    try test_utils.TestAssert.expectContains(r.stdout, "HELLO");
+}
+
+test "builtin autoload: with no names, lists what is marked" {
+    const allocator = std.testing.allocator;
+    var fixture = try test_utils.DenShellFixture.init(allocator);
+    defer fixture.deinit();
+    const r = try fixture.execDirect("autoload -Uz alpha beta; autoload");
+    defer allocator.free(r.stdout);
+    defer allocator.free(r.stderr);
+
+    try test_utils.TestAssert.expectContains(r.stdout, "alpha");
+    try test_utils.TestAssert.expectContains(r.stdout, "beta");
+}
+
+test "builtin autoload: a bad option is a usage error" {
+    const allocator = std.testing.allocator;
+    var fixture = try test_utils.DenShellFixture.init(allocator);
+    defer fixture.deinit();
+    const r = try fixture.execDirect("autoload -Q foo");
+    defer allocator.free(r.stdout);
+    defer allocator.free(r.stderr);
+
+    try test_utils.TestAssert.expectEqual(@as(u8, 2), r.exit_code);
+    try test_utils.TestAssert.expectContains(r.stderr, "bad option: -Q");
+}
+
+test "builtin autoload: the line every zshrc opens with works" {
+    const allocator = std.testing.allocator;
+    var fixture = try test_utils.DenShellFixture.init(allocator);
+    defer fixture.deinit();
+    // add-zsh-hook is a builtin here rather than an fpath function, so the
+    // autoload is a no-op and the call still has to work.
+    const r = try fixture.execDirect(
+        "autoload -Uz add-zsh-hook && compinit; f() { :; }; add-zsh-hook precmd f; " ++
+            "add-zsh-hook -L precmd",
+    );
+    defer allocator.free(r.stdout);
+    defer allocator.free(r.stderr);
+
+    try test_utils.TestAssert.expectEqual(@as(u8, 0), r.exit_code);
+    try test_utils.TestAssert.expectContains(r.stdout, "precmd_functions=( f )");
+}
+
+test "builtin autoload: a name den already provides is never shadowed" {
+    const allocator = std.testing.allocator;
+    var fixture = try test_utils.DenShellFixture.init(allocator);
+    defer fixture.deinit();
+    // A deliberate divergence. In zsh the placeholder shadows even a builtin,
+    // so `autoload -Uz echo; echo hi` is an error there. But the names a zsh
+    // config autoloads -- compinit, add-zsh-hook, bashcompinit, is-at-least --
+    // are builtins in den, and `autoload -Uz compinit; compinit` is the single
+    // most common pair of lines in a .zshrc. A name den implements needs no
+    // definition file, so it is not marked at all.
+    const r = try fixture.execDirect(
+        "autoload -Uz compinit; compinit; echo \"compinit=$?\"; " ++
+            "autoload -Uz echo; echo hi",
+    );
+    defer allocator.free(r.stdout);
+    defer allocator.free(r.stderr);
+
+    try test_utils.TestAssert.expectContains(r.stdout, "compinit=0");
+    try test_utils.TestAssert.expectContains(r.stdout, "hi");
+    try test_utils.TestAssert.expectEqual(@as(usize, 0), r.stderr.len);
+}
+
+test "builtin autoload: a zsh function den lacks fails informatively" {
+    const allocator = std.testing.allocator;
+    var fixture = try test_utils.DenShellFixture.init(allocator);
+    defer fixture.deinit();
+    // vcs_info is a real zsh function with no den equivalent and no file in
+    // fpath. Here den matches zsh: the name resolves as a function or fails,
+    // and does not fall back to $PATH.
+    const r = try fixture.execDirect("autoload -Uz vcs_info; vcs_info; echo \"rc=$?\"");
+    defer allocator.free(r.stdout);
+    defer allocator.free(r.stderr);
+
+    try test_utils.TestAssert.expectContains(r.stdout, "rc=1");
+    try test_utils.TestAssert.expectContains(r.stderr, "function definition file not found");
+}
