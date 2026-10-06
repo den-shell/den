@@ -119,9 +119,11 @@ pub const Widget = enum(u8) {
     clear_screen,
     redisplay,
 
-    /// Accumulate a numeric prefix, as vi's 1-9 do. Honoured by the movement
-    /// and single-character delete widgets; other widgets ignore it.
+    /// Accumulate a numeric prefix, as vi's 1-9 and emacs's M-1..M-9 do.
     digit_argument,
+    /// Multiply the pending argument by four, or start it at four. Digits typed
+    /// after it set it outright instead.
+    universal_argument,
     /// Vi's `0`: start of line, unless a count is already being typed, in which
     /// case it is another digit of it.
     vi_digit_or_beginning_of_line,
@@ -290,6 +292,7 @@ pub fn resolveWidget(name: []const u8) Widget {
 
         .{ "digit-argument", .digit_argument },
         .{ "vi-digit-argument", .digit_argument },
+        .{ "universal-argument", .universal_argument },
         .{ "vi-digit-or-beginning-of-line", .vi_digit_or_beginning_of_line },
 
         .{ "vi-cmd-mode", .vi_cmd_mode },
@@ -399,6 +402,7 @@ pub fn widgetName(w: Widget) []const u8 {
         .vi_repeat_find => "vi-repeat-find",
         .vi_repeat_find_reverse => "vi-rev-repeat-find",
         .digit_argument => "digit-argument",
+        .universal_argument => "universal-argument",
         .vi_digit_or_beginning_of_line => "vi-digit-or-beginning-of-line",
         .vi_cmd_mode => "vi-cmd-mode",
         .vi_insert => "vi-insert",
@@ -610,6 +614,17 @@ const shared_rows = [_]DefaultRow{
     .{ "^[f", .forward_word },
     .{ "^[d", .kill_word },
     .{ "^[y", .yank_pop },
+    // A numeric argument, as zsh binds it: M-0 .. M-9.
+    .{ "^[0", .digit_argument },
+    .{ "^[1", .digit_argument },
+    .{ "^[2", .digit_argument },
+    .{ "^[3", .digit_argument },
+    .{ "^[4", .digit_argument },
+    .{ "^[5", .digit_argument },
+    .{ "^[6", .digit_argument },
+    .{ "^[7", .digit_argument },
+    .{ "^[8", .digit_argument },
+    .{ "^[9", .digit_argument },
     .{ "^[^?", .backward_kill_word },
     .{ "^[^H", .backward_kill_word },
 };

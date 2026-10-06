@@ -845,7 +845,8 @@ beeps.
 **Ctrl+R** redoes in vi normal mode, as in vim. In emacs mode `redo` has no key of
 its own — bind one if you want it, e.g. `bindkey '^X^R' redo`. Editing after an
 undo replaces what redo would have replayed, as in any editor.
-| `digit-argument` | Accumulate a numeric prefix (vi `1`-`9`) |
+| `digit-argument` | Accumulate a numeric prefix (**M-0**..**M-9**, vi `1`-`9`) |
+| `universal-argument` | Four, or four times the argument so far |
 | `vi-digit-or-beginning-of-line` | vi `0`: a count digit, or the start of the line |
 | `undefined-key` | Beep |
 | `ignore` | Do nothing |
@@ -856,10 +857,24 @@ whose behaviour depends on context carry a `den-` prefix, such as
 `den-forward-char-or-autosuggest`, which accepts an inline suggestion at the end
 of the line and otherwise moves right.
 
-Counts work in vi normal mode: `digit-argument` is bound to `1`-`9` and
-`vi-digit-or-beginning-of-line` to `0`, and the movement and
-single-character delete widgets consume the count, so `3h` and `2x` behave. Only
-those widgets honour it; others ignore a pending count.
+### Numeric arguments
+
+A command can be given a count. In emacs mode **M-0** to **M-9** build it, so
+**M-5** then `x` types five `x`s and **M-2** then **Ctrl+W** kills two words. In
+vi normal mode the digits `1`-`9` do the same, with `0` acting as a digit once one
+is being typed and the start of the line otherwise, so `3h` and `2x` behave.
+
+`universal-argument` sets the argument to four, and four times again each time it
+is repeated; digits typed after it give the argument outright rather than
+extending the four. It has no key of its own, as in zsh — bind one if you want it,
+e.g. `bindkey '^X^U' universal-argument`.
+
+These honour the argument: character and word movement, history recall, the
+character and word deletions, transpose, and `self-insert`, which repeats the
+character. Anything else ignores it. Either way the argument belongs to one
+command and is cleared afterwards, so it cannot leak into whatever is typed next.
+
+Negative arguments (zsh's `neg-argument`) are not implemented.
 
 ### Vi operators
 
@@ -941,6 +956,5 @@ Future line editing features planned:
 
 - Multiple cursors
 - `zle -N` user-defined widgets backed by shell functions
-- `universal-argument`, and counts honoured by more widgets
 
 Stay tuned!

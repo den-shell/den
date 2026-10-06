@@ -294,8 +294,13 @@ pub const LineEditor = struct {
     vi_mode: ViMode = .insert,
     // Vi pending operator (for d, c, y commands)
     vi_pending_op: ?u8 = null,
-    // Vi repeat count
-    vi_count: usize = 0,
+    /// Set by universal-argument, so digits typed next replace its value instead
+    /// of extending it.
+    universal_pending: bool = false,
+    /// The numeric argument a command will act on, built up by digit-argument
+    /// and universal-argument. Vi's counts are the same mechanism, which is why
+    /// this is not named after either mode.
+    numeric_arg: usize = 0,
     // Vi last command for repeat with '.'
     vi_last_cmd: ?u8 = null,
     vi_last_count: usize = 1,
@@ -484,14 +489,14 @@ pub const LineEditor = struct {
     fn viEnterInsertMode(self: *LineEditor) void {
         self.vi_mode = .insert;
         self.vi_pending_op = null;
-        self.vi_count = 0;
+        self.numeric_arg = 0;
     }
 
     /// Switch to Vi normal mode
     fn viEnterNormalMode(self: *LineEditor) void {
         self.vi_mode = .normal;
         self.vi_pending_op = null;
-        self.vi_count = 0;
+        self.numeric_arg = 0;
         // Move cursor back one if not at start (vi convention)
         if (self.cursor > 0 and self.cursor == self.length) {
             self.cursor -= 1;
@@ -741,13 +746,23 @@ pub const LineEditor = struct {
 
     // Vi mode transitions.
 
+    /// Whether this widget's job is to build the numeric argument, in which case
+    /// running it must not clear what it has built so far.
+    fn isArgumentWidget(widget: Widget) bool {
+        return switch (widget) {
+            .digit_argument, .universal_argument, .vi_digit_or_beginning_of_line => true,
+            else => false,
+        };
+    }
+
     /// Consume a pending numeric prefix, defaulting to 1.
     ///
     /// Only vi normal mode ever sets one, so the repeatable widgets can call
     /// this unconditionally: in emacs the count is always 0 and this is 1.
     fn takeCount(self: *LineEditor) usize {
-        const n = if (self.vi_count == 0) 1 else self.vi_count;
-        self.vi_count = 0;
+        const n = if (self.numeric_arg == 0) 1 else self.numeric_arg;
+        self.numeric_arg = 0;
+        self.universal_pending = false;
         return n;
     }
 
@@ -916,7 +931,7 @@ pub const LineEditor = struct {
             // Mirrors vi normal mode discarding a pending operator and count on
             // any key it does not understand.
             self.vi_pending_op = null;
-            self.vi_count = 0;
+            self.numeric_arg = 0;
         }
         return .cont;
     }
@@ -989,7 +1004,7 @@ pub const LineEditor = struct {
                     try self.applyOperatorToRange(operator, span.from, span.to);
                 }
             }
-            self.vi_count = 0;
+            self.numeric_arg = 0;
             if (recording_vi) self.viSettleChange(mode_before, edits_before);
             return .cont;
         }
@@ -1139,7 +1154,7 @@ pub const LineEditor = struct {
             self.vi_find_pending != null or
             self.vi_textobj_pending != null or
             self.vi_mark_pending != null or
-            self.vi_count != 0 or
+            self.numeric_arg != 0 or
             self.pending.len > 0;
     }
 
@@ -1166,7 +1181,7 @@ pub const LineEditor = struct {
     fn viRunMark(self: *LineEditor, kind: u8, name: u8) !void {
         if (name < 'a' or name > 'z') {
             self.vi_pending_op = null;
-            self.vi_count = 0;
+            self.numeric_arg = 0;
             return;
         }
         const slot = name - 'a';
@@ -1179,7 +1194,7 @@ pub const LineEditor = struct {
         const target = self.vi_marks[slot] orelse {
             // Vi does nothing for a mark that was never set.
             self.vi_pending_op = null;
-            self.vi_count = 0;
+            self.numeric_arg = 0;
             return;
         };
         const to = @min(target, self.length);
@@ -1342,7 +1357,7 @@ pub const LineEditor = struct {
             // a pending operator is dropped rather than applied to something
             // arbitrary.
             self.vi_pending_op = null;
-            self.vi_count = 0;
+            self.numeric_arg = 0;
             return;
         };
 
@@ -1543,7 +1558,7 @@ pub const LineEditor = struct {
             }
 
             // Not a motion: vi abandons the operator and the key does nothing.
-            self.vi_count = 0;
+            self.numeric_arg = 0;
             return .cont;
         }
 
@@ -1566,6 +1581,13 @@ pub const LineEditor = struct {
         // yank-pop only means something directly after a yank, so any other
         // action ends the run.
         if (widget != .yank and widget != .yank_pop) self.last_yank_at = null;
+
+        // The argument belongs to one command. Widgets that honour it consume it
+        // through takeCount; clearing it here as well means one that ignores it
+        // cannot leave it behind for the next command.
+        defer if (!isArgumentWidget(widget)) {
+            self.numeric_arg = 0;
+        };
 
         switch (widget) {
             .accept_line => return self.acceptLine(),
@@ -1592,8 +1614,8 @@ pub const LineEditor = struct {
                     try self.moveCursorRight();
                 }
             },
-            .backward_word => try self.moveCursorWordLeft(),
-            .forward_word => try self.moveCursorWordRight(),
+            .backward_word => for (0..self.takeCount()) |_| try self.moveCursorWordLeft(),
+            .forward_word => for (0..self.takeCount()) |_| try self.moveCursorWordRight(),
             .vi_forward_word => {
                 for (0..self.takeCount()) |_| self.moveForwardWord();
                 try self.redrawLine();
@@ -1607,32 +1629,36 @@ pub const LineEditor = struct {
                 try self.redrawLine();
             },
 
-            .self_insert => try self.selfInsert(key),
+            .self_insert => for (0..self.takeCount()) |_| try self.selfInsert(key),
             .vi_replace_char => try self.viReplaceChar(key),
             .quoted_insert => try self.quotedInsert(),
             .backward_delete_char => for (0..self.takeCount()) |_| try self.backspace(),
             .delete_char => for (0..self.takeCount()) |_| try self.deleteChar(),
-            .transpose_chars => try self.transposeChars(),
+            .transpose_chars => for (0..self.takeCount()) |_| try self.transposeChars(),
 
             .kill_line => try self.killToEnd(),
             .backward_kill_line => try self.killToStart(),
             .kill_whole_line => try self.killWholeLine(),
-            .kill_word => try self.killWordForward(),
-            .backward_kill_word => try self.killWordBackward(),
+            .kill_word => for (0..self.takeCount()) |_| try self.killWordForward(),
+            .backward_kill_word => for (0..self.takeCount()) |_| try self.killWordBackward(),
             .yank => try self.yank(),
             .kill_region_or_backward_kill_line => {
                 if (self.visual_mode) try self.cutSelection() else try self.killToStart();
             },
             .copy_region_or_backward_kill_word => {
-                if (self.visual_mode) try self.copySelection() else try self.killWordBackward();
+                if (self.visual_mode) {
+                    try self.copySelection();
+                } else {
+                    for (0..self.takeCount()) |_| try self.killWordBackward();
+                }
             },
 
             .set_mark_command => try self.startVisualMode(),
             .copy_region_as_kill => try self.copySelection(),
             .kill_region => try self.cutSelection(),
 
-            .up_line_or_history => try self.historyPrevious(),
-            .down_line_or_history => try self.historyNext(),
+            .up_line_or_history => for (0..self.takeCount()) |_| try self.historyPrevious(),
+            .down_line_or_history => for (0..self.takeCount()) |_| try self.historyNext(),
             .history_incremental_search_backward => {
                 if (self.reverse_search_mode) {
                     try self.continueReverseSearch();
@@ -1667,15 +1693,31 @@ pub const LineEditor = struct {
             .redisplay => try self.redrawLine(),
 
             .digit_argument => {
-                if (key.len > 0 and key[0] >= '0' and key[0] <= '9') {
-                    self.vi_count = self.vi_count * 10 + (key[0] - '0');
+                // The digit is the last byte of the sequence, not the first:
+                // emacs binds this to `^[3`, where the first byte is the Escape.
+                const digit = if (key.len > 0) key[key.len - 1] else 0;
+                if (digit >= '0' and digit <= '9') {
+                    // Digits after universal-argument give the argument outright
+                    // rather than extending the 4 it set.
+                    if (self.universal_pending) {
+                        self.numeric_arg = 0;
+                        self.universal_pending = false;
+                    }
+                    self.numeric_arg = self.numeric_arg * 10 + (digit - '0');
                 }
             },
+            .universal_argument => {
+                // Four, then four times that for each repeat. Digits typed after
+                // it replace the value rather than multiplying it, which falls
+                // out of digit-argument building from zero -- so reset here.
+                self.numeric_arg = if (self.numeric_arg == 0) 4 else self.numeric_arg * 4;
+                self.universal_pending = true;
+            },
             .vi_digit_or_beginning_of_line => {
-                if (self.vi_count == 0) {
+                if (self.numeric_arg == 0) {
                     try self.moveCursorHome();
                 } else {
-                    self.vi_count *= 10;
+                    self.numeric_arg *= 10;
                 }
             },
             .vi_end_of_line => {
@@ -4582,7 +4624,7 @@ test "leaving vi normal mode is reset for the next line" {
     editor.viEnterInsertMode();
     try std.testing.expectEqual(ViMode.insert, editor.vi_mode);
     try std.testing.expectEqual(@as(?u8, null), editor.vi_pending_op);
-    try std.testing.expectEqual(@as(usize, 0), editor.vi_count);
+    try std.testing.expectEqual(@as(usize, 0), editor.numeric_arg);
 }
 
 /// Build an editor wired to a capture buffer, with the typed text already in it.
@@ -5130,9 +5172,9 @@ test "an unbound key in vi normal mode discards a pending count" {
     editor.vi_mode = .normal;
 
     _ = try editor.feedKeys("3");
-    try std.testing.expectEqual(@as(usize, 3), editor.vi_count);
+    try std.testing.expectEqual(@as(usize, 3), editor.numeric_arg);
     _ = try editor.feedKeys("Z"); // unbound in vicmd
-    try std.testing.expectEqual(@as(usize, 0), editor.vi_count);
+    try std.testing.expectEqual(@as(usize, 0), editor.numeric_arg);
 }
 
 test "an unbound key consumes its byte instead of falling through" {
@@ -6330,4 +6372,160 @@ test "emacs binds M-y to yank-pop and vicmd binds Ctrl+R to redo" {
         .exact, .exact_prefix => |b| try std.testing.expectEqual(keymap.Widget.redo, b.widget),
         else => return error.TestUnexpectedResult,
     }
+}
+
+test "M-digit gives a command a numeric argument" {
+    var sink: std.ArrayList(u8) = .empty;
+    defer sink.deinit(std.testing.allocator);
+    var maps = keymap.KeymapSet.init();
+    defer maps.deinit(std.testing.allocator);
+    var editor = testKeyEditor(&sink, &maps, "one two three four five");
+    defer editor.deinit();
+
+    editor.cursor = 0;
+    // M-3 then forward-word moves three words: "one| two| three| four".
+    _ = try editor.feedKeys("\x1b3");
+    try std.testing.expectEqual(@as(usize, 3), editor.numeric_arg);
+    _ = try editor.feedKeys("\x1bf");
+    try std.testing.expectEqual(@as(usize, 14), editor.cursor);
+
+    // One word at a time from there, confirming the count was spent.
+    _ = try editor.feedKeys("\x1bf");
+    try std.testing.expectEqual(@as(usize, 19), editor.cursor);
+}
+
+test "a multi-digit argument accumulates" {
+    var sink: std.ArrayList(u8) = .empty;
+    defer sink.deinit(std.testing.allocator);
+    var maps = keymap.KeymapSet.init();
+    defer maps.deinit(std.testing.allocator);
+    var editor = testKeyEditor(&sink, &maps, "");
+    defer editor.deinit();
+
+    _ = try editor.feedKeys("\x1b1\x1b2");
+    try std.testing.expectEqual(@as(usize, 12), editor.numeric_arg);
+}
+
+test "self-insert repeats with the argument" {
+    var sink: std.ArrayList(u8) = .empty;
+    defer sink.deinit(std.testing.allocator);
+    var maps = keymap.KeymapSet.init();
+    defer maps.deinit(std.testing.allocator);
+    var editor = testKeyEditor(&sink, &maps, "");
+    defer editor.deinit();
+
+    _ = try editor.feedKeys("\x1b5");
+    _ = try editor.feedKeys("-");
+    try std.testing.expectEqualStrings("-----", editor.buffer[0..editor.length]);
+}
+
+test "universal-argument is four, and four times again when repeated" {
+    var sink: std.ArrayList(u8) = .empty;
+    defer sink.deinit(std.testing.allocator);
+    var maps = keymap.KeymapSet.init();
+    defer maps.deinit(std.testing.allocator);
+    var editor = testKeyEditor(&sink, &maps, "");
+    defer editor.deinit();
+
+    _ = try editor.invokeWidget(.universal_argument, "");
+    try std.testing.expectEqual(@as(usize, 4), editor.numeric_arg);
+    _ = try editor.invokeWidget(.universal_argument, "");
+    try std.testing.expectEqual(@as(usize, 16), editor.numeric_arg);
+
+    _ = try editor.invokeWidget(.self_insert, "z");
+    try std.testing.expectEqual(@as(usize, 16), editor.length);
+}
+
+test "digits after universal-argument give the argument outright" {
+    var sink: std.ArrayList(u8) = .empty;
+    defer sink.deinit(std.testing.allocator);
+    var maps = keymap.KeymapSet.init();
+    defer maps.deinit(std.testing.allocator);
+    var editor = testKeyEditor(&sink, &maps, "");
+    defer editor.deinit();
+
+    _ = try editor.invokeWidget(.universal_argument, "");
+    try std.testing.expectEqual(@as(usize, 4), editor.numeric_arg);
+    // 3, not 43: the digits replace the 4 rather than extending it.
+    _ = try editor.invokeWidget(.digit_argument, "3");
+    try std.testing.expectEqual(@as(usize, 3), editor.numeric_arg);
+}
+
+test "the argument applies to kills and history too" {
+    var sink: std.ArrayList(u8) = .empty;
+    defer sink.deinit(std.testing.allocator);
+    var maps = keymap.KeymapSet.init();
+    defer maps.deinit(std.testing.allocator);
+    var editor = testKeyEditor(&sink, &maps, "aa bb cc dd");
+    defer editor.deinit();
+
+    editor.cursor = editor.length;
+    _ = try editor.feedKeys("\x1b2");
+    _ = try editor.feedKeys("\x17"); // Ctrl+W twice over
+    try std.testing.expectEqualStrings("aa bb ", editor.buffer[0..editor.length]);
+}
+
+test "an argument does not leak into the next command" {
+    var sink: std.ArrayList(u8) = .empty;
+    defer sink.deinit(std.testing.allocator);
+    var maps = keymap.KeymapSet.init();
+    defer maps.deinit(std.testing.allocator);
+    var editor = testKeyEditor(&sink, &maps, "abcdefgh");
+    defer editor.deinit();
+
+    editor.cursor = 0;
+    _ = try editor.feedKeys("\x1b3");
+    _ = try editor.feedKeys("\x06"); // Ctrl+F three times
+    try std.testing.expectEqual(@as(usize, 3), editor.cursor);
+    try std.testing.expectEqual(@as(usize, 0), editor.numeric_arg);
+
+    // The next movement is a single step, not another three.
+    _ = try editor.feedKeys("\x06");
+    try std.testing.expectEqual(@as(usize, 4), editor.cursor);
+}
+
+test "a widget that ignores the argument still clears it" {
+    var sink: std.ArrayList(u8) = .empty;
+    defer sink.deinit(std.testing.allocator);
+    var maps = keymap.KeymapSet.init();
+    defer maps.deinit(std.testing.allocator);
+    var editor = testKeyEditor(&sink, &maps, "abcdefgh");
+    defer editor.deinit();
+
+    editor.cursor = 4;
+    _ = try editor.feedKeys("\x1b7");
+    _ = try editor.feedKeys("\x01"); // beginning-of-line ignores it
+    try std.testing.expectEqual(@as(usize, 0), editor.cursor);
+    try std.testing.expectEqual(@as(usize, 0), editor.numeric_arg);
+}
+
+test "emacs binds M-digit to digit-argument" {
+    var set = keymap.KeymapSet.init();
+    defer set.deinit(std.testing.allocator);
+
+    for ("0123456789") |d| {
+        const seq = [_]u8{ 0x1B, d };
+        switch (set.getConst(.emacs).lookup(&seq)) {
+            .exact, .exact_prefix => |b| try std.testing.expectEqual(keymap.Widget.digit_argument, b.widget),
+            else => {
+                std.debug.print("M-{c} is not bound\n", .{d});
+                return error.TestUnexpectedResult;
+            },
+        }
+    }
+    // universal-argument has no default key, as in zsh, but is nameable.
+    try std.testing.expectEqual(keymap.Widget.universal_argument, keymap.resolveWidget("universal-argument"));
+}
+
+test "vi counts still work after the rename" {
+    var sink: std.ArrayList(u8) = .empty;
+    defer sink.deinit(std.testing.allocator);
+    var maps = keymap.KeymapSet.init();
+    defer maps.deinit(std.testing.allocator);
+    var editor = viEditor(&sink, &maps, "abcdefghij");
+    defer editor.deinit();
+
+    editor.cursor = 9;
+    _ = try editor.feedKeys("4h");
+    try std.testing.expectEqual(@as(usize, 5), editor.cursor);
 }
