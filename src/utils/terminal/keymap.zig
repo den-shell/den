@@ -122,6 +122,16 @@ pub const Widget = enum(u8) {
     /// case it is another digit of it.
     vi_digit_or_beginning_of_line,
 
+    /// Vi operators. Each waits for a motion, and applies to the text between
+    /// where the cursor was and where the motion leaves it. Repeating the
+    /// operator key acts on the whole line, as `dd` and `cc` do.
+    vi_delete,
+    vi_change,
+    vi_yank,
+    /// Vi's `$`: the last character of the line, not past it, so the cursor
+    /// cannot sit where there is nothing.
+    vi_end_of_line,
+
     // Vi mode transitions
     vi_cmd_mode,
     vi_insert,
@@ -168,7 +178,7 @@ pub fn resolveWidget(name: []const u8) Widget {
         .{ "beginning-of-line", .beginning_of_line },
         .{ "vi-beginning-of-line", .beginning_of_line },
         .{ "end-of-line", .end_of_line },
-        .{ "vi-end-of-line", .end_of_line },
+        .{ "vi-end-of-line", .vi_end_of_line },
         .{ "backward-char", .backward_char },
         .{ "vi-backward-char", .backward_char },
         .{ "forward-char", .forward_char },
@@ -240,6 +250,10 @@ pub fn resolveWidget(name: []const u8) Widget {
 
         .{ "clear-screen", .clear_screen },
         .{ "redisplay", .redisplay },
+
+        .{ "vi-delete", .vi_delete },
+        .{ "vi-change", .vi_change },
+        .{ "vi-yank", .vi_yank },
 
         .{ "digit-argument", .digit_argument },
         .{ "vi-digit-argument", .digit_argument },
@@ -336,6 +350,10 @@ pub fn widgetName(w: Widget) []const u8 {
         .call_last_kbd_macro => "call-last-kbd-macro",
         .clear_screen => "clear-screen",
         .redisplay => "redisplay",
+        .vi_delete => "vi-delete",
+        .vi_change => "vi-change",
+        .vi_yank => "vi-yank",
+        .vi_end_of_line => "vi-end-of-line",
         .digit_argument => "digit-argument",
         .vi_digit_or_beginning_of_line => "vi-digit-or-beginning-of-line",
         .vi_cmd_mode => "vi-cmd-mode",
@@ -576,7 +594,7 @@ const vicmd_defaults = buildKeymap(&[_]DefaultRow{
     .{ "l", .forward_char },
     // `0` is also a count digit once one is being typed.
     .{ "0", .vi_digit_or_beginning_of_line },
-    .{ "$", .end_of_line },
+    .{ "$", .vi_end_of_line },
     // A literal caret: "^^" would be Ctrl+^ (0x1E).
     .{ "\\^", .beginning_of_line },
     .{ "1", .digit_argument },
@@ -598,8 +616,11 @@ const vicmd_defaults = buildKeymap(&[_]DefaultRow{
     .{ "X", .backward_delete_char },
     .{ "D", .kill_line },
     .{ "C", .vi_change_eol },
-    .{ "dd", .kill_whole_line },
-    .{ "cc", .vi_change_whole_line },
+    .{ "d", .vi_delete },
+    .{ "c", .vi_change },
+    .{ "y", .vi_yank },
+    // Paste what an operator yanked or deleted.
+    .{ "p", .yank },
     .{ "u", .undo },
 
     .{ "i", .vi_insert },
@@ -1100,19 +1121,33 @@ test "keymaps are independent" {
     }
 }
 
-test "vicmd binds dd and cc as two-byte sequences" {
+test "vicmd binds the operators as single keys" {
     var set = KeymapSet.init();
     defer set.deinit(testing.allocator);
     const map = set.getConst(.vicmd);
 
-    // `d` alone is only a prefix: Den has no operator-pending motions.
-    try testing.expectEqual(Lookup.prefix, map.lookup("d"));
-    switch (map.lookup("dd")) {
-        .exact => |b| try testing.expectEqual(Widget.kill_whole_line, b.widget),
-        else => return error.TestUnexpectedResult,
+    // Operators are one key each; waiting for a motion is editor state, not a
+    // longer key sequence, which is what lets `d` compose with any motion and
+    // with a count. The doubled forms (`dd`, `cc`, `yy`) fall out of pressing
+    // the operator again, so they need no binding of their own.
+    const ops = [_]struct { []const u8, Widget }{
+        .{ "d", .vi_delete },
+        .{ "c", .vi_change },
+        .{ "y", .vi_yank },
+    };
+    for (ops) |o| {
+        switch (map.lookup(o[0])) {
+            .exact => |b| try testing.expectEqual(o[1], b.widget),
+            else => {
+                std.debug.print("expected {s} to be an exact binding\n", .{o[0]});
+                return error.TestUnexpectedResult;
+            },
+        }
     }
-    switch (map.lookup("cc")) {
-        .exact => |b| try testing.expectEqual(Widget.vi_change_whole_line, b.widget),
+
+    // `$` is vi's own end-of-line, which stops on the last character.
+    switch (map.lookup("$")) {
+        .exact => |b| try testing.expectEqual(Widget.vi_end_of_line, b.widget),
         else => return error.TestUnexpectedResult,
     }
 }

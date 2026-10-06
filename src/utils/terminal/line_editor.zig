@@ -460,11 +460,14 @@ pub const LineEditor = struct {
 
     /// Move forward by one word (vi style)
     fn moveForwardWord(self: *LineEditor) void {
-        // Skip current word
-        while (self.cursor < self.length and !isWordChar(self.buffer[self.cursor])) {
+        // Vi's `w` lands on the first character of the next word. This used to
+        // skip the separators and then the word, which stops at the end of the
+        // current word -- that is `e`, and it left `dw` deleting "alpha" out of
+        // "alpha beta" rather than "alpha ".
+        while (self.cursor < self.length and isWordChar(self.buffer[self.cursor])) {
             self.cursor += 1;
         }
-        while (self.cursor < self.length and isWordChar(self.buffer[self.cursor])) {
+        while (self.cursor < self.length and !isWordChar(self.buffer[self.cursor])) {
             self.cursor += 1;
         }
     }
@@ -985,9 +988,151 @@ pub const LineEditor = struct {
         return .cont;
     }
 
+    /// How far a motion reaches when an operator is applied over it.
+    ///
+    /// Vi distinguishes the two: `dw` stops before the next word, while `de`
+    /// takes the last character of this one. Returns null for anything that is
+    /// not a motion, which aborts a pending operator.
+    const MotionExtent = enum { exclusive, inclusive };
+
+    fn motionExtent(widget: Widget) ?MotionExtent {
+        return switch (widget) {
+            .backward_char,
+            .forward_char,
+            .vi_forward_word,
+            .vi_backward_word,
+            .beginning_of_line,
+            .vi_digit_or_beginning_of_line,
+            .backward_word,
+            .forward_word,
+            => .exclusive,
+
+            .vi_forward_word_end,
+            .vi_end_of_line,
+            .end_of_line,
+            => .inclusive,
+
+            else => null,
+        };
+    }
+
+    /// The operator key itself, for recognising the doubled form.
+    fn operatorKey(widget: Widget) ?u8 {
+        return switch (widget) {
+            .vi_delete => 'd',
+            .vi_change => 'c',
+            .vi_yank => 'y',
+            else => null,
+        };
+    }
+
+    /// Remove `start..end`, saving it to the kill ring.
+    fn deleteRange(self: *LineEditor, start: usize, end: usize) !void {
+        if (end <= start or start >= self.length) return;
+        const stop = @min(end, self.length);
+        self.saveUndoState();
+        self.pushToKillRing(self.buffer[start..stop]);
+
+        const remaining = self.length - stop;
+        var i: usize = 0;
+        while (i < remaining) : (i += 1) {
+            self.buffer[start + i] = self.buffer[stop + i];
+        }
+        self.length = start + remaining;
+        self.cursor = start;
+    }
+
+    /// Apply a pending operator to the whole line, which is what repeating the
+    /// operator key means: `dd`, `cc`, `yy`.
+    fn applyOperatorToLine(self: *LineEditor, op: u8) !void {
+        switch (op) {
+            'y' => self.pushToKillRing(self.buffer[0..self.length]),
+            'd' => try self.deleteRange(0, self.length),
+            'c' => {
+                try self.deleteRange(0, self.length);
+                self.viEnterInsertMode();
+            },
+            else => {},
+        }
+        try self.redrawLine();
+    }
+
+    /// Run `widget` as a motion and apply the pending operator over the text it
+    /// moved across.
+    fn applyOperatorOverMotion(
+        self: *LineEditor,
+        op: u8,
+        widget: Widget,
+        extent: MotionExtent,
+        key: []const u8,
+    ) !void {
+        const start = self.cursor;
+        _ = try self.invokeWidget(widget, key);
+        const moved_to = self.cursor;
+
+        var from = @min(start, moved_to);
+        var to = @max(start, moved_to);
+        // An inclusive motion takes the character it lands on as well.
+        if (extent == .inclusive and to < self.length) to += 1;
+        if (from > self.length) from = self.length;
+
+        switch (op) {
+            'y' => {
+                if (to > from) self.pushToKillRing(self.buffer[from..@min(to, self.length)]);
+                // Yanking leaves the cursor at the start of the region.
+                self.cursor = from;
+            },
+            'd' => try self.deleteRange(from, to),
+            'c' => {
+                try self.deleteRange(from, to);
+                self.viEnterInsertMode();
+            },
+            else => {},
+        }
+        try self.redrawLine();
+    }
+
     /// Run a binding. Macro bindings (`bindkey -s`) push their text into the
     /// input to be dispatched as if typed; everything else is a widget.
     pub fn invokeBinding(self: *LineEditor, binding: keymap.Binding, key: []const u8) !Flow {
+        // An operator is waiting for a motion. Resolving it here rather than in
+        // invokeWidget means it composes with whatever the motion keys are bound
+        // to, so rebinding `w` also changes what `dw` covers.
+        if (self.vi_pending_op) |op| {
+            self.vi_pending_op = null;
+
+            // The operator key again means the whole line: `dd`, `cc`, `yy`.
+            if (operatorKey(binding.widget)) |again| {
+                if (again == op) {
+                    try self.applyOperatorToLine(op);
+                    return .cont;
+                }
+                // A different operator replaces the pending one.
+                self.vi_pending_op = again;
+                return .cont;
+            }
+
+            // A count still belongs to the motion, so let it through untouched.
+            if (binding.widget == .digit_argument) {
+                self.vi_pending_op = op;
+                return self.invokeWidget(binding.widget, key);
+            }
+
+            if (motionExtent(binding.widget)) |extent| {
+                try self.applyOperatorOverMotion(op, binding.widget, extent, key);
+                return .cont;
+            }
+
+            // Not a motion: vi abandons the operator and the key does nothing.
+            self.vi_count = 0;
+            return .cont;
+        }
+
+        if (operatorKey(binding.widget)) |op| {
+            self.vi_pending_op = op;
+            return .cont;
+        }
+
         if (binding.widget == .push_input) {
             const maps = self.keymaps orelse return .cont;
             if (maps.getString(binding.index)) |text| self.pushBack(text);
@@ -1108,6 +1253,14 @@ pub const LineEditor = struct {
                     self.vi_count *= 10;
                 }
             },
+            .vi_end_of_line => {
+                // Vi's `$`: the last character, not past it.
+                self.cursor = if (self.length > 0) self.length - 1 else 0;
+                try self.redrawLine();
+            },
+            // Operators are resolved in invokeBinding, which has the pending
+            // state; reaching here means one was invoked directly.
+            .vi_delete, .vi_change, .vi_yank => self.vi_pending_op = operatorKey(widget),
 
             .vi_cmd_mode => {
                 self.viEnterNormalMode();
@@ -4826,4 +4979,218 @@ test "isIncomplete follows the shell grammar" {
     try std.testing.expect(!LineEditor.isIncomplete("for i in 1 2; do echo $i; done"));
     try std.testing.expect(!LineEditor.isIncomplete("echo done"));
     try std.testing.expect(!LineEditor.isIncomplete("echo a; done"));
+}
+
+/// A vi normal-mode editor with text already in it, cursor at the start.
+fn viEditor(sink: *std.ArrayList(u8), maps: *keymap.KeymapSet, text: []const u8) LineEditor {
+    var editor = testKeyEditor(sink, maps, text);
+    editor.setEditingMode(.vi);
+    editor.vi_mode = .normal;
+    editor.cursor = 0;
+    return editor;
+}
+
+test "vi dw deletes to the start of the next word" {
+    var sink: std.ArrayList(u8) = .empty;
+    defer sink.deinit(std.testing.allocator);
+    var maps = keymap.KeymapSet.init();
+    defer maps.deinit(std.testing.allocator);
+    var editor = viEditor(&sink, &maps, "alpha beta gamma");
+    defer editor.deinit();
+
+    _ = try editor.feedKeys("dw");
+    try std.testing.expectEqualStrings("beta gamma", editor.buffer[0..editor.length]);
+    try std.testing.expectEqual(@as(usize, 0), editor.cursor);
+}
+
+test "vi de deletes through the end of the word" {
+    var sink: std.ArrayList(u8) = .empty;
+    defer sink.deinit(std.testing.allocator);
+    var maps = keymap.KeymapSet.init();
+    defer maps.deinit(std.testing.allocator);
+    var editor = viEditor(&sink, &maps, "alpha beta");
+    defer editor.deinit();
+
+    // `e` is inclusive, so the last character of the word goes too.
+    _ = try editor.feedKeys("de");
+    try std.testing.expectEqualStrings(" beta", editor.buffer[0..editor.length]);
+}
+
+test "vi d$ deletes to the end of the line" {
+    var sink: std.ArrayList(u8) = .empty;
+    defer sink.deinit(std.testing.allocator);
+    var maps = keymap.KeymapSet.init();
+    defer maps.deinit(std.testing.allocator);
+    var editor = viEditor(&sink, &maps, "keep this away");
+    defer editor.deinit();
+
+    editor.cursor = 5;
+    _ = try editor.feedKeys("d$");
+    try std.testing.expectEqualStrings("keep ", editor.buffer[0..editor.length]);
+}
+
+test "vi d0 deletes back to the start of the line" {
+    var sink: std.ArrayList(u8) = .empty;
+    defer sink.deinit(std.testing.allocator);
+    var maps = keymap.KeymapSet.init();
+    defer maps.deinit(std.testing.allocator);
+    var editor = viEditor(&sink, &maps, "drop this keep");
+    defer editor.deinit();
+
+    editor.cursor = 10;
+    _ = try editor.feedKeys("d0");
+    try std.testing.expectEqualStrings("keep", editor.buffer[0..editor.length]);
+}
+
+test "vi db deletes back a word" {
+    var sink: std.ArrayList(u8) = .empty;
+    defer sink.deinit(std.testing.allocator);
+    var maps = keymap.KeymapSet.init();
+    defer maps.deinit(std.testing.allocator);
+    var editor = viEditor(&sink, &maps, "alpha beta gamma");
+    defer editor.deinit();
+
+    editor.cursor = 11; // start of "gamma"
+    _ = try editor.feedKeys("db");
+    try std.testing.expectEqualStrings("alpha gamma", editor.buffer[0..editor.length]);
+}
+
+test "vi dd and cc act on the whole line" {
+    var sink: std.ArrayList(u8) = .empty;
+    defer sink.deinit(std.testing.allocator);
+    var maps = keymap.KeymapSet.init();
+    defer maps.deinit(std.testing.allocator);
+
+    var d = viEditor(&sink, &maps, "throw it all away");
+    defer d.deinit();
+    _ = try d.feedKeys("dd");
+    try std.testing.expectEqual(@as(usize, 0), d.length);
+    try std.testing.expectEqual(ViMode.normal, d.vi_mode);
+
+    var c = viEditor(&sink, &maps, "throw it all away");
+    defer c.deinit();
+    _ = try c.feedKeys("cc");
+    try std.testing.expectEqual(@as(usize, 0), c.length);
+    // `c` leaves you inserting.
+    try std.testing.expectEqual(ViMode.insert, c.vi_mode);
+}
+
+test "vi cw deletes the word and starts inserting" {
+    var sink: std.ArrayList(u8) = .empty;
+    defer sink.deinit(std.testing.allocator);
+    var maps = keymap.KeymapSet.init();
+    defer maps.deinit(std.testing.allocator);
+    var editor = viEditor(&sink, &maps, "alpha beta");
+    defer editor.deinit();
+
+    _ = try editor.feedKeys("cw");
+    try std.testing.expectEqualStrings("beta", editor.buffer[0..editor.length]);
+    try std.testing.expectEqual(ViMode.insert, editor.vi_mode);
+}
+
+test "vi a count applies to the operator's motion" {
+    var sink: std.ArrayList(u8) = .empty;
+    defer sink.deinit(std.testing.allocator);
+    var maps = keymap.KeymapSet.init();
+    defer maps.deinit(std.testing.allocator);
+
+    // `d2w` and `2dw` both delete two words.
+    var a = viEditor(&sink, &maps, "one two three");
+    defer a.deinit();
+    _ = try a.feedKeys("d2w");
+    try std.testing.expectEqualStrings("three", a.buffer[0..a.length]);
+
+    var b = viEditor(&sink, &maps, "one two three");
+    defer b.deinit();
+    _ = try b.feedKeys("2dw");
+    try std.testing.expectEqualStrings("three", b.buffer[0..b.length]);
+}
+
+test "vi yank copies without deleting" {
+    var sink: std.ArrayList(u8) = .empty;
+    defer sink.deinit(std.testing.allocator);
+    var maps = keymap.KeymapSet.init();
+    defer maps.deinit(std.testing.allocator);
+    var editor = viEditor(&sink, &maps, "alpha beta");
+    defer editor.deinit();
+
+    _ = try editor.feedKeys("yw");
+    try std.testing.expectEqualStrings("alpha beta", editor.buffer[0..editor.length]);
+    try std.testing.expectEqual(@as(usize, 0), editor.cursor);
+
+    // The yanked text is on the kill ring, so it pastes back.
+    _ = try editor.invokeWidget(.yank, "\x19");
+    try std.testing.expectEqualStrings("alpha alpha beta", editor.buffer[0..editor.length]);
+}
+
+test "vi an operator followed by a non-motion is abandoned" {
+    var sink: std.ArrayList(u8) = .empty;
+    defer sink.deinit(std.testing.allocator);
+    var maps = keymap.KeymapSet.init();
+    defer maps.deinit(std.testing.allocator);
+    var editor = viEditor(&sink, &maps, "leave me alone");
+    defer editor.deinit();
+
+    // `u` is undo, not a motion: vi drops the operator and nothing is deleted.
+    _ = try editor.feedKeys("du");
+    try std.testing.expectEqualStrings("leave me alone", editor.buffer[0..editor.length]);
+    try std.testing.expectEqual(@as(?u8, null), editor.vi_pending_op);
+}
+
+test "vi $ lands on the last character, not past it" {
+    var sink: std.ArrayList(u8) = .empty;
+    defer sink.deinit(std.testing.allocator);
+    var maps = keymap.KeymapSet.init();
+    defer maps.deinit(std.testing.allocator);
+    var editor = viEditor(&sink, &maps, "abcd");
+    defer editor.deinit();
+
+    _ = try editor.feedKeys("$");
+    try std.testing.expectEqual(@as(usize, 3), editor.cursor);
+    // So `x` there deletes a character rather than doing nothing.
+    _ = try editor.feedKeys("x");
+    try std.testing.expectEqualStrings("abc", editor.buffer[0..editor.length]);
+}
+
+test "vi a bare operator waits rather than acting" {
+    var sink: std.ArrayList(u8) = .empty;
+    defer sink.deinit(std.testing.allocator);
+    var maps = keymap.KeymapSet.init();
+    defer maps.deinit(std.testing.allocator);
+    var editor = viEditor(&sink, &maps, "untouched");
+    defer editor.deinit();
+
+    _ = try editor.feedKeys("d");
+    try std.testing.expectEqualStrings("untouched", editor.buffer[0..editor.length]);
+    try std.testing.expectEqual(@as(?u8, 'd'), editor.vi_pending_op);
+}
+
+test "vi p pastes what an operator took" {
+    var sink: std.ArrayList(u8) = .empty;
+    defer sink.deinit(std.testing.allocator);
+    var maps = keymap.KeymapSet.init();
+    defer maps.deinit(std.testing.allocator);
+    var editor = viEditor(&sink, &maps, "alpha beta");
+    defer editor.deinit();
+
+    _ = try editor.feedKeys("dw");
+    try std.testing.expectEqualStrings("beta", editor.buffer[0..editor.length]);
+    _ = try editor.feedKeys("p");
+    try std.testing.expectEqualStrings("alpha beta", editor.buffer[0..editor.length]);
+}
+
+test "vi w lands on the next word, not the end of this one" {
+    var sink: std.ArrayList(u8) = .empty;
+    defer sink.deinit(std.testing.allocator);
+    var maps = keymap.KeymapSet.init();
+    defer maps.deinit(std.testing.allocator);
+    var editor = viEditor(&sink, &maps, "alpha beta gamma");
+    defer editor.deinit();
+
+    // Regression: `w` used to stop on the separator, which is `e`'s job, and
+    // left `dw` deleting the word without the space after it.
+    _ = try editor.feedKeys("w");
+    try std.testing.expectEqual(@as(usize, 6), editor.cursor);
+    _ = try editor.feedKeys("w");
+    try std.testing.expectEqual(@as(usize, 11), editor.cursor);
 }

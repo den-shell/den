@@ -827,6 +827,8 @@ list. The common ones:
 | `quoted-insert` | Insert the next key literally |
 | `start-kbd-macro`, `end-kbd-macro`, `call-last-kbd-macro` | Keyboard macros |
 | `vi-cmd-mode`, `vi-insert` | Switch vi modes |
+| `vi-delete`, `vi-change`, `vi-yank` | Vi operators: wait for a motion, then act on it |
+| `vi-end-of-line` | Vi's `$`: the last character, not past it |
 | `digit-argument` | Accumulate a numeric prefix (vi `1`-`9`) |
 | `vi-digit-or-beginning-of-line` | vi `0`: a count digit, or the start of the line |
 | `undefined-key` | Beep |
@@ -842,6 +844,24 @@ Counts work in vi normal mode: `digit-argument` is bound to `1`-`9` and
 `vi-digit-or-beginning-of-line` to `0`, and the movement and
 single-character delete widgets consume the count, so `3h` and `2x` behave. Only
 those widgets honour it; others ignore a pending count.
+
+### Vi operators
+
+`d`, `c` and `y` wait for a motion and act on the text between where the cursor
+was and where the motion leaves it: `dw`, `d$`, `de`, `db`, `d0`, and the `c` and
+`y` forms of each. Pressing the operator again takes the whole line, so `dd`,
+`cc` and `yy` need no separate binding. `p` pastes what was taken.
+
+Counts compose from either side — `d2w` and `2dw` both delete two words — and the
+operator applies to whatever the motion key is *currently* bound to, so
+rebinding `w` also changes what `dw` covers. A key that is not a motion abandons
+the operator, as vi does.
+
+Motions are exclusive except `e` and `$`, which take the character they land on:
+`de` removes the last letter of the word, `dw` stops before the next one.
+
+Not implemented: text objects (`diw`, `ci"`) and the `f`/`t` character motions,
+so `df,` reports nothing rather than deleting to the comma.
 
 Names den does not have — `universal-argument`, `vi-repeat-change` — are reported
 as unknown rather than bound to something that quietly does nothing.
@@ -860,7 +880,7 @@ Future line editing features planned:
 - Multiple cursors
 - `zle -N` user-defined widgets backed by shell functions
 - `universal-argument`, and counts honoured by more widgets
-- Operator-motion pairs in vi (`dw`, `c$`); only `dd` and `cc` work today
+- Vi text objects (`diw`, `ci"`) and the `f`/`t` character motions
 - `yank-pop` and redo
 
 Stay tuned!
