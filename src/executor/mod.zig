@@ -567,8 +567,13 @@ pub const Executor = struct {
     }
 
     fn executeExternalInChild(self: *Executor, command: *types.ParsedCommand) !void {
-        // Apply redirections before exec
-        try self.applyRedirections(command.redirections);
+        // Apply redirections before exec. This runs in a forked child, so a
+        // failed redirection has to end the child rather than propagate: the
+        // caller's `try` would unwind into parent-shaped code with the child
+        // still running the shell.
+        self.applyRedirections(command.redirections) catch {
+            std.c._exit(1);
+        };
 
         // Build argv (command name + args)
         const argv_len = 1 + command.args.len;

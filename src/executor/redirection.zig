@@ -8,6 +8,14 @@ const process_util = @import("../utils/process.zig");
 
 /// Apply I/O redirections for a command.
 /// Handles output/append, input, heredoc, herestring, fd duplication, and fd close.
+/// Apply a command's redirections to the current process.
+///
+/// Every failure here returns an error rather than exiting. These run in the
+/// parent for a builtin and in a forked child for an external, and the five
+/// failure paths used to `_exit(1)` unconditionally -- which is right in the
+/// child and fatal in the parent: `set -C` plus one `echo x > existing` ended
+/// an interactive session. Each in-child caller turns an error into `_exit(1)`
+/// itself, so the child still dies exactly as before.
 pub fn applyRedirections(
     allocator: std.mem.Allocator,
     redirections: []types.Redirection,
@@ -58,7 +66,7 @@ fn applyOutputTruncate(allocator: std.mem.Allocator, redir: types.Redirection, n
             if (check_fd >= 0) {
                 _ = std.c.close(check_fd);
                 try IO.eprint("den: {s}: cannot overwrite existing file\n", .{redir.target});
-                std.c._exit(1);
+                return error.CannotOverwriteExistingFile;
             }
         }
 
@@ -70,7 +78,7 @@ fn applyOutputTruncate(allocator: std.mem.Allocator, redir: types.Redirection, n
         );
         if (fd < 0) {
             try IO.eprint("den: {s}: cannot open\n", .{redir.target});
-            std.c._exit(1);
+            return error.CannotOpenRedirectionTarget;
         }
 
         if (std.c.dup2(fd, @intCast(redir.fd)) < 0) {
@@ -102,7 +110,7 @@ fn applyOutputAppend(allocator: std.mem.Allocator, redir: types.Redirection) !vo
         );
         if (fd < 0) {
             try IO.eprint("den: {s}: cannot open\n", .{redir.target});
-            std.c._exit(1);
+            return error.CannotOpenRedirectionTarget;
         }
 
         if (std.c.dup2(fd, @intCast(redir.fd)) < 0) {
@@ -134,7 +142,7 @@ fn applyInput(allocator: std.mem.Allocator, redir: types.Redirection) !void {
         );
         if (fd < 0) {
             try IO.eprint("den: {s}: cannot open\n", .{redir.target});
-            std.c._exit(1);
+            return error.CannotOpenRedirectionTarget;
         }
 
         if (std.c.dup2(fd, std.posix.STDIN_FILENO) < 0) {
@@ -166,7 +174,7 @@ fn applyInputOutput(allocator: std.mem.Allocator, redir: types.Redirection) !voi
         );
         if (fd < 0) {
             try IO.eprint("den: {s}: cannot open\n", .{redir.target});
-            std.c._exit(1);
+            return error.CannotOpenRedirectionTarget;
         }
 
         if (std.c.dup2(fd, @intCast(redir.fd)) < 0) {
