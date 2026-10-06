@@ -36,6 +36,9 @@ pub const SyntaxHighlighter = struct {
         "time", "hash",   "yes",    "reload",  "watch",   "tree",     "grep",    "find",
         "calc", "json",   "ls",     "seq",     "date",    "parallel", "http",    "base64",
         "uuid",   "bindkey", "zle",     "zstyle",
+        // zsh startup preamble
+        "autoload",     "compinit", "bashcompinit", "compdef",
+        "zmodload",     "emulate",  "is-at-least",  "add-zsh-hook",
     };
 
     // Shell keywords

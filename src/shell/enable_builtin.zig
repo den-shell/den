@@ -99,6 +99,8 @@ pub fn builtinEnable(self: *Shell, cmd: *types.ParsedCommand) !void {
             "hash",     "return", "local",   "declare",   "readonly", "typeset",
             "let",      "shopt",  "mapfile", "readarray", "caller",   "compgen",
             "complete", "enable",  "bindkey", "zle",       "zstyle",
+            "autoload",     "compinit", "bashcompinit", "compdef",
+            "zmodload",     "emulate",  "is-at-least",  "add-zsh-hook",
         };
         try IO.print("Built-in commands:\n", .{});
         for (builtin_names) |name| {

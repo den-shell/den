@@ -358,6 +358,8 @@ pub fn builtinCompgen(shell: *Shell, cmd: *types.ParsedCommand) !void {
                 "let",    "shopt",   "mapfile",  "readarray", "caller",  "compgen", "complete",
                 "exec",   "wait",    "kill",     "disown",    "getopts", "times",   "builtin",
                 "jobs",   "fg",      "bg",       "bindkey",   "zle",     "zstyle",
+                "autoload",     "compinit", "bashcompinit", "compdef",
+                "zmodload",     "emulate",  "is-at-least",  "add-zsh-hook",
             };
             for (builtins_list) |b| {
                 if (prefix.len == 0 or std.mem.startsWith(u8, b, prefix)) {

@@ -420,9 +420,13 @@ pub fn builtinHelp(shell: *Shell, cmd: *types.ParsedCommand) !void {
     try IO.print("  zle -N wid [fn]   Make a shell function a widget\n", .{});
     try IO.print("\nZsh Compatibility:\n", .{});
     try IO.print("  zstyle ctx style  Set or query pattern-keyed styles\n", .{});
+    try IO.print("  autoload name     Define from $fpath on first use\n", .{});
+    try IO.print("  add-zsh-hook h fn Run fn on chpwd/precmd/preexec/zshexit\n", .{});
+    try IO.print("  compinit          Accepted; completion needs no setup\n", .{});
+    try IO.print("  is-at-least ver   Compare shell versions\n", .{});
     // Counts the entries actually listed above. It read 54 while 56 were
     // enumerated; the docs' separate figure of 58 is unverified and left alone.
-    try IO.print("\nTotal: 59 builtin commands available\n", .{});
+    try IO.print("\nTotal: 63 builtin commands available\n", .{});
     try IO.print("For more help, use 'man bash' or visit docs.den.sh\n", .{});
 }
 
