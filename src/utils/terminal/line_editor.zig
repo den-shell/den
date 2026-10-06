@@ -358,6 +358,16 @@ pub const LineEditor = struct {
     /// refusal. This is how `^X` coexists with `^X(`.
     pending_fallback: ?keymap.Binding = null,
     pending_fallback_len: u8 = 0,
+    /// A vi character search is waiting for the key that says what to look for:
+    /// 'f', 'F', 't' or 'T'. The next byte is that target, not a key of its own.
+    vi_find_pending: ?u8 = null,
+    /// The last character search, so `;` and `,` can do it again.
+    vi_last_find: ?struct { kind: u8, target: u8 } = null,
+    /// A text object is waiting for the key that says which one: 'i' for the
+    /// inside of it, 'a' for the whole thing including its delimiters. Only
+    /// reachable with an operator pending, since `diw` is the only way to ask.
+    vi_textobj_pending: ?u8 = null,
+
     /// Empty reads since the last byte arrived.
     idle_polls: u8 = 0,
     /// Empty reads to wait through before an ambiguous sequence resolves. Each
@@ -898,6 +908,30 @@ pub const LineEditor = struct {
     /// the built-in path below -- which is every byte that begins no binding, so
     /// ordinary typing costs one lookup and nothing else.
     fn keymapProbe(self: *LineEditor, byte: u8) !?Flow {
+        // A vi character search takes the next key as its target, not as a key.
+        // This has to come before the keymap, or `df,` would look `,` up and
+        // find the repeat-find binding instead of using it as the target.
+        if (self.vi_find_pending) |kind| {
+            self.vi_find_pending = null;
+            try self.viRunFind(kind, byte);
+            return .cont;
+        }
+
+        // Likewise the key naming a text object: in `diw` the `w` says which
+        // object, and `ci"` needs the quote as data rather than as a binding.
+        if (self.vi_textobj_pending) |scope| {
+            self.vi_textobj_pending = null;
+            const op = self.vi_pending_op;
+            self.vi_pending_op = null;
+            if (op) |operator| {
+                if (self.viTextObject(scope == 'i', byte)) |span| {
+                    try self.applyOperatorToRange(operator, span.from, span.to);
+                }
+            }
+            self.vi_count = 0;
+            return .cont;
+        }
+
         var probe = self.pending;
         if (!probe.push(byte)) {
             // Longer than any bindable sequence; give up on it.
@@ -988,6 +1022,172 @@ pub const LineEditor = struct {
         return .cont;
     }
 
+    /// The span a text object covers, or null when the cursor is not in one.
+    ///
+    /// `inner` is the inside: the word itself, or what sits between a pair of
+    /// delimiters. Otherwise the delimiters come too, and for a word so does the
+    /// whitespace after it -- which is what `daw` removing a word and its gap
+    /// relies on.
+    fn viTextObject(self: *const LineEditor, inner: bool, kind: u8) ?struct { from: usize, to: usize } {
+        if (self.length == 0) return null;
+
+        if (kind == 'w' or kind == 'W') {
+            const at = @min(self.cursor, self.length - 1);
+            const on_word = isWordChar(self.buffer[at]);
+
+            var from = at;
+            while (from > 0 and isWordChar(self.buffer[from - 1]) == on_word) from -= 1;
+            var to = at + 1;
+            while (to < self.length and isWordChar(self.buffer[to]) == on_word) to += 1;
+
+            if (!inner and on_word) {
+                // `aw` takes the run of whitespace after the word, or the one
+                // before it when the word ends the line.
+                const end_of_word = to;
+                while (to < self.length and !isWordChar(self.buffer[to])) to += 1;
+                if (to == end_of_word) {
+                    while (from > 0 and !isWordChar(self.buffer[from - 1])) from -= 1;
+                }
+            }
+            return .{ .from = from, .to = to };
+        }
+
+        // Delimiter pairs. A quote is its own closer, so the pair is found by
+        // walking the line; brackets nest, so they are counted outwards.
+        const pair: ?struct { open: u8, close: u8 } = switch (kind) {
+            '"' => .{ .open = '"', .close = '"' },
+            '\'' => .{ .open = '\'', .close = '\'' },
+            '`' => .{ .open = '`', .close = '`' },
+            '(', ')', 'b' => .{ .open = '(', .close = ')' },
+            '[', ']' => .{ .open = '[', .close = ']' },
+            '{', '}', 'B' => .{ .open = '{', .close = '}' },
+            '<', '>' => .{ .open = '<', .close = '>' },
+            else => null,
+        };
+        const p = pair orelse return null;
+
+        var open_at: ?usize = null;
+        var close_at: ?usize = null;
+
+        if (p.open == p.close) {
+            // Take the pair the cursor falls inside, or the next one after it.
+            var i: usize = 0;
+            while (i < self.length) : (i += 1) {
+                if (self.buffer[i] != p.open) continue;
+                var j = i + 1;
+                while (j < self.length and self.buffer[j] != p.close) j += 1;
+                if (j >= self.length) break;
+                if (self.cursor <= j) {
+                    open_at = i;
+                    close_at = j;
+                    break;
+                }
+                i = j;
+            }
+        } else {
+            // Nearest unmatched opener at or before the cursor.
+            var depth: usize = 0;
+            var i = @min(self.cursor, self.length - 1) + 1;
+            while (i > 0) {
+                i -= 1;
+                const c = self.buffer[i];
+                if (c == p.close and i != self.cursor) {
+                    depth += 1;
+                } else if (c == p.open) {
+                    if (depth == 0) {
+                        open_at = i;
+                        break;
+                    }
+                    depth -= 1;
+                }
+            }
+            if (open_at) |start| {
+                var d: usize = 0;
+                var j = start + 1;
+                while (j < self.length) : (j += 1) {
+                    const c = self.buffer[j];
+                    if (c == p.open) {
+                        d += 1;
+                    } else if (c == p.close) {
+                        if (d == 0) {
+                            close_at = j;
+                            break;
+                        }
+                        d -= 1;
+                    }
+                }
+            }
+        }
+
+        const start = open_at orelse return null;
+        const end = close_at orelse return null;
+        if (inner) {
+            if (end <= start + 1) return null; // nothing between them
+            return .{ .from = start + 1, .to = end };
+        }
+        return .{ .from = start, .to = end + 1 };
+    }
+
+    /// Where a vi character search lands, or null if the character is not there.
+    ///
+    /// `f`/`t` look forward from after the cursor, `F`/`T` back from before it;
+    /// the `till` forms stop one short, beside the character rather than on it.
+    fn viFindTarget(self: *const LineEditor, kind: u8, target: u8) ?usize {
+        switch (kind) {
+            'f', 't' => {
+                var i = self.cursor + 1;
+                while (i < self.length) : (i += 1) {
+                    if (self.buffer[i] == target) {
+                        return if (kind == 't') (if (i == 0) null else i - 1) else i;
+                    }
+                }
+                return null;
+            },
+            'F', 'T' => {
+                if (self.cursor == 0) return null;
+                var i = self.cursor;
+                while (i > 0) {
+                    i -= 1;
+                    if (self.buffer[i] == target) {
+                        return if (kind == 'T') (if (i + 1 >= self.length) null else i + 1) else i;
+                    }
+                }
+                return null;
+            },
+            else => return null,
+        }
+    }
+
+    /// Run a character search, applying a pending operator over what it covers.
+    ///
+    /// Forward searches are inclusive, so `df,` takes the comma; backward ones
+    /// are exclusive, leaving the character under the cursor alone.
+    fn viRunFind(self: *LineEditor, kind: u8, target: u8) !void {
+        self.vi_last_find = .{ .kind = kind, .target = target };
+
+        const found = self.viFindTarget(kind, target) orelse {
+            // Vi does nothing at all when the character is not on the line, and
+            // a pending operator is dropped rather than applied to something
+            // arbitrary.
+            self.vi_pending_op = null;
+            self.vi_count = 0;
+            return;
+        };
+
+        if (self.vi_pending_op) |op| {
+            self.vi_pending_op = null;
+            const forward = kind == 'f' or kind == 't';
+            const from = @min(self.cursor, found);
+            var to = @max(self.cursor, found);
+            if (forward and to < self.length) to += 1;
+            try self.applyOperatorToRange(op, from, to);
+            return;
+        }
+
+        self.cursor = found;
+        try self.redrawLine();
+    }
+
     /// How far a motion reaches when an operator is applied over it.
     ///
     /// Vi distinguishes the two: `dw` stops before the next word, while `de`
@@ -1076,6 +1276,12 @@ pub const LineEditor = struct {
         if (extent == .inclusive and to < self.length) to += 1;
         if (from > self.length) from = self.length;
 
+        try self.applyOperatorToRange(op, from, to);
+    }
+
+    /// Apply an operator to an explicit range, as a text object or a character
+    /// search produces.
+    fn applyOperatorToRange(self: *LineEditor, op: u8, from: usize, to: usize) !void {
         switch (op) {
             'y' => {
                 if (to > from) self.pushToKillRing(self.buffer[from..@min(to, self.length)]);
@@ -1099,6 +1305,35 @@ pub const LineEditor = struct {
         // invokeWidget means it composes with whatever the motion keys are bound
         // to, so rebinding `w` also changes what `dw` covers.
         if (self.vi_pending_op) |op| {
+            // A character search is a motion whose target has not arrived yet,
+            // so it keeps the operator armed; viRunFind applies it once the
+            // target key comes in. `;` and `,` run straight away and consume it.
+            switch (binding.widget) {
+                .vi_find_char,
+                .vi_find_char_back,
+                .vi_till_char,
+                .vi_till_char_back,
+                .vi_repeat_find,
+                .vi_repeat_find_reverse,
+                => return self.invokeWidget(binding.widget, key),
+                else => {},
+            }
+
+            // With an operator waiting, `i` and `a` are the text-object scopes
+            // rather than ways into insert mode, which is what `diw` and `ca(`
+            // are asking for.
+            switch (binding.widget) {
+                .vi_insert => {
+                    self.vi_textobj_pending = 'i';
+                    return .cont;
+                },
+                .vi_add_next => {
+                    self.vi_textobj_pending = 'a';
+                    return .cont;
+                },
+                else => {},
+            }
+
             self.vi_pending_op = null;
 
             // The operator key again means the whole line: `dd`, `cc`, `yy`.
@@ -1261,6 +1496,30 @@ pub const LineEditor = struct {
             // Operators are resolved in invokeBinding, which has the pending
             // state; reaching here means one was invoked directly.
             .vi_delete, .vi_change, .vi_yank => self.vi_pending_op = operatorKey(widget),
+
+            // A character search needs the key that follows it, so it arms the
+            // pending state and the dispatcher feeds the next byte in.
+            .vi_find_char => self.vi_find_pending = 'f',
+            .vi_find_char_back => self.vi_find_pending = 'F',
+            .vi_till_char => self.vi_find_pending = 't',
+            .vi_till_char_back => self.vi_find_pending = 'T',
+            .vi_repeat_find => {
+                if (self.vi_last_find) |last| try self.viRunFind(last.kind, last.target);
+            },
+            .vi_repeat_find_reverse => {
+                if (self.vi_last_find) |last| {
+                    const reversed: u8 = switch (last.kind) {
+                        'f' => 'F',
+                        'F' => 'f',
+                        't' => 'T',
+                        'T' => 't',
+                        else => last.kind,
+                    };
+                    try self.viRunFind(reversed, last.target);
+                    // `,` does not become the search that `;` repeats.
+                    self.vi_last_find = .{ .kind = last.kind, .target = last.target };
+                }
+            },
 
             .vi_cmd_mode => {
                 self.viEnterNormalMode();
@@ -1437,6 +1696,8 @@ pub const LineEditor = struct {
         self.escape_seq.clear();
         self.in_escape = false;
         self.idle_polls = 0;
+        self.vi_find_pending = null;
+        self.vi_textobj_pending = null;
 
         while (true) {
             // Check for window resize (SIGWINCH)
@@ -5193,4 +5454,261 @@ test "vi w lands on the next word, not the end of this one" {
     try std.testing.expectEqual(@as(usize, 6), editor.cursor);
     _ = try editor.feedKeys("w");
     try std.testing.expectEqual(@as(usize, 11), editor.cursor);
+}
+
+test "vi f moves to the character" {
+    var sink: std.ArrayList(u8) = .empty;
+    defer sink.deinit(std.testing.allocator);
+    var maps = keymap.KeymapSet.init();
+    defer maps.deinit(std.testing.allocator);
+    var editor = viEditor(&sink, &maps, "alpha, beta, gamma");
+    defer editor.deinit();
+
+    _ = try editor.feedKeys("f,");
+    try std.testing.expectEqual(@as(usize, 5), editor.cursor);
+    // `t` stops one short of it.
+    _ = try editor.feedKeys("t,");
+    try std.testing.expectEqual(@as(usize, 10), editor.cursor);
+}
+
+test "vi df deletes through the character" {
+    var sink: std.ArrayList(u8) = .empty;
+    defer sink.deinit(std.testing.allocator);
+    var maps = keymap.KeymapSet.init();
+    defer maps.deinit(std.testing.allocator);
+    var editor = viEditor(&sink, &maps, "alpha, beta");
+    defer editor.deinit();
+
+    _ = try editor.feedKeys("df,");
+    try std.testing.expectEqualStrings(" beta", editor.buffer[0..editor.length]);
+}
+
+test "vi dt stops before the character" {
+    var sink: std.ArrayList(u8) = .empty;
+    defer sink.deinit(std.testing.allocator);
+    var maps = keymap.KeymapSet.init();
+    defer maps.deinit(std.testing.allocator);
+    var editor = viEditor(&sink, &maps, "alpha, beta");
+    defer editor.deinit();
+
+    _ = try editor.feedKeys("dt,");
+    try std.testing.expectEqualStrings(", beta", editor.buffer[0..editor.length]);
+}
+
+test "vi F and T search backwards" {
+    var sink: std.ArrayList(u8) = .empty;
+    defer sink.deinit(std.testing.allocator);
+    var maps = keymap.KeymapSet.init();
+    defer maps.deinit(std.testing.allocator);
+    var editor = viEditor(&sink, &maps, "alpha, beta");
+    defer editor.deinit();
+
+    editor.cursor = 10;
+    _ = try editor.feedKeys("F,");
+    try std.testing.expectEqual(@as(usize, 5), editor.cursor);
+
+    editor.cursor = 10;
+    _ = try editor.feedKeys("T,");
+    try std.testing.expectEqual(@as(usize, 6), editor.cursor);
+}
+
+test "vi dF deletes back to the character, keeping the one under the cursor" {
+    var sink: std.ArrayList(u8) = .empty;
+    defer sink.deinit(std.testing.allocator);
+    var maps = keymap.KeymapSet.init();
+    defer maps.deinit(std.testing.allocator);
+    var editor = viEditor(&sink, &maps, "alpha, beta");
+    defer editor.deinit();
+
+    editor.cursor = 7; // the 'b' of beta
+    _ = try editor.feedKeys("dF,");
+    try std.testing.expectEqualStrings("alphabeta", editor.buffer[0..editor.length]);
+}
+
+test "vi a search for a character that is absent does nothing" {
+    var sink: std.ArrayList(u8) = .empty;
+    defer sink.deinit(std.testing.allocator);
+    var maps = keymap.KeymapSet.init();
+    defer maps.deinit(std.testing.allocator);
+    var editor = viEditor(&sink, &maps, "alpha beta");
+    defer editor.deinit();
+
+    _ = try editor.feedKeys("dfZ");
+    try std.testing.expectEqualStrings("alpha beta", editor.buffer[0..editor.length]);
+    try std.testing.expectEqual(@as(usize, 0), editor.cursor);
+    // The operator is dropped rather than left armed.
+    try std.testing.expectEqual(@as(?u8, null), editor.vi_pending_op);
+}
+
+test "vi semicolon repeats a search and comma reverses it" {
+    var sink: std.ArrayList(u8) = .empty;
+    defer sink.deinit(std.testing.allocator);
+    var maps = keymap.KeymapSet.init();
+    defer maps.deinit(std.testing.allocator);
+    var editor = viEditor(&sink, &maps, "a,b,c,d");
+    defer editor.deinit();
+
+    _ = try editor.feedKeys("f,");
+    try std.testing.expectEqual(@as(usize, 1), editor.cursor);
+    _ = try editor.feedKeys(";");
+    try std.testing.expectEqual(@as(usize, 3), editor.cursor);
+    _ = try editor.feedKeys(";");
+    try std.testing.expectEqual(@as(usize, 5), editor.cursor);
+    // `,` goes the other way, and does not replace what `;` repeats.
+    _ = try editor.feedKeys(",");
+    try std.testing.expectEqual(@as(usize, 3), editor.cursor);
+    _ = try editor.feedKeys(";");
+    try std.testing.expectEqual(@as(usize, 5), editor.cursor);
+}
+
+test "vi a find target is never read as a key binding" {
+    var sink: std.ArrayList(u8) = .empty;
+    defer sink.deinit(std.testing.allocator);
+    var maps = keymap.KeymapSet.init();
+    defer maps.deinit(std.testing.allocator);
+    var editor = viEditor(&sink, &maps, "find the x here");
+    defer editor.deinit();
+
+    // `d` and `x` are both bound in vicmd; as a search target they are data.
+    _ = try editor.feedKeys("fx");
+    try std.testing.expectEqual(@as(usize, 9), editor.cursor);
+    try std.testing.expectEqualStrings("find the x here", editor.buffer[0..editor.length]);
+}
+
+test "vi diw deletes the word under the cursor" {
+    var sink: std.ArrayList(u8) = .empty;
+    defer sink.deinit(std.testing.allocator);
+    var maps = keymap.KeymapSet.init();
+    defer maps.deinit(std.testing.allocator);
+    var editor = viEditor(&sink, &maps, "alpha beta gamma");
+    defer editor.deinit();
+
+    editor.cursor = 8; // inside "beta"
+    _ = try editor.feedKeys("diw");
+    try std.testing.expectEqualStrings("alpha  gamma", editor.buffer[0..editor.length]);
+}
+
+test "vi daw takes the word and the space after it" {
+    var sink: std.ArrayList(u8) = .empty;
+    defer sink.deinit(std.testing.allocator);
+    var maps = keymap.KeymapSet.init();
+    defer maps.deinit(std.testing.allocator);
+    var editor = viEditor(&sink, &maps, "alpha beta gamma");
+    defer editor.deinit();
+
+    editor.cursor = 8;
+    _ = try editor.feedKeys("daw");
+    try std.testing.expectEqualStrings("alpha gamma", editor.buffer[0..editor.length]);
+}
+
+test "vi daw on the last word takes the space before it" {
+    var sink: std.ArrayList(u8) = .empty;
+    defer sink.deinit(std.testing.allocator);
+    var maps = keymap.KeymapSet.init();
+    defer maps.deinit(std.testing.allocator);
+    var editor = viEditor(&sink, &maps, "alpha beta");
+    defer editor.deinit();
+
+    editor.cursor = 7;
+    _ = try editor.feedKeys("daw");
+    try std.testing.expectEqualStrings("alpha", editor.buffer[0..editor.length]);
+}
+
+test "vi ci quote replaces what is inside the quotes" {
+    var sink: std.ArrayList(u8) = .empty;
+    defer sink.deinit(std.testing.allocator);
+    var maps = keymap.KeymapSet.init();
+    defer maps.deinit(std.testing.allocator);
+    var editor = viEditor(&sink, &maps, "echo \"old text\" done");
+    defer editor.deinit();
+
+    editor.cursor = 9; // inside the quotes
+    _ = try editor.feedKeys("ci\"");
+    try std.testing.expectEqualStrings("echo \"\" done", editor.buffer[0..editor.length]);
+    try std.testing.expectEqual(ViMode.insert, editor.vi_mode);
+}
+
+test "vi da quote takes the quotes too" {
+    var sink: std.ArrayList(u8) = .empty;
+    defer sink.deinit(std.testing.allocator);
+    var maps = keymap.KeymapSet.init();
+    defer maps.deinit(std.testing.allocator);
+    var editor = viEditor(&sink, &maps, "echo \"gone\" stays");
+    defer editor.deinit();
+
+    editor.cursor = 7;
+    _ = try editor.feedKeys("da\"");
+    try std.testing.expectEqualStrings("echo  stays", editor.buffer[0..editor.length]);
+}
+
+test "vi di paren works from inside nested brackets" {
+    var sink: std.ArrayList(u8) = .empty;
+    defer sink.deinit(std.testing.allocator);
+    var maps = keymap.KeymapSet.init();
+    defer maps.deinit(std.testing.allocator);
+    var editor = viEditor(&sink, &maps, "f(a, g(b), c)");
+    defer editor.deinit();
+
+    editor.cursor = 7; // the 'b', inside the inner pair
+    _ = try editor.feedKeys("di(");
+    try std.testing.expectEqualStrings("f(a, g(), c)", editor.buffer[0..editor.length]);
+}
+
+test "vi da bracket takes the brackets" {
+    var sink: std.ArrayList(u8) = .empty;
+    defer sink.deinit(std.testing.allocator);
+    var maps = keymap.KeymapSet.init();
+    defer maps.deinit(std.testing.allocator);
+    var editor = viEditor(&sink, &maps, "keep [drop this] keep");
+    defer editor.deinit();
+
+    editor.cursor = 8;
+    _ = try editor.feedKeys("da[");
+    try std.testing.expectEqualStrings("keep  keep", editor.buffer[0..editor.length]);
+}
+
+test "vi yi quote copies without deleting" {
+    var sink: std.ArrayList(u8) = .empty;
+    defer sink.deinit(std.testing.allocator);
+    var maps = keymap.KeymapSet.init();
+    defer maps.deinit(std.testing.allocator);
+    var editor = viEditor(&sink, &maps, "x \"copy me\" y");
+    defer editor.deinit();
+
+    editor.cursor = 5;
+    _ = try editor.feedKeys("yi\"");
+    try std.testing.expectEqualStrings("x \"copy me\" y", editor.buffer[0..editor.length]);
+
+    // The inside of the quotes is on the kill ring.
+    editor.cursor = editor.length;
+    _ = try editor.invokeWidget(.yank, "\x19");
+    try std.testing.expectEqualStrings("x \"copy me\" ycopy me", editor.buffer[0..editor.length]);
+}
+
+test "vi a text object with no pair does nothing" {
+    var sink: std.ArrayList(u8) = .empty;
+    defer sink.deinit(std.testing.allocator);
+    var maps = keymap.KeymapSet.init();
+    defer maps.deinit(std.testing.allocator);
+    var editor = viEditor(&sink, &maps, "no brackets here");
+    defer editor.deinit();
+
+    _ = try editor.feedKeys("di(");
+    try std.testing.expectEqualStrings("no brackets here", editor.buffer[0..editor.length]);
+    try std.testing.expectEqual(@as(?u8, null), editor.vi_pending_op);
+}
+
+test "vi i still enters insert mode with no operator pending" {
+    var sink: std.ArrayList(u8) = .empty;
+    defer sink.deinit(std.testing.allocator);
+    var maps = keymap.KeymapSet.init();
+    defer maps.deinit(std.testing.allocator);
+    var editor = viEditor(&sink, &maps, "text");
+    defer editor.deinit();
+
+    // `i` is only a text-object scope while an operator waits; on its own it is
+    // still the way into insert mode.
+    _ = try editor.feedKeys("i");
+    try std.testing.expectEqual(ViMode.insert, editor.vi_mode);
+    try std.testing.expectEqual(@as(?u8, null), editor.vi_textobj_pending);
 }

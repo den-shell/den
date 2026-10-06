@@ -131,6 +131,16 @@ pub const Widget = enum(u8) {
     /// Vi's `$`: the last character of the line, not past it, so the cursor
     /// cannot sit where there is nothing.
     vi_end_of_line,
+    /// Vi's `f` `F` `t` `T`: each takes the next key as the character to look
+    /// for, rather than as a key of its own. The `till` forms stop beside the
+    /// character instead of on it.
+    vi_find_char,
+    vi_find_char_back,
+    vi_till_char,
+    vi_till_char_back,
+    /// `;` and `,`: do the last find again, forwards or the other way.
+    vi_repeat_find,
+    vi_repeat_find_reverse,
 
     // Vi mode transitions
     vi_cmd_mode,
@@ -251,6 +261,13 @@ pub fn resolveWidget(name: []const u8) Widget {
         .{ "clear-screen", .clear_screen },
         .{ "redisplay", .redisplay },
 
+        .{ "vi-find-next-char", .vi_find_char },
+        .{ "vi-find-prev-char", .vi_find_char_back },
+        .{ "vi-find-next-char-skip", .vi_till_char },
+        .{ "vi-find-prev-char-skip", .vi_till_char_back },
+        .{ "vi-repeat-find", .vi_repeat_find },
+        .{ "vi-rev-repeat-find", .vi_repeat_find_reverse },
+
         .{ "vi-delete", .vi_delete },
         .{ "vi-change", .vi_change },
         .{ "vi-yank", .vi_yank },
@@ -354,6 +371,12 @@ pub fn widgetName(w: Widget) []const u8 {
         .vi_change => "vi-change",
         .vi_yank => "vi-yank",
         .vi_end_of_line => "vi-end-of-line",
+        .vi_find_char => "vi-find-next-char",
+        .vi_find_char_back => "vi-find-prev-char",
+        .vi_till_char => "vi-find-next-char-skip",
+        .vi_till_char_back => "vi-find-prev-char-skip",
+        .vi_repeat_find => "vi-repeat-find",
+        .vi_repeat_find_reverse => "vi-rev-repeat-find",
         .digit_argument => "digit-argument",
         .vi_digit_or_beginning_of_line => "vi-digit-or-beginning-of-line",
         .vi_cmd_mode => "vi-cmd-mode",
@@ -621,6 +644,14 @@ const vicmd_defaults = buildKeymap(&[_]DefaultRow{
     .{ "y", .vi_yank },
     // Paste what an operator yanked or deleted.
     .{ "p", .yank },
+
+    // Character search. Each consumes the next key as its target.
+    .{ "f", .vi_find_char },
+    .{ "F", .vi_find_char_back },
+    .{ "t", .vi_till_char },
+    .{ "T", .vi_till_char_back },
+    .{ ";", .vi_repeat_find },
+    .{ ",", .vi_repeat_find_reverse },
     .{ "u", .undo },
 
     .{ "i", .vi_insert },

@@ -829,6 +829,9 @@ list. The common ones:
 | `vi-cmd-mode`, `vi-insert` | Switch vi modes |
 | `vi-delete`, `vi-change`, `vi-yank` | Vi operators: wait for a motion, then act on it |
 | `vi-end-of-line` | Vi's `$`: the last character, not past it |
+| `vi-find-next-char`, `vi-find-prev-char` | `f` and `F`: to the next/previous occurrence |
+| `vi-find-next-char-skip`, `vi-find-prev-char-skip` | `t` and `T`: stop beside it |
+| `vi-repeat-find`, `vi-rev-repeat-find` | `;` and `,` |
 | `digit-argument` | Accumulate a numeric prefix (vi `1`-`9`) |
 | `vi-digit-or-beginning-of-line` | vi `0`: a count digit, or the start of the line |
 | `undefined-key` | Beep |
@@ -860,8 +863,38 @@ the operator, as vi does.
 Motions are exclusive except `e` and `$`, which take the character they land on:
 `de` removes the last letter of the word, `dw` stops before the next one.
 
-Not implemented: text objects (`diw`, `ci"`) and the `f`/`t` character motions,
-so `df,` reports nothing rather than deleting to the comma.
+### Character searches
+
+`f<char>` moves to the next occurrence of a character and `F<char>` to the
+previous; `t` and `T` stop beside it rather than on it. `;` repeats the last
+search and `,` does it the other way without replacing what `;` repeats.
+
+They work as motions, so `df,` deletes through the next comma and `dt,` stops
+short of it. Forward searches are inclusive, backward ones exclusive, which is
+why `dF,` leaves the character under the cursor alone. A character that is not on
+the line does nothing at all, and drops any pending operator rather than applying
+it to something arbitrary.
+
+The key after `f` is the character to look for, never a binding of its own, so
+`fd` searches for a `d` rather than running `vi-delete`.
+
+### Text objects
+
+With an operator waiting, `i` selects the inside of something and `a` the whole
+of it including its delimiters:
+
+| Object | Covers |
+|--------|--------|
+| `iw` / `aw` | The word under the cursor; `aw` adds the whitespace after it, or before it at the end of a line |
+| `i"` `i'` ``i` `` | What sits between the quotes; the `a` forms take the quotes too |
+| `i(` `i[` `i{` `i<` | What sits between the brackets, counted outwards so this works from inside nesting. `ib` and `iB` are aliases for `(` and `{` |
+
+So `diw` deletes a word wherever the cursor is in it, `ci"` replaces a quoted
+string, and `da(` removes a parenthesised group with its parentheses. `i` and `a`
+only mean this while an operator is pending — on their own they are still the
+ways into insert mode.
+
+An object the cursor is not inside does nothing and drops the operator.
 
 Names den does not have — `universal-argument`, `vi-repeat-change` — are reported
 as unknown rather than bound to something that quietly does nothing.
@@ -880,7 +913,7 @@ Future line editing features planned:
 - Multiple cursors
 - `zle -N` user-defined widgets backed by shell functions
 - `universal-argument`, and counts honoured by more widgets
-- Vi text objects (`diw`, `ci"`) and the `f`/`t` character motions
+- Vi marks (`m`, backtick) and the `.` repeat
 - `yank-pop` and redo
 
 Stay tuned!
