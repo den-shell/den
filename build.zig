@@ -317,6 +317,9 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
     api_test_module.addImport("compat", compat_module);
+    // plugins/api.zig reaches src/shell.zig, which reads its version from
+    // build_options -- same reason expansion_test_module needs it below.
+    api_test_module.addOptions("build_options", build_options);
 
     const api_tests = b.addTest(.{
         .root_module = api_test_module,
