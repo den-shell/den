@@ -807,6 +807,14 @@ pub const Shell = struct {
         var autoload_iter = self.autoloads.keyIterator();
         while (autoload_iter.next()) |key| self.allocator.free(key.*);
         self.autoloads.deinit();
+
+        // A function definition left half-collected at exit still owns the lines
+        // read so far. Nothing released them, so `den -c 'f() ;'` -- which puts
+        // the shell into multiline mode waiting for a body that never comes --
+        // reported a leak on the way out. Found by a fuzz case.
+        for (self.multiline_buffer[0..self.multiline_count]) |maybe_line| {
+            if (maybe_line) |line| self.allocator.free(line);
+        }
         for (self.user_widgets.items) |w| {
             self.allocator.free(w.name);
             self.allocator.free(w.func);

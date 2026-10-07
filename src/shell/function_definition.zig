@@ -57,13 +57,13 @@ pub fn checkFunctionDefinitionStart(self: *Shell, trimmed: []const u8) !bool {
         return false;
     }
 
-    // This is a function definition - start collecting
-    // Count braces in this line
-    var brace_count: i32 = 0;
-    for (trimmed) |c| {
-        if (c == '{') brace_count += 1;
-        if (c == '}') brace_count -= 1;
-    }
+    // This is a function definition - start collecting.
+    //
+    // Counted ignoring quotes: the plain count saw the `}` in
+    // `f() { echo "}"; }` and came to -1, so neither arm below ran and the
+    // function was never defined at all -- `command not found` on the very next
+    // line. A fuzz case led here.
+    const brace_count: i32 = FunctionParser.braceDelta(trimmed);
 
     // Store the first line
     if (self.multiline_count >= self.multiline_buffer.len) {
@@ -79,15 +79,22 @@ pub fn checkFunctionDefinitionStart(self: *Shell, trimmed: []const u8) !bool {
         self.multiline_mode = .function_def;
         return true;
     } else if (brace_count == 0) {
-        // Check if we have an opening brace at all
-        if (std.mem.indexOf(u8, trimmed, "{")) |open_brace| {
-            // Complete single-line function like: function foo { echo hi; }
-            // Handle single-line function directly without parser
-            const close_brace = std.mem.lastIndexOf(u8, trimmed, "}") orelse {
-                try IO.eprint("Syntax error: missing closing brace\n", .{});
-                resetMultilineState(self);
-                return true;
-            };
+        // A matched `{`...`}` on this line, or this is not a definition we can
+        // read here.
+        //
+        // The braces used to be located with a search for the first `{` and the
+        // last `}`, which assumes an order the text need not have. `f() ; echo
+        // hi; }{ f` balances to zero with the braces the wrong way round, so the
+        // body was sliced from 17 to 15 and den panicked; `f() ;` has no brace at
+        // all, and fell past both arms leaving the line it had just buffered
+        // behind, which the allocator reported as a leak. A fuzz case found
+        // both.
+        //
+        // The scan is the one the script parser uses, so a `}` inside a string
+        // does not count here either.
+        if (FunctionParser.braceSpan(trimmed)) |span| {
+            const open_brace = span.open;
+            const close_brace = span.close;
 
             // Extract function name
             var func_name: []const u8 = undefined;

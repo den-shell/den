@@ -352,7 +352,34 @@ pub const FunctionParser = struct {
     /// h's definition, and a `}` inside a string -- `g() { echo "}"; }` -- cut
     /// the body short. Quotes and backslash escapes are skipped, in the same
     /// shape as `isSingleLineDefinition`.
-    fn braceSpan(line: []const u8) ?struct { open: usize, close: usize } {
+    /// How far a line moves the brace nesting, ignoring braces inside quotes.
+    ///
+    /// The plain count a caller writes by hand sees a `}` in a string, so
+    /// `f() { echo "}"; }` looks like it closes one brace too many.
+    pub fn braceDelta(line: []const u8) i32 {
+        var delta: i32 = 0;
+        var in_sq = false;
+        var in_dq = false;
+        var i: usize = 0;
+
+        while (i < line.len) : (i += 1) {
+            const c = line[i];
+            if (c == '\\' and !in_sq and i + 1 < line.len) {
+                i += 1;
+                continue;
+            }
+            if (c == '\'' and !in_dq) {
+                in_sq = !in_sq;
+            } else if (c == '"' and !in_sq) {
+                in_dq = !in_dq;
+            } else if (!in_sq and !in_dq) {
+                if (c == '{') delta += 1 else if (c == '}') delta -= 1;
+            }
+        }
+        return delta;
+    }
+
+    pub fn braceSpan(line: []const u8) ?struct { open: usize, close: usize } {
         var depth: i32 = 0;
         var open_at: ?usize = null;
         var in_sq = false;
