@@ -452,6 +452,8 @@ pub const DenShellFixture = struct {
     temp_dir: TempDir,
     allocator: std.mem.Allocator,
     den_binary: []const u8,
+    /// Variables to set before each command, as `setEnv` recorded them.
+    env_vars: std.StringHashMap([]const u8),
 
     pub fn init(allocator: std.mem.Allocator) !DenShellFixture {
         const temp_dir = try TempDir.init(allocator);
@@ -463,12 +465,82 @@ pub const DenShellFixture = struct {
             .temp_dir = temp_dir,
             .allocator = allocator,
             .den_binary = den_binary,
+            .env_vars = std.StringHashMap([]const u8).init(allocator),
         };
     }
 
     pub fn deinit(self: *DenShellFixture) void {
+        var it = self.env_vars.iterator();
+        while (it.next()) |entry| {
+            self.allocator.free(entry.key_ptr.*);
+            self.allocator.free(entry.value_ptr.*);
+        }
+        self.env_vars.deinit();
         self.allocator.free(self.den_binary);
         self.temp_dir.deinit();
+    }
+
+    /// Set a variable for every command this fixture runs afterwards.
+    ///
+    /// Exported by the shell rather than through the spawn's environment block,
+    /// which replaces the environment wholesale -- den would lose PATH and HOME
+    /// and behave nothing like it does in use.
+    pub fn setEnv(self: *DenShellFixture, key: []const u8, value: []const u8) !void {
+        const key_copy = try self.allocator.dupe(u8, key);
+        errdefer self.allocator.free(key_copy);
+        const value_copy = try self.allocator.dupe(u8, value);
+        errdefer self.allocator.free(value_copy);
+
+        if (self.env_vars.fetchRemove(key)) |old| {
+            self.allocator.free(old.key);
+            self.allocator.free(old.value);
+        }
+        try self.env_vars.put(key_copy, value_copy);
+    }
+
+    pub fn getEnv(self: *DenShellFixture, key: []const u8) ?[]const u8 {
+        return self.env_vars.get(key);
+    }
+
+    /// `export` statements for the recorded variables, to prefix a command with.
+    /// Empty when nothing was set. Caller frees.
+    ///
+    /// Values are single-quoted, so one holding `; echo oops` is data rather
+    /// than a second command -- which is exactly what some of these tests check.
+    fn envPrefix(self: *DenShellFixture) ![]u8 {
+        var out: std.ArrayList(u8) = .empty;
+        errdefer out.deinit(self.allocator);
+
+        var it = self.env_vars.iterator();
+        while (it.next()) |entry| {
+            try out.appendSlice(self.allocator, "export ");
+            try out.appendSlice(self.allocator, entry.key_ptr.*);
+            try out.appendSlice(self.allocator, "='");
+            for (entry.value_ptr.*) |c| {
+                // The only character that cannot appear inside single quotes.
+                if (c == '\'') {
+                    try out.appendSlice(self.allocator, "'\\''");
+                } else {
+                    try out.append(self.allocator, c);
+                }
+            }
+            try out.appendSlice(self.allocator, "'; ");
+        }
+        return out.toOwnedSlice(self.allocator);
+    }
+
+    /// Create an executable script in the temp directory. Caller frees the path.
+    pub fn createScript(self: *DenShellFixture, name: []const u8, content: []const u8) ![]const u8 {
+        const script_path = try self.temp_dir.createFile(name, content);
+
+        const file = try std.Io.Dir.cwd().openFile(io, script_path, .{});
+        defer file.close(io);
+
+        if (@import("builtin").os.tag != .windows) {
+            try file.setPermissions(io, std.Io.File.Permissions.fromMode(0o755));
+        }
+
+        return script_path;
     }
 
     /// Create a file in the temp directory
@@ -483,12 +555,14 @@ pub const DenShellFixture = struct {
 
     /// Execute a command using the Den shell and capture output
     /// The command is run from the temp directory
+    /// Run a command with the temp directory as the working directory.
+    ///
+    /// den is *started* there rather than being asked to `cd ... && ` first. The
+    /// prefix changed what the command meant: an empty command became a dangling
+    /// `&&` and failed to parse, and anything whose first word mattered was no
+    /// longer first. Starting in the directory has neither problem.
     pub fn exec(self: *DenShellFixture, command: []const u8) !Result {
-        // Build command that changes to temp dir first, then runs the command
-        const full_command = try std.fmt.allocPrint(self.allocator, "cd {s} && {s}", .{ self.temp_dir.path, command });
-        defer self.allocator.free(full_command);
-
-        return self.spawnDen(&[_][]const u8{ self.den_binary, "-c", full_command }, null);
+        return self.execVerbatim(command, default_timeout_ms);
     }
 
     /// Absolute path to the den under test. Caller frees.
@@ -519,8 +593,21 @@ pub const DenShellFixture = struct {
         const abs_binary = try self.absBinary();
         defer self.allocator.free(abs_binary);
 
+        const prefix = try self.envPrefix();
+        defer self.allocator.free(prefix);
+
+        if (prefix.len == 0) {
+            return self.spawnDenTimeout(
+                &[_][]const u8{ abs_binary, "-c", command },
+                self.temp_dir.path,
+                budget_ms,
+            );
+        }
+
+        const full_command = try std.fmt.allocPrint(self.allocator, "{s}{s}", .{ prefix, command });
+        defer self.allocator.free(full_command);
         return self.spawnDenTimeout(
-            &[_][]const u8{ abs_binary, "-c", command },
+            &[_][]const u8{ abs_binary, "-c", full_command },
             self.temp_dir.path,
             budget_ms,
         );
@@ -535,7 +622,15 @@ pub const DenShellFixture = struct {
     }
 
     pub fn execDirect(self: *DenShellFixture, command: []const u8) !Result {
-        return self.spawnDen(&[_][]const u8{ self.den_binary, "-c", command }, null);
+        const prefix = try self.envPrefix();
+        defer self.allocator.free(prefix);
+        if (prefix.len == 0) {
+            return self.spawnDen(&[_][]const u8{ self.den_binary, "-c", command }, null);
+        }
+
+        const full_command = try std.fmt.allocPrint(self.allocator, "{s}{s}", .{ prefix, command });
+        defer self.allocator.free(full_command);
+        return self.spawnDen(&[_][]const u8{ self.den_binary, "-c", full_command }, null);
     }
 
     /// Spawn den and capture its output.
