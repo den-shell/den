@@ -1,4 +1,5 @@
 const std = @import("std");
+const builtin_names = @import("builtin_names.zig");
 
 /// Syntax highlighting for shell commands
 pub const SyntaxHighlighter = struct {
@@ -26,20 +27,10 @@ pub const SyntaxHighlighter = struct {
         message: []const u8,
     };
 
-    // Shell builtins for highlighting
-    const builtins = [_][]const u8{
-        "cd",   "pwd",    "echo",   "exit",    "env",     "export",   "set",     "unset",
-        "true", "false",  "test",   "[",       "alias",   "unalias",  "which",   "type",
-        "help", "read",   "printf", "source",  ".",       "history",  "pushd",   "popd",
-        "dirs", "eval",   "exec",   "command", "builtin", "jobs",     "fg",      "bg",
-        "wait", "disown", "kill",   "trap",    "times",   "umask",    "getopts", "clear",
-        "time", "hash",   "yes",    "reload",  "watch",   "tree",     "grep",    "find",
-        "calc", "json",   "ls",     "seq",     "date",    "parallel", "http",    "base64",
-        "uuid",   "bindkey", "zle",     "zstyle",
-        // zsh startup preamble
-        "autoload",     "compinit", "bashcompinit", "compdef",
-        "zmodload",     "emulate",  "is-at-least",  "add-zsh-hook",
-    };
+    // Shell builtins for highlighting, from the one canonical list: this was a
+    // hand-kept copy holding 68 of the 163 names, so most builtins painted as
+    // unknown commands.
+    const builtins = builtin_names.all;
 
     // Shell keywords
     const keywords = [_][]const u8{
@@ -817,4 +808,20 @@ test "highlighting only adds colors, never characters" {
         defer allocator.free(plain2);
         try std.testing.expectEqualStrings(line, plain2);
     }
+}
+
+test "a builtin with no binary on PATH still highlights" {
+    const allocator = std.testing.allocator;
+    var highlighter = SyntaxHighlighter.init(allocator);
+
+    // `zstyle` exists nowhere on disk, so before the lists were joined it was
+    // painted as an unknown command.
+    const output = try highlighter.highlight("zstyle ':completion:*' menu select");
+    defer allocator.free(output);
+
+    const plain = try highlighter.highlight("zzzznotacommand arg");
+    defer allocator.free(plain);
+
+    // Both get colour; what matters is that they are not coloured the same way.
+    try std.testing.expect(!std.mem.eql(u8, output[0..@min(8, output.len)], plain[0..@min(8, plain.len)]));
 }

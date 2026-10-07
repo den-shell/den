@@ -5,6 +5,7 @@
 //! - compgen: generate possible completions
 
 const std = @import("std");
+const builtin_names = @import("../utils/builtin_names.zig");
 const IO = @import("../utils/io.zig").IO;
 const types = @import("../types/mod.zig");
 const Completion = @import("../utils/completion.zig").Completion;
@@ -349,18 +350,9 @@ pub fn builtinCompgen(shell: *Shell, cmd: *types.ParsedCommand) !void {
             }
         },
         .builtin => {
-            const builtins_list = [_][]const u8{
-                "cd",     "pwd",     "echo",     "exit",      "export",  "set",     "unset",
-                "alias",  "unalias", "history",  "type",      "which",   "source",  "read",
-                "test",   "pushd",   "popd",     "dirs",      "printf",  "true",    "false",
-                "help",   "eval",    "shift",    "time",      "umask",   "clear",   "hash",
-                "return", "break",   "continue", "local",     "declare", "typeset", "readonly",
-                "let",    "shopt",   "mapfile",  "readarray", "caller",  "compgen", "complete",
-                "exec",   "wait",    "kill",     "disown",    "getopts", "times",   "builtin",
-                "jobs",   "fg",      "bg",       "bindkey",   "zle",     "zstyle",
-                "autoload",     "compinit", "bashcompinit", "compdef",
-                "zmodload",     "emulate",  "is-at-least",  "add-zsh-hook",
-            };
+            // The canonical list rather than another copy, which held 63 of
+            // the 163 names.
+            const builtins_list = builtin_names.all;
             for (builtins_list) |b| {
                 if (prefix.len == 0 or std.mem.startsWith(u8, b, prefix)) {
                     try IO.print("{s}\n", .{b});

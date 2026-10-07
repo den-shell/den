@@ -28,6 +28,7 @@ const Shell = @import("../shell.zig").Shell;
 const autoload_builtin = @import("../shell/autoload_builtin.zig");
 const variable_handling = @import("../shell/variable_handling.zig");
 const platform = @import("../utils/platform.zig");
+const builtin_names = @import("../utils/builtin_names.zig");
 const shell_mod_for_arrays = variable_handling;
 
 // Plugin hook types for command_not_found hook
@@ -1121,39 +1122,17 @@ pub const Executor = struct {
     }
 
     /// Check if a command name is a shell builtin.
+    ///
+    /// Differs from `isBuiltinStatic` only in also accepting a loadable builtin,
+    /// which needs the shell. It used to carry a third copy of the name list,
+    /// which is how `setopt` in a chain once resolved as a builtin here and then
+    /// reported "not implemented".
     fn isBuiltin(self: *Executor, name: []const u8) bool {
-        const builtin_names = [_][]const u8{
-            "cd",        "pwd",      "echo",      "exit",       "env",      "export",    "set",       "unset",
-            "true",      "false",    "test",      "[",          "[[",       "alias",     "unalias",   "which",
-            "type",      "help",     "read",      "printf",     "source",   ".",         "history",   "pushd",
-            "popd",      "dirs",     "eval",      "exec",       "command",  "builtin",   "jobs",      "fg",
-            "bg",        "wait",     "disown",    "kill",       "trap",     "times",     "umask",     "getopts",
-            "clear",     "time",     "timeout",   "hash",       "yes",      "reload",    "watch",     "tree",
-            "grep",      "find",     "calc",      "json",       "ls",       "seq",       "date",      "parallel",
-            "http",      "base64",   "uuid",      "localip",    "shrug",    "web",       "ip",        "return",
-            "local",     "copyssh",  "reloaddns", "emptytrash", "wip",      "bookmark",  "code",      "pstorm",
-            "show",      "hide",     "ft",        "sys-stats",  "netstats", "net-check", "log-tail",  "proc-monitor",
-            "log-parse", "dotfiles", "library",   "hook",       "ifind",    "coproc",    "break",     "continue",
-            ":",         "declare",  "typeset",   "let",        "shift",
-            // Nushell-inspired structured data commands
-               "from",      "to",        "table",
-            "grid",      "where",    "select",    "reject",     "get",      "first",     "last",      "skip",
-            "take",      "length",   "flatten",   "uniq",       "sort-by",  "reverse",   "transpose", "group-by",
-            "enumerate", "wrap",     "columns",   "values",     "headers",  "compact",   "rename",    "append",
-            "prepend",   "str",      "path",      "math",       "into",     "encode",    "decode",    "detect",
-            "bench",     "seq-char", "generate",  "par-each",   "explore",  "use",
-        };
-        for (builtin_names) |builtin_name| {
-            if (std.mem.eql(u8, name, builtin_name)) return true;
-        }
-        // Check for loadable builtins
+        if (builtin_names.contains(name)) return true;
         if (self.shell) |shell| {
             if (shell.loadable_builtins.isEnabled(name)) return true;
         }
-        // Shell-level builtins are implemented on the Shell and listed there;
-        // executeBuiltin hands them over. Asking rather than repeating the list
-        // keeps the two from drifting apart.
-        return Shell.isShellBuiltinName(name);
+        return false;
     }
 
     /// Get a BuiltinContext for calling extracted builtins
@@ -1177,33 +1156,11 @@ pub const Executor = struct {
 
     /// Static wrapper for isBuiltin callback
     fn isBuiltinStatic(name: []const u8) bool {
-        // Check against all known builtin names
-        const builtin_names = [_][]const u8{
-            "echo",    "pwd",      "cd",        "env",       "export",     "set",      "unset",        "true",      "false",
-            "test",    "[",        "[[",        "which",     "type",       "help",     "alias",        "unalias",   "read",
-            "printf",  "source",   ".",         "history",   "pushd",      "popd",     "dirs",         "eval",      "exec",
-            "command", "builtin",  "jobs",      "fg",        "bg",         "wait",     "disown",       "kill",      "trap",
-            "times",   "umask",    "getopts",   "clear",     "time",       "timeout",  "hash",         "yes",       "reload",
-            "watch",   "tree",     "grep",      "find",      "ft",         "calc",     "json",         "ls",        "seq",
-            "date",    "parallel", "http",      "base64",    "uuid",       "localip",  "ip",           "shrug",     "web",
-            "return",  "local",    "copyssh",   "reloaddns", "emptytrash", "wip",      "bookmark",     "code",      "pstorm",
-            "show",    "hide",     "sys-stats", "netstats",  "net-check",  "log-tail", "proc-monitor", "log-parse", "dotfiles",
-            "library", "hook",     "ifind",     "coproc",    "exit",       ":",        "declare",      "typeset",   "let",
-            "shift",   "break",    "continue",
-            // Nushell-inspired structured data commands
-             "from",      "to",         "table",    "grid",         "where",     "select",
-            "reject",  "get",      "first",     "last",      "skip",       "take",     "length",       "flatten",   "uniq",
-            "sort-by", "reverse",  "transpose", "group-by",  "enumerate",  "wrap",     "columns",      "values",    "headers",
-            "compact", "rename",   "append",    "prepend",   "str",        "path",     "math",         "into",      "encode",
-            "decode",  "detect",   "bench",     "seq-char",  "generate",   "par-each", "explore",      "use",
-        };
-        for (builtin_names) |b| {
-            if (std.mem.eql(u8, name, b)) return true;
-        }
-        // Shell-level builtins are implemented on the Shell and listed there;
-        // executeBuiltin hands them over. Asking rather than repeating the list
-        // keeps the two from drifting apart.
-        return Shell.isShellBuiltinName(name);
+        // One list for every builtin, shell-level ones included. This held its
+        // own ~134 names and then asked the Shell about the rest; both halves are
+        // in `builtin_names` now, and `builtin_dispatch` has a test keeping its
+        // routing list a subset of it.
+        return builtin_names.contains(name);
     }
 
     /// Check if a command name is a control flow keyword (while, for, if, until, case, select)

@@ -4,6 +4,7 @@
 //! for managing loadable shell builtins.
 
 const std = @import("std");
+const all_builtin_names = @import("../utils/builtin_names.zig");
 const IO = @import("../utils/io.zig").IO;
 const types = @import("../types/mod.zig");
 
@@ -88,22 +89,11 @@ pub fn builtinEnable(self: *Shell, cmd: *types.ParsedCommand) !void {
     // If -a specified, list all builtins
     if (list_all) {
         // List built-in commands
-        const builtin_names = [_][]const u8{
-            "cd",       "pwd",    "echo",    "exit",      "env",      "export",
-            "set",      "unset",  "true",    "false",     "test",     "[",
-            "[[",       "alias",  "unalias", "which",     "type",     "help",
-            "read",     "printf", "source",  ".",         "history",  "pushd",
-            "popd",     "dirs",   "eval",    "exec",      "command",  "builtin",
-            "jobs",     "fg",     "bg",      "wait",      "disown",   "kill",
-            "trap",     "times",  "umask",   "getopts",   "clear",    "time",
-            "hash",     "return", "local",   "declare",   "readonly", "typeset",
-            "let",      "shopt",  "mapfile", "readarray", "caller",   "compgen",
-            "complete", "enable",  "bindkey", "zle",       "zstyle",
-            "autoload",     "compinit", "bashcompinit", "compdef",
-            "zmodload",     "emulate",  "is-at-least",  "add-zsh-hook",
-        };
+        // The canonical list rather than another copy, which held 67 of the
+        // 163 names.
+        const names = all_builtin_names.all;
         try IO.print("Built-in commands:\n", .{});
-        for (builtin_names) |name| {
+        for (names) |name| {
             try IO.print("  {s}\n", .{name});
         }
 
