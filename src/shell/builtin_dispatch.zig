@@ -2,6 +2,7 @@
 //! Routes shell builtin commands to their implementations
 
 const std = @import("std");
+const all_builtin_names = @import("../utils/builtin_names.zig");
 const types = @import("../types/mod.zig");
 const Shell = @import("../shell.zig").Shell;
 const shell_mod = @import("mod.zig");
@@ -15,57 +16,62 @@ pub const DispatchResult = enum {
     not_builtin,
 };
 
+/// Shell-level builtins: the ones implemented on the Shell rather than in the
+/// executor, which `dispatchBuiltin` routes. Module scope so the test at the
+/// bottom can check it against the canonical name list.
+const shell_builtins = [_][]const u8{
+    // Job control
+    "jobs",      "fg",       "bg",       "wait",     "disown",
+    // History and completion
+    "history",   "complete", "compgen",
+    // Alias management
+     "alias",    "unalias",
+    // Command type inspection
+    "type",      "which",
+    // Source/eval/command
+       "source",   ".",        "eval",
+    "command",   "builtin",
+    // I/O builtins
+     "read",     "printf",   "mapfile",
+    "readarray",
+    // Test/conditionals
+    "test",     "[",        "[[",
+    // Directory stack
+          "pushd",
+    "popd",      "dirs",
+    // Trivial builtins
+        "true",     "false",    ":",
+    // Utility builtins
+    "sleep",     "help",     "clear",
+    // Path utilities
+       "basename", "dirname",
+    "realpath",
+    // System info
+     "uname",    "whoami",
+    // Control flow
+      "return",   "break",
+    "continue",  "shift",
+    // Variable declaration
+       "local",    "declare",  "readonly",
+    "typeset",   "let",
+    // Process control
+         "exec",     "kill",
+    // Misc
+        "times",
+    "time",      "umask",    "hash",     "shopt",    "caller",
+    "enable",    "setopt",   "unsetopt", "ai",       "wasm",
+    // Line editing
+    "bindkey",   "zle",      "zstyle",
+    // Hooks
+    "add-zsh-hook",
+    // zsh startup preamble
+    "compinit",   "bashcompinit", "compdef",
+    "zmodload",   "emulate",      "is-at-least",  "autoload",
+};
+
 /// Check if a command name is a shell-level builtin (handled by dispatchBuiltin)
 pub fn isShellBuiltin(name: []const u8) bool {
-    const shell_builtins = [_][]const u8{
-        // Job control
-        "jobs",      "fg",       "bg",       "wait",     "disown",
-        // History and completion
-        "history",   "complete", "compgen",
-        // Alias management
-         "alias",    "unalias",
-        // Command type inspection
-        "type",      "which",
-        // Source/eval/command
-           "source",   ".",        "eval",
-        "command",   "builtin",
-        // I/O builtins
-         "read",     "printf",   "mapfile",
-        "readarray",
-        // Test/conditionals
-        "test",     "[",        "[[",
-        // Directory stack
-              "pushd",
-        "popd",      "dirs",
-        // Trivial builtins
-            "true",     "false",    ":",
-        // Utility builtins
-        "sleep",     "help",     "clear",
-        // Path utilities
-           "basename", "dirname",
-        "realpath",
-        // System info
-         "uname",    "whoami",
-        // Control flow
-          "return",   "break",
-        "continue",  "shift",
-        // Variable declaration
-           "local",    "declare",  "readonly",
-        "typeset",   "let",
-        // Process control
-             "exec",     "kill",
-        // Misc
-            "times",
-        "time",      "umask",    "hash",     "shopt",    "caller",
-        "enable",    "setopt",   "unsetopt", "ai",       "wasm",
-        // Line editing
-        "bindkey",   "zle",      "zstyle",
-        // Hooks
-        "add-zsh-hook",
-        // zsh startup preamble
-        "compinit",   "bashcompinit", "compdef",
-        "zmodload",   "emulate",      "is-at-least",  "autoload",
-    };
+
     for (shell_builtins) |b| {
         if (std.mem.eql(u8, name, b)) return true;
     }

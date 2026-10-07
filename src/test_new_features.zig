@@ -8,6 +8,7 @@ test {
     _ = @import("compat/bindkey.zig"); // zsh bindkey key-sequence notation
     _ = @import("compat/zstyle.zig"); // zsh zstyle database
     _ = @import("compat/version.zig"); // version comparison for is-at-least
+    _ = @import("utils/builtin_names.zig"); // the canonical builtin name list
     _ = @import("ai/completion.zig"); // AI-assisted completions
     _ = @import("net/session.zig"); // distributed shell sessions
     _ = @import("plugins/wasm.zig"); // WebAssembly plugin host
