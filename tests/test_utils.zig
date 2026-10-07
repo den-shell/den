@@ -400,10 +400,47 @@ test "ShellFixture environment variables" {
 pub const DenShellFixture = struct {
     /// Captured output of one den run. Named rather than anonymous so the
     /// several entry points share one type.
+    /// Kills a child that outstays its welcome, so a test cannot hang the suite.
+    ///
+    /// Signals from a thread rather than calling `Child.kill`, which clears the
+    /// struct the main thread is still reading from. The `done` flag is what
+    /// stops it killing an unrelated process that later reuses the pid.
+    const Watchdog = struct {
+        pid: std.posix.pid_t,
+        budget_ms: u64,
+        done: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
+        fired: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
+
+        fn run(self: *Watchdog) void {
+            // Short steps: the main thread joins this as soon as the child
+            // exits, so the step is added to every single run.
+            const step_ms: u64 = 2;
+            var waited: u64 = 0;
+            while (waited < self.budget_ms) : (waited += step_ms) {
+                if (self.done.load(.acquire)) return;
+                std.Io.sleep(
+                    io,
+                    std.Io.Duration.fromNanoseconds(@as(i96, step_ms) * std.time.ns_per_ms),
+                    .awake,
+                ) catch {};
+            }
+            if (self.done.load(.acquire)) return;
+            self.fired.store(true, .release);
+            std.posix.kill(self.pid, std.posix.SIG.KILL) catch {};
+        }
+    };
+
+    /// How long one den run may take before it is killed. Generous for an
+    /// ordinary test; the fuzzer passes something tighter.
+    pub const default_timeout_ms: u64 = 10_000;
+
     pub const Result = struct {
         stdout: []const u8,
         stderr: []const u8,
         exit_code: u8,
+        /// True when the run was killed for outlasting its budget, which is what
+        /// an infinite loop in den looks like from here.
+        timed_out: bool = false,
         /// True when den did not exit normally -- killed by a signal, which is
         /// what a crash looks like from here. `exit_code` cannot show this on
         /// its own, since an abnormal end is reported as 1 like any other
@@ -454,14 +491,39 @@ pub const DenShellFixture = struct {
         return self.spawnDen(&[_][]const u8{ self.den_binary, "-c", full_command }, null);
     }
 
-    pub fn execInTempDir(self: *DenShellFixture, command: []const u8) !Result {
+    /// Absolute path to the den under test. Caller frees.
+    ///
+    /// `den_binary` is relative to the project root, so anything that starts den
+    /// in another directory has to resolve it first or the spawn fails with
+    /// FileNotFound.
+    fn absBinary(self: *DenShellFixture) ![]u8 {
         var cwd_buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
         const cwd_len = try std.process.currentPath(io, &cwd_buf);
-        const abs_binary = try std.fmt.allocPrint(self.allocator, "{s}/zig-out/bin/den", .{cwd_buf[0..cwd_len]});
+        return std.fmt.allocPrint(self.allocator, "{s}/zig-out/bin/den", .{cwd_buf[0..cwd_len]});
+    }
+
+    pub fn execInTempDir(self: *DenShellFixture, command: []const u8) !Result {
+        const abs_binary = try self.absBinary();
         defer self.allocator.free(abs_binary);
 
         // Started in the temp directory so a den.jsonc there is read at startup.
         return self.spawnDen(&[_][]const u8{ abs_binary, "-c", command }, self.temp_dir.path);
+    }
+
+    /// Run a command verbatim, in the temp directory, with its own time budget.
+    ///
+    /// Unlike `exec` this prepends no `cd ... &&`: for a generated input, a
+    /// prefix would change what the whole line means, and an `&&` would
+    /// short-circuit away the very thing under test.
+    pub fn execVerbatim(self: *DenShellFixture, command: []const u8, budget_ms: u64) !Result {
+        const abs_binary = try self.absBinary();
+        defer self.allocator.free(abs_binary);
+
+        return self.spawnDenTimeout(
+            &[_][]const u8{ abs_binary, "-c", command },
+            self.temp_dir.path,
+            budget_ms,
+        );
     }
 
     /// Run a script file through den, the way `den script.sh` does.
@@ -481,6 +543,16 @@ pub const DenShellFixture = struct {
     /// `cwd` is the directory to start it in, for the cases where den must read
     /// a config file sitting beside the test; null leaves the parent's.
     fn spawnDen(self: *DenShellFixture, args: []const []const u8, cwd: ?[]const u8) !Result {
+        return self.spawnDenTimeout(args, cwd, default_timeout_ms);
+    }
+
+    /// As `spawnDen`, with an explicit time budget.
+    pub fn spawnDenTimeout(
+        self: *DenShellFixture,
+        args: []const []const u8,
+        cwd: ?[]const u8,
+        budget_ms: u64,
+    ) !Result {
 
         var child = try std.process.spawn(io, .{
             .argv = args,
@@ -493,6 +565,15 @@ pub const DenShellFixture = struct {
             .stdout = .pipe,
             .stderr = .pipe,
         });
+
+        // A hung child never closes its pipes, so the reads below would block
+        // forever. The watchdog kills it and the reads then see EOF.
+        var watchdog = Watchdog{ .pid = child.id.?, .budget_ms = budget_ms };
+        const watcher = std.Thread.spawn(.{}, Watchdog.run, .{&watchdog}) catch null;
+        defer if (watcher) |t| {
+            watchdog.done.store(true, .release);
+            t.join();
+        };
 
         // Read output using ArrayList for Zig 0.16 compatibility
         var stdout_list = std.ArrayList(u8).empty;
@@ -532,6 +613,7 @@ pub const DenShellFixture = struct {
             .stderr = stderr_owned,
             .exit_code = exit_code,
             .signaled = term != .exited,
+            .timed_out = watchdog.fired.load(.acquire),
         };
     }
 };
