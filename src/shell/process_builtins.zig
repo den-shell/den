@@ -5,6 +5,7 @@
 //! - kill: send signals to processes
 
 const std = @import("std");
+const signal_builtins = @import("../executor/builtins/signal_builtins.zig");
 const builtin = @import("builtin");
 const IO = @import("../utils/io.zig").IO;
 const types = @import("../types/mod.zig");
@@ -146,33 +147,38 @@ pub fn builtinKill(self: *Shell, cmd: *types.ParsedCommand) !void {
     var signal: std.posix.SIG = .TERM; // Default signal
     var arg_idx: usize = 0;
 
-    // Parse signal specification
+    // Parse signal specification.
+    //
+    // The names come from `signalFromName`, which `kill -l` already used, rather
+    // than a second shorter list: this one held six signals, so `kill -SEGV`
+    // was refused here while the same command inside a chain -- which reaches
+    // the executor's copy -- worked. A leading `SIG` is accepted too, and `-s`
+    // and `-n`, all three of which the usage line below already promised.
     if (cmd.args.len > 1 and cmd.args[0][0] == '-') {
         const sig_arg = cmd.args[0];
         if (sig_arg.len > 1) {
-            // Try to parse as name (e.g., -TERM, -KILL)
-            const sig_name = sig_arg[1..];
-            if (std.mem.eql(u8, sig_name, "TERM")) {
-                signal = .TERM;
-            } else if (std.mem.eql(u8, sig_name, "KILL")) {
-                signal = .KILL;
-            } else if (std.mem.eql(u8, sig_name, "INT")) {
-                signal = .INT;
-            } else if (std.mem.eql(u8, sig_name, "HUP")) {
-                signal = .HUP;
-            } else if (std.mem.eql(u8, sig_name, "STOP")) {
-                signal = .STOP;
-            } else if (std.mem.eql(u8, sig_name, "CONT")) {
-                signal = .CONT;
-            } else if (std.fmt.parseInt(u32, sig_arg[1..], 10)) |sig_num| {
-                // Try to parse as number (e.g., -9)
-                signal = @fromBackingInt(@intCast(sig_num));
-            } else |_| {
-                try IO.eprint("den: kill: {s}: invalid signal specification\n", .{sig_name});
+            // `-s NAME` and `-n NUM` take the following argument.
+            const takes_operand = std.mem.eql(u8, sig_arg, "-s") or std.mem.eql(u8, sig_arg, "-n");
+            if (takes_operand and cmd.args.len < 3) {
+                try IO.eprint("den: kill: {s}: option requires an argument\n", .{sig_arg});
                 self.last_exit_code = 1;
                 return;
             }
-            arg_idx = 1;
+
+            const spec = if (takes_operand) cmd.args[1] else sig_arg[1..];
+            const bare = if (std.mem.startsWith(u8, spec, "SIG")) spec[3..] else spec;
+
+            if (signal_builtins.signalFromName(bare)) |num| {
+                signal = @fromBackingInt(@intCast(num));
+            } else if (std.fmt.parseInt(u32, spec, 10)) |sig_num| {
+                // Try to parse as number (e.g., -9)
+                signal = @fromBackingInt(@intCast(sig_num));
+            } else |_| {
+                try IO.eprint("den: kill: {s}: invalid signal specification\n", .{spec});
+                self.last_exit_code = 1;
+                return;
+            }
+            arg_idx = if (takes_operand) 2 else 1;
         }
     }
 

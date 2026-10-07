@@ -109,13 +109,13 @@ pub fn dispatchBuiltin(self: *Shell, cmd: *types.ParsedCommand) !DispatchResult 
 
     // Alias management
     if (std.mem.eql(u8, name, "alias")) {
+        // No forced 0: these report a name that was not an alias, and
+        // overwriting the status here discarded that.
         try shell_mod.builtinAlias(self, cmd);
-        self.last_exit_code = 0;
         return .handled;
     }
     if (std.mem.eql(u8, name, "unalias")) {
         try shell_mod.builtinUnalias(self, cmd);
-        self.last_exit_code = 0;
         return .handled;
     }
 

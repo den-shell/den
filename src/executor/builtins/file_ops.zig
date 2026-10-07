@@ -1,4 +1,5 @@
 const std = @import("std");
+const platform = @import("../../utils/platform.zig");
 const builtin = @import("builtin");
 const types = @import("../../types/mod.zig");
 const IO = @import("../../utils/io.zig").IO;
@@ -89,7 +90,11 @@ pub fn grep(allocator: std.mem.Allocator, command: *types.ParsedCommand) !i32 {
     var show_line_numbers = false;
     var invert_match = false;
     var count_only = false;
-    var use_color = true;
+    // Colour only when stdout is a terminal, which is what `--color=auto` means
+    // everywhere else. It was on unconditionally, so escape sequences went into
+    // pipes and files: `grep x f | wc -c` counted them and `grep x f > out` wrote
+    // them into out. An explicit --color still forces it on.
+    var use_color = platform.isTty(std.posix.STDOUT_FILENO);
     var show_filename = false;
     var pattern_idx: usize = 0;
 

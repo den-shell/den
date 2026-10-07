@@ -52,6 +52,8 @@ pub fn builtinHistory(shell: *Shell, cmd: *types.ParsedCommand) !void {
 /// Builtin: alias - define or list aliases
 /// Supports -s flag for suffix aliases (zsh-style): alias -s ts='bun'
 pub fn builtinAlias(shell: *Shell, cmd: *types.ParsedCommand) !void {
+    // Success unless a lookup below fails; the dispatcher no longer forces this.
+    shell.last_exit_code = 0;
     // Check for -s flag (suffix alias)
     var is_suffix_alias = false;
     var args_start: usize = 0;
@@ -146,6 +148,9 @@ pub fn builtinAlias(shell: *Shell, cmd: *types.ParsedCommand) !void {
                         try IO.print("alias {s}='{s}'\n", .{ arg, value });
                     } else {
                         try IO.eprint("den: alias: {s}: not found\n", .{arg});
+                        // Reported and then thrown away by the dispatcher, so
+                        // `alias foo >/dev/null || ...` never took its branch.
+                        shell.last_exit_code = 1;
                     }
                 }
             }
@@ -176,6 +181,10 @@ pub fn builtinUnalias(shell: *Shell, cmd: *types.ParsedCommand) !void {
         return;
     }
 
+    // A name that was not an alias is a failure, which den reported and then
+    // returned 0 for -- so `unalias foo || echo gone` never took its branch.
+    var missing = false;
+
     if (is_suffix_alias) {
         for (effective_args) |extension| {
             if (shell.suffix_aliases.fetchRemove(extension)) |kv| {
@@ -183,6 +192,7 @@ pub fn builtinUnalias(shell: *Shell, cmd: *types.ParsedCommand) !void {
                 shell.allocator.free(kv.value);
             } else {
                 try IO.eprint("den: unalias: suffix alias {s}: not found\n", .{extension});
+                missing = true;
             }
         }
     } else {
@@ -192,9 +202,12 @@ pub fn builtinUnalias(shell: *Shell, cmd: *types.ParsedCommand) !void {
                 shell.allocator.free(kv.value);
             } else {
                 try IO.eprint("den: unalias: {s}: not found\n", .{name});
+                missing = true;
             }
         }
     }
+
+    shell.last_exit_code = if (missing) 1 else 0;
 }
 
 // ============================================
