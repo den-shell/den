@@ -1,4 +1,5 @@
 const std = @import("std");
+const builtin_names = @import("builtin_names.zig");
 const builtin = @import("builtin");
 const compat = @import("compat");
 const env_utils = @import("env.zig");
@@ -265,8 +266,25 @@ pub const Completion = struct {
         var matches_buffer: [256][]const u8 = undefined;
         var match_count: usize = 0;
 
-        // Get PATH environment variable
-        const path = env_utils.getEnv("PATH") orelse return &[_][]const u8{};
+        // Builtins first, and offered whatever is on PATH.
+        //
+        // Only PATH was searched, so no builtin without a binary of the same
+        // name could ever be completed: `zstyle`, `bindkey`, `setopt`, `autoload`
+        // and most of the other 163 simply did not exist as far as Tab was
+        // concerned. `echo` appeared only because /bin/echo happens to be there.
+        //
+        // The PATH walk below skips a name already here, so a builtin that does
+        // shadow a binary is offered once.
+        for (builtin_names.all) |b| {
+            if (match_count >= matches_buffer.len) break;
+            if (!self.prefixMatches(b, prefix)) continue;
+            matches_buffer[match_count] = try self.allocator.dupe(u8, b);
+            match_count += 1;
+        }
+
+        // Get PATH environment variable. A missing PATH is not a reason to offer
+        // nothing: the builtins above stand on their own.
+        const path = env_utils.getEnv("PATH") orelse "";
 
         // Split PATH by ':'
         var path_iter = std.mem.splitScalar(u8, path, ':');
