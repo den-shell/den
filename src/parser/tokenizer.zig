@@ -10,6 +10,29 @@ const OperatorEntry = struct {
     value: []const u8,
 };
 
+/// Whether the word scanned so far is the `name=` or `name+=` that introduces an
+/// array assignment, so that a `(` immediately after it begins a value rather
+/// than a subshell.
+///
+/// Without this the scanner ended the word at `a=` and `(` became an `lparen`,
+/// which made `a=(x) && echo done` parse as a subshell and swallow the rest of
+/// the chain. A standalone `a=(x)` happened to work only because the shell
+/// recognised the whole line before the parser ever saw it.
+pub fn isArrayAssignPrefix(word: []const u8) bool {
+    if (word.len < 2) return false;
+    if (word[word.len - 1] != '=') return false;
+    const name = if (word.len >= 3 and word[word.len - 2] == '+')
+        word[0 .. word.len - 2]
+    else
+        word[0 .. word.len - 1];
+    if (name.len == 0) return false;
+    if (!std.ascii.isAlphabetic(name[0]) and name[0] != '_') return false;
+    for (name) |c| {
+        if (!std.ascii.isAlphanumeric(c) and c != '_') return false;
+    }
+    return true;
+}
+
 /// Two-character operators lookup table (sorted by first char for binary search)
 const two_char_operators = [_]OperatorEntry{
     .{ .chars = .{ '&', '>' }, .token_type = .redirect_both, .value = "&>" },
@@ -821,6 +844,33 @@ pub const Tokenizer = struct {
                         // Nested parenthesis inside substitution
                         subst_depth += 1;
                     } else if (!in_double_quote and !in_backtick and brace_depth == 0) {
+                        // `name=(` opens an array assignment's value, not a
+                        // subshell, so the whole `(...)` belongs to this word.
+                        // Nesting and quotes are tracked so that
+                        // `a=($(echo x) "y z")` stays one word.
+                        if (isArrayAssignPrefix(word_buffer[0..word_len])) {
+                            var depth: usize = 0;
+                            var quote: u8 = 0;
+                            while (self.pos < self.input.len) {
+                                const c = self.input[self.pos];
+                                if (quote != 0) {
+                                    if (c == quote) quote = 0;
+                                } else if (c == '\'' or c == '"') {
+                                    quote = c;
+                                } else if (c == '(') {
+                                    depth += 1;
+                                } else if (c == ')') {
+                                    depth -= 1;
+                                }
+                                if (word_len >= word_buffer.len) return error.WordTooLong;
+                                word_buffer[word_len] = c;
+                                word_len += 1;
+                                self.pos += 1;
+                                self.column += 1;
+                                if (quote == 0 and c == ')' and depth == 0) break;
+                            }
+                            continue;
+                        }
                         break; // Standalone ( - break (but not inside quotes/backticks/braces)
                     }
                 } else if (char == ')') {
