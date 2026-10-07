@@ -29,6 +29,7 @@ const autoload_builtin = @import("../shell/autoload_builtin.zig");
 const variable_handling = @import("../shell/variable_handling.zig");
 const platform = @import("../utils/platform.zig");
 const builtin_names = @import("../utils/builtin_names.zig");
+const shell_builtins_mod = @import("../shell/builtins.zig");
 const shell_mod_for_arrays = variable_handling;
 
 // Plugin hook types for command_not_found hook
@@ -1226,9 +1227,15 @@ pub const Executor = struct {
         } else if (std.mem.eql(u8, command.name, "type")) {
             return try builtins.command_builtins.typeBuiltin(&ctx, command);
         } else if (std.mem.eql(u8, command.name, "help")) {
-            // Use enhanced help system for specific topics, fallback to basic help
-            if (command.args.len > 0) {
-                return try builtins.help_system.helpCmd(self.allocator, command);
+            // A topic goes to the per-command entries here. A bare `help` prints
+            // the shell's own listing, which covers every builtin -- this one
+            // covers about a third of them, and reaching it meant `help | less`
+            // showed different, shorter output than plain `help`.
+            if (command.args.len == 0) {
+                if (self.shell) |shell| {
+                    try shell_builtins_mod.builtinHelp(shell, command);
+                    return shell.last_exit_code;
+                }
             }
             return try builtins.help_system.helpCmd(self.allocator, command);
         } else if (std.mem.eql(u8, command.name, "alias")) {

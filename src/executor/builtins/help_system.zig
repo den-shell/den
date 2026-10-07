@@ -158,6 +158,20 @@ const help_entries = [_]HelpEntry{
 };
 
 /// Enhanced help command with structured help data
+/// Whether `help <topic>` has an entry for this name.
+///
+/// Lets a caller decide between showing the entry and falling back to the full
+/// listing, rather than finding out only after "No help found" has been printed.
+pub fn hasTopic(topic: []const u8) bool {
+    for (help_entries) |entry| {
+        if (std.mem.eql(u8, entry.name, topic)) return true;
+    }
+    for (help_entries) |entry| {
+        if (std.mem.indexOf(u8, entry.name, topic) != null) return true;
+    }
+    return false;
+}
+
 pub fn helpCmd(allocator: std.mem.Allocator, command: *types.ParsedCommand) !i32 {
     if (command.args.len == 0) {
         return helpOverview();
