@@ -2,6 +2,7 @@ const std = @import("std");
 const test_utils = @import("test_utils.zig");
 const TestAssert = test_utils.TestAssert;
 const DenShellFixture = test_utils.DenShellFixture;
+const fuzz_gen = @import("fuzz_gen.zig");
 const TempDir = test_utils.TempDir;
 
 // Comprehensive Fuzzing Tests
@@ -11,239 +12,145 @@ const TempDir = test_utils.TempDir;
 // they found was a property of the system shell and nothing here was ever
 // exercised -- and one of the inputs left /bin/sh waiting on the test runner's
 // terminal, so the suite hung rather than finishing.
+//
+// Inputs are generated (see fuzz_gen.zig) rather than only listed. The lists
+// that remain are kept as named cases: they say what was once thought worth
+// checking, and they are the corpus the mutation strategy draws from.
 
-/// Run one fuzz input and check the one thing a fuzz case can promise.
+/// How long one case may run before it is suspected of hanging.
 ///
-/// The exit status is deliberately not asserted: many of these inputs are
-/// errors and ought to fail. What is never a correct answer is den being killed
-/// by a signal, or hanging -- the fixture points stdin at /dev/null so a command
-/// that reads it cannot block.
-fn fuzz(fixture: *DenShellFixture, allocator: std.mem.Allocator, input: []const u8) !void {
-    const result = try fixture.exec(input);
+/// Generous on purpose. den starts in about 50ms and every command in the
+/// generator's vocabulary finishes at once, so this is ~100x the honest worst
+/// case -- but the suite runs hundreds of spawns back to back, and a tight
+/// budget turned that load into occasional failures on inputs that were fine.
+/// A flaky fuzz test is worse than none, because it teaches people to ignore it.
+const case_budget_ms: u64 = 5_000;
+
+/// A case that runs out of time is retried with this much, and only a second
+/// timeout is reported. A real loop never finishes either way; a machine under
+/// load gets the room it needed. The cost is paid only when something looks
+/// wrong.
+const retry_budget_ms: u64 = 20_000;
+
+/// Generated cases per run.
+///
+/// A generated case costs about 150ms -- three times a corpus one, because the
+/// nasty shapes nest substitutions and so start further shells -- and this suite
+/// is part of `test-all`, so the default is kept to something that does not
+/// dominate it.
+///
+/// Be clear about what the default does: the seed below is fixed, so every build
+/// runs the *same* cases. That makes the build reproducible and guards against
+/// regressions on a known set, but it finds nothing new once it is green. New
+/// coverage needs a new seed:
+///
+///     DEN_FUZZ_SEED=$RANDOM DEN_FUZZ_RUNS=5000 zig build test-fuzzing
+///
+/// A failure prints its seed and the exact bytes, so anything found that way is
+/// reproducible afterwards.
+const default_runs: usize = 100;
+
+fn envNumber(name: [*:0]const u8, fallback: usize) usize {
+    const raw = std.c.getenv(name) orelse return fallback;
+    return std.fmt.parseInt(usize, std.mem.sliceTo(raw, 0), 10) catch fallback;
+}
+
+fn envSeed() u64 {
+    // Fixed by default so a build is reproducible, and overridable to explore
+    // or to replay a failure. See `default_runs` for the trade-off.
+    const fallback: u64 = 0x5EED_1234_5678_9ABC;
+    const raw = std.c.getenv("DEN_FUZZ_SEED") orelse return fallback;
+    return std.fmt.parseInt(u64, std.mem.sliceTo(raw, 0), 0) catch fallback;
+}
+
+/// Run one input and check the two things a fuzz case can promise: den must
+/// finish, and it must finish on its own.
+///
+/// The exit status is deliberately not asserted. Most of these inputs are
+/// nonsense and ought to fail; a non-zero status is the shell working. Being
+/// killed is never a right answer, and neither is never returning.
+fn check(
+    fixture: *DenShellFixture,
+    allocator: std.mem.Allocator,
+    input: []const u8,
+    seed: ?u64,
+) !void {
+    const result = try fixture.execVerbatim(input, case_budget_ms);
     defer allocator.free(result.stdout);
     defer allocator.free(result.stderr);
 
-    if (result.signaled) {
-        std.debug.print("den was killed by a signal on input: {s}\n", .{input});
+    if (!result.timed_out and !result.signaled) return;
+
+    // A signal is conclusive: report it straight away.
+    if (result.signaled and !result.timed_out) {
+        report("was killed by a signal", input, seed);
         return error.ShellCrashed;
+    }
+
+    // Running out of time is not. Confirm it with a much larger budget before
+    // calling it a hang, so load on the machine cannot fail the suite.
+    const retry = try fixture.execVerbatim(input, retry_budget_ms);
+    defer allocator.free(retry.stdout);
+    defer allocator.free(retry.stderr);
+
+    if (retry.timed_out) {
+        report("did not finish, twice", input, seed);
+        return error.ShellHung;
+    }
+    if (retry.signaled) {
+        report("was killed by a signal", input, seed);
+        return error.ShellCrashed;
+    }
+}
+
+fn report(what: []const u8, input: []const u8, seed: ?u64) void {
+    std.debug.print("\nden {s} on input ({d} bytes):\n{s}\n", .{ what, input.len, input });
+    // The bytes matter as much as the text: these inputs are full of tabs,
+    // newlines and unterminated quotes that do not survive being read back.
+    std.debug.print("bytes:", .{});
+    for (input) |c| std.debug.print(" {x:0>2}", .{c});
+    std.debug.print("\n", .{});
+    if (seed) |sd| {
+        std.debug.print("replay with: DEN_FUZZ_SEED=0x{x} DEN_FUZZ_RUNS=1\n", .{sd});
+    }
+}
+
+test "fuzz: generated inputs" {
+    const allocator = std.testing.allocator;
+    var fixture = try DenShellFixture.init(allocator);
+    defer fixture.deinit();
+
+    const base = envSeed();
+    const runs = envNumber("DEN_FUZZ_RUNS", default_runs);
+
+    var buf: [1024]u8 = undefined;
+    var i: usize = 0;
+    while (i < runs) : (i += 1) {
+        // Each case is seeded from the base and its index, so one failing case
+        // is reproducible on its own rather than only as part of a sequence.
+        const case_seed = base ^ (@as(u64, i) *% 0x9E37_79B9_7F4A_7C15);
+        var g = fuzz_gen.Generator.init(case_seed);
+        const input = g.next(&buf);
+
+        try check(&fixture, allocator, input, case_seed);
+    }
+}
+
+test "fuzz: the whole seed corpus runs" {
+    const allocator = std.testing.allocator;
+    var fixture = try DenShellFixture.init(allocator);
+    defer fixture.deinit();
+
+    // The mutation strategy draws from these, so they are worth running as
+    // written too: a crash on an unmutated entry is the easiest kind to debug.
+    for (fuzz_gen.corpus) |input| {
+        try check(&fixture, allocator, input, null);
     }
 }
 
 // =============================================================================
 // Variable Expansion Fuzzing
 // =============================================================================
-
-test "fuzz: variable expansion with special chars" {
-    const allocator = std.testing.allocator;
-    var fixture = try DenShellFixture.init(allocator);
-    defer fixture.deinit();
-
-    const test_vars = [_][]const u8{
-        "FUZZ_EMPTY=",
-        "FUZZ_SPACE=hello world",
-        "FUZZ_SPECIAL=!@#$%^&*()",
-        "FUZZ_NEWLINE=hello\nworld",
-        "FUZZ_TAB=hello\tworld",
-        "FUZZ_QUOTE=it's",
-        "FUZZ_DQUOTE=he said \"hi\"",
-    };
-
-    for (test_vars) |var_def| {
-        var cmd_buf: [256]u8 = undefined;
-        const cmd = std.fmt.bufPrint(&cmd_buf, "export {s} && echo done", .{var_def}) catch continue;
-
-        try fuzz(&fixture, allocator, cmd);
-
-        // Should not crash
-    }
-}
-
-test "fuzz: nested variable expansion" {
-    const allocator = std.testing.allocator;
-    var fixture = try DenShellFixture.init(allocator);
-    defer fixture.deinit();
-
-    const inputs = [_][]const u8{
-        "echo ${UNDEFINED:-default}",
-        "echo ${UNDEFINED:+alternate}",
-        "echo ${VAR:-${FALLBACK:-final}}",
-        "echo ${#PATH}",
-        "echo ${VAR:0:5}",
-    };
-
-    for (inputs) |input| {
-        try fuzz(&fixture, allocator, input);
-    }
-}
-
-test "fuzz: arithmetic expansion edge cases" {
-    const allocator = std.testing.allocator;
-    var fixture = try DenShellFixture.init(allocator);
-    defer fixture.deinit();
-
-    const inputs = [_][]const u8{
-        "echo $((0))",
-        "echo $((1+1))",
-        "echo $((2*3))",
-        "echo $((10/2))",
-        "echo $((10%3))",
-        "echo $((-5))",
-        "echo $((2147483647))",
-        "echo $((-2147483648))",
-        "echo $((1<<2))",
-        "echo $((8>>1))",
-        "echo $((5&3))",
-        "echo $((5|3))",
-        "echo $((5^3))",
-    };
-
-    for (inputs) |input| {
-        try fuzz(&fixture, allocator, input);
-    }
-}
-
-test "fuzz: command substitution nesting" {
-    const allocator = std.testing.allocator;
-    var fixture = try DenShellFixture.init(allocator);
-    defer fixture.deinit();
-
-    const inputs = [_][]const u8{
-        "echo $(echo a)",
-        "echo $(echo $(echo b))",
-        "echo $(echo $(echo $(echo c)))",
-        "echo `echo d`",
-        "echo $(echo `echo e`)",
-    };
-
-    for (inputs) |input| {
-        try fuzz(&fixture, allocator, input);
-    }
-}
-
-// =============================================================================
-// Glob/Pathname Expansion Fuzzing
-// =============================================================================
-
-test "fuzz: glob patterns" {
-    const allocator = std.testing.allocator;
-    var fixture = try DenShellFixture.init(allocator);
-    defer fixture.deinit();
-
-    const inputs = [_][]const u8{
-        "echo *",
-        "echo ?",
-        "echo [abc]",
-        "echo [a-z]",
-        "echo [!a-z]",
-        "echo **",
-        "echo ***",
-        "echo .[!.]*",
-        "echo */",
-        "echo *.{txt,md}",
-    };
-
-    for (inputs) |input| {
-        try fuzz(&fixture, allocator, input);
-    }
-}
-
-test "fuzz: brace expansion" {
-    const allocator = std.testing.allocator;
-    var fixture = try DenShellFixture.init(allocator);
-    defer fixture.deinit();
-
-    const inputs = [_][]const u8{
-        "echo {a,b,c}",
-        "echo {1..5}",
-        "echo {a..e}",
-        "echo {1..10..2}",
-        "echo {a,b}{1,2}",
-        "echo {{a,b},{c,d}}",
-        "echo {01..10}",
-    };
-
-    for (inputs) |input| {
-        try fuzz(&fixture, allocator, input);
-    }
-}
-
-test "fuzz: tilde expansion" {
-    const allocator = std.testing.allocator;
-    var fixture = try DenShellFixture.init(allocator);
-    defer fixture.deinit();
-
-    const inputs = [_][]const u8{
-        "echo ~",
-        "echo ~/",
-        "echo ~/test",
-        "echo ~root",
-        "echo ~nobody",
-        "echo ~+",
-        "echo ~-",
-    };
-
-    for (inputs) |input| {
-        try fuzz(&fixture, allocator, input);
-    }
-}
-
-// =============================================================================
-// Input Handling Fuzzing
-// =============================================================================
-
-test "fuzz: control characters" {
-    const allocator = std.testing.allocator;
-    var fixture = try DenShellFixture.init(allocator);
-    defer fixture.deinit();
-
-    // Test printable commands (control chars in strings would be problematic)
-    const inputs = [_][]const u8{
-        "echo test",
-        "echo 'test'",
-        "echo \"test\"",
-    };
-
-    for (inputs) |input| {
-        try fuzz(&fixture, allocator, input);
-    }
-}
-
-test "fuzz: escape sequences" {
-    const allocator = std.testing.allocator;
-    var fixture = try DenShellFixture.init(allocator);
-    defer fixture.deinit();
-
-    const inputs = [_][]const u8{
-        "echo \\n",
-        "echo \\t",
-        "echo \\r",
-        "echo \\\\",
-        "echo \\'",
-        "echo \\\"",
-        "echo \\$",
-        "echo \\`",
-    };
-
-    for (inputs) |input| {
-        try fuzz(&fixture, allocator, input);
-    }
-}
-
-test "fuzz: line continuations" {
-    const allocator = std.testing.allocator;
-    var fixture = try DenShellFixture.init(allocator);
-    defer fixture.deinit();
-
-    // Line continuation with backslash-newline
-    const inputs = [_][]const u8{
-        "echo hello\\\nworld",
-        "echo hel\\\nlo",
-    };
-
-    for (inputs) |input| {
-        try fuzz(&fixture, allocator, input);
-    }
-}
 
 test "fuzz: long lines" {
     const allocator = std.testing.allocator;
@@ -320,86 +227,6 @@ test "fuzz: path completion patterns" {
     dir.close(std.testing.io);
 }
 
-test "fuzz: command name patterns" {
-    const allocator = std.testing.allocator;
-    var fixture = try DenShellFixture.init(allocator);
-    defer fixture.deinit();
-
-    // Test various command patterns
-    const cmds = [_][]const u8{
-        "echo",
-        "cat",
-        "ls",
-        "pwd",
-        "true",
-        "false",
-    };
-
-    for (cmds) |cmd| {
-        try fuzz(&fixture, allocator, cmd);
-    }
-}
-
-// =============================================================================
-// Redirection Fuzzing
-// =============================================================================
-
-test "fuzz: redirection patterns" {
-    const allocator = std.testing.allocator;
-    var fixture = try DenShellFixture.init(allocator);
-    defer fixture.deinit();
-
-    const inputs = [_][]const u8{
-        "echo test > /dev/null",
-        "echo test >> /dev/null",
-        "cat < /dev/null",
-        "echo test 2> /dev/null",
-        "echo test &> /dev/null",
-        "echo test 2>&1",
-        "echo test 1>&2",
-    };
-
-    for (inputs) |input| {
-        try fuzz(&fixture, allocator, input);
-    }
-}
-
-test "fuzz: here-doc patterns" {
-    const allocator = std.testing.allocator;
-    var fixture = try DenShellFixture.init(allocator);
-    defer fixture.deinit();
-
-    const inputs = [_][]const u8{
-        "cat << EOF\nhello\nEOF",
-        "cat <<- EOF\n\thello\n\tEOF",
-        "cat << 'EOF'\n$HOME\nEOF",
-    };
-
-    for (inputs) |input| {
-        try fuzz(&fixture, allocator, input);
-    }
-}
-
-test "fuzz: here-string" {
-    const allocator = std.testing.allocator;
-    var fixture = try DenShellFixture.init(allocator);
-    defer fixture.deinit();
-
-    const inputs = [_][]const u8{
-        "cat <<< 'hello'",
-        "cat <<< \"hello world\"",
-        "cat <<< $HOME",
-    };
-
-    for (inputs) |input| {
-        try fuzz(&fixture, allocator, input);
-    }
-}
-
-// =============================================================================
-// Pipeline Fuzzing
-// =============================================================================
-
 test "fuzz: deep pipelines" {
     const allocator = std.testing.allocator;
     var fixture = try DenShellFixture.init(allocator);
@@ -424,167 +251,6 @@ test "fuzz: deep pipelines" {
         try TestAssert.expectContains(result.stdout, "a");
     }
 }
-
-test "fuzz: pipeline with redirections" {
-    const allocator = std.testing.allocator;
-    var fixture = try DenShellFixture.init(allocator);
-    defer fixture.deinit();
-
-    const inputs = [_][]const u8{
-        "echo test | cat > /dev/null && echo done",
-        "echo test 2>&1 | cat",
-        "cat /dev/null | echo test",
-    };
-
-    for (inputs) |input| {
-        try fuzz(&fixture, allocator, input);
-    }
-}
-
-// =============================================================================
-// Operator Combination Fuzzing
-// =============================================================================
-
-test "fuzz: operator combinations" {
-    const allocator = std.testing.allocator;
-    var fixture = try DenShellFixture.init(allocator);
-    defer fixture.deinit();
-
-    const inputs = [_][]const u8{
-        "true && echo success",
-        "false || echo fallback",
-        "true && false || echo recovered",
-        "false || true && echo chain",
-        "true; false; true",
-        "echo a; echo b; echo c",
-        "true && true && true && echo all",
-        "false || false || false || echo none",
-    };
-
-    for (inputs) |input| {
-        try fuzz(&fixture, allocator, input);
-    }
-}
-
-test "fuzz: negation operator" {
-    const allocator = std.testing.allocator;
-    var fixture = try DenShellFixture.init(allocator);
-    defer fixture.deinit();
-
-    const inputs = [_][]const u8{
-        "! true",
-        "! false",
-        "! ! true",
-        "! true && echo fail || echo success",
-    };
-
-    for (inputs) |input| {
-        try fuzz(&fixture, allocator, input);
-    }
-}
-
-// =============================================================================
-// Subshell and Grouping Fuzzing
-// =============================================================================
-
-test "fuzz: subshell patterns" {
-    const allocator = std.testing.allocator;
-    var fixture = try DenShellFixture.init(allocator);
-    defer fixture.deinit();
-
-    const inputs = [_][]const u8{
-        "(echo hello)",
-        "(echo a; echo b)",
-        "(cd /tmp && pwd)",
-        "(true && echo yes)",
-        "( ( echo nested ) )",
-    };
-
-    for (inputs) |input| {
-        try fuzz(&fixture, allocator, input);
-    }
-}
-
-test "fuzz: brace grouping patterns" {
-    const allocator = std.testing.allocator;
-    var fixture = try DenShellFixture.init(allocator);
-    defer fixture.deinit();
-
-    const inputs = [_][]const u8{
-        "{ echo hello; }",
-        "{ echo a; echo b; }",
-        "{ true && echo yes; }",
-    };
-
-    for (inputs) |input| {
-        try fuzz(&fixture, allocator, input);
-    }
-}
-
-// =============================================================================
-// Edge Case Fuzzing
-// =============================================================================
-
-test "fuzz: empty and whitespace" {
-    const allocator = std.testing.allocator;
-    var fixture = try DenShellFixture.init(allocator);
-    defer fixture.deinit();
-
-    const inputs = [_][]const u8{
-        "",
-        " ",
-        "  ",
-        "\t",
-        "\n",
-        "   \t\n   ",
-    };
-
-    for (inputs) |input| {
-        try fuzz(&fixture, allocator, input);
-    }
-}
-
-test "fuzz: special shell variables" {
-    const allocator = std.testing.allocator;
-    var fixture = try DenShellFixture.init(allocator);
-    defer fixture.deinit();
-
-    const inputs = [_][]const u8{
-        "echo $?",
-        "echo $$",
-        "echo $!",
-        "echo $0",
-        "echo $#",
-        "echo $@",
-        "echo $*",
-    };
-
-    for (inputs) |input| {
-        try fuzz(&fixture, allocator, input);
-    }
-}
-
-test "fuzz: word splitting edge cases" {
-    const allocator = std.testing.allocator;
-    var fixture = try DenShellFixture.init(allocator);
-    defer fixture.deinit();
-
-    const inputs = [_][]const u8{
-        "echo \"hello world\"",
-        "echo 'hello world'",
-        "echo hello\\ world",
-        "echo \"$HOME\"",
-        "echo '$HOME'",
-    };
-
-    for (inputs) |input| {
-        try fuzz(&fixture, allocator, input);
-    }
-}
-
-// =============================================================================
-// The guard itself
-// =============================================================================
 
 test "fuzz: a crash is actually detected" {
     const allocator = std.testing.allocator;

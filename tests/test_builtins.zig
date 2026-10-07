@@ -2723,3 +2723,51 @@ test "script file: the function keyword form also runs its trailing command" {
 
     try test_utils.TestAssert.expectContains(r.stdout, "A");
 }
+
+test "function definition: braces the wrong way round do not crash" {
+    const allocator = std.testing.allocator;
+    var fixture = try test_utils.DenShellFixture.init(allocator);
+    defer fixture.deinit();
+    // `}{` balances to zero with the braces reversed. The body was sliced from
+    // the first `{` to the last `}`, which here is a backwards range, and den
+    // panicked. A fuzz case found it.
+    const r = try fixture.execDirect("f() ; echo hi; }{ f");
+    defer allocator.free(r.stdout);
+    defer allocator.free(r.stderr);
+
+    try std.testing.expect(!r.signaled);
+    try std.testing.expect(std.mem.indexOf(u8, r.stderr, "panic") == null);
+}
+
+test "function definition: a pending definition is freed at exit" {
+    const allocator = std.testing.allocator;
+    var fixture = try test_utils.DenShellFixture.init(allocator);
+    defer fixture.deinit();
+    // `f() ;` leaves the shell waiting for a body that never arrives. The lines
+    // collected so far were never released, so the allocator reported a leak on
+    // the way out.
+    const r = try fixture.execDirect("f() ;");
+    defer allocator.free(r.stdout);
+    defer allocator.free(r.stderr);
+
+    try std.testing.expect(std.mem.indexOf(u8, r.stderr, "leaked") == null);
+    try std.testing.expect(!r.signaled);
+}
+
+test "function definition: a valid one-liner still works after the brace fix" {
+    const allocator = std.testing.allocator;
+    var fixture = try test_utils.DenShellFixture.init(allocator);
+    defer fixture.deinit();
+    // `brace_fn` rather than a short name on purpose: den.jsonc aliases `g` to
+    // git, and an alias is expanded before the definition is parsed.
+    const r = try fixture.execDirect(
+        "f() { echo ok; }; f; brace_fn() { echo \"}\"; }; brace_fn",
+    );
+    defer allocator.free(r.stdout);
+    defer allocator.free(r.stderr);
+
+    try test_utils.TestAssert.expectContains(r.stdout, "ok");
+    // Brace counting ignores quotes now, so a `}` in a string neither ends the
+    // body early nor makes the count go negative and skip the definition.
+    try test_utils.TestAssert.expectContains(r.stdout, "}");
+}
