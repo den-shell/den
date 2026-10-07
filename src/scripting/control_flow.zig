@@ -1,4 +1,5 @@
 const std = @import("std");
+const cmd_exp = @import("../shell/command_expansion.zig");
 const builtin = @import("builtin");
 const Shell = @import("../shell.zig").Shell;
 const IO = @import("../utils/io.zig").IO;
@@ -324,11 +325,14 @@ pub const ControlFlowExecutor = struct {
         const pp = self.collectPositionalParams(&pp_slice);
         const pp_count = pp.len;
 
-        // Create expansion context with positional params
-        var expander = Expansion.init(self.allocator, &self.shell.environment, self.shell.last_exit_code);
-        expander.positional_params = pp;
-        expander.arrays = &self.shell.arrays;
-        expander.assoc_arrays = &self.shell.assoc_arrays;
+        // The shared builder, which is what connects a command substitution back
+        // to den. Built by hand here, it had no shell reference and no
+        // `exec_command_fn`, so `$(...)` in a for list fell back to running the
+        // text under /bin/sh: `for k in $(bindkey -l)` answered
+        // `/bin/sh: bindkey: command not found`, and den's functions, aliases and
+        // builtins were all invisible to it.
+        var storage: cmd_exp.ExpanderStorage = .{};
+        var expander = cmd_exp.makeExpander(self.shell, &storage);
 
         for (loop.items) |item| {
             // Special case: "$@" in for loops - each positional param becomes a separate item
@@ -977,12 +981,10 @@ pub const ControlFlowExecutor = struct {
     /// - a wrong answer rather than an error, in the construct whose whole job
     /// is choosing a branch. Arrays were missing for the same reason.
     fn expandValue(self: *ControlFlowExecutor, value: []const u8) ![]const u8 {
-        var pp_buf: [64][]const u8 = undefined;
-
-        var expander = Expansion.init(self.allocator, &self.shell.environment, self.shell.last_exit_code);
-        expander.positional_params = self.collectPositionalParams(&pp_buf);
-        expander.arrays = &self.shell.arrays;
-        expander.assoc_arrays = &self.shell.assoc_arrays;
+        // Same builder, for the same reason: a `case` subject containing a
+        // command substitution has to be evaluated by den.
+        var storage: cmd_exp.ExpanderStorage = .{};
+        var expander = cmd_exp.makeExpander(self.shell, &storage);
 
         return try expander.expand(value);
     }
