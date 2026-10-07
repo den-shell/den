@@ -3016,3 +3016,45 @@ test "compgen -b and enable -a list the same builtins" {
 
     try test_utils.TestAssert.expectContains(r.stdout, "SAME");
 }
+
+test "help documents every builtin" {
+    const allocator = std.testing.allocator;
+    var fixture = try test_utils.DenShellFixture.init(allocator);
+    defer fixture.deinit();
+    // help described 63 of the 163 builtins. Checked by name rather than by
+    // count, so adding a builtin without a help line fails here and says which.
+    const r = try fixture.execDirect(
+        "help | grep '^  ' | sed 's/^  //' | awk '{print $1}' | sort -u > /tmp/den_help_names.txt; " ++
+            "compgen -b | sort > /tmp/den_all_names.txt; " ++
+            "comm -13 /tmp/den_help_names.txt /tmp/den_all_names.txt",
+    );
+    defer allocator.free(r.stdout);
+    defer allocator.free(r.stderr);
+
+    // Anything printed is a builtin with no help line.
+    if (std.mem.trim(u8, r.stdout, &std.ascii.whitespace).len != 0) {
+        std.debug.print("builtins with no help line:\n{s}\n", .{r.stdout});
+        return error.UndocumentedBuiltin;
+    }
+}
+
+test "help's total matches what it lists" {
+    const allocator = std.testing.allocator;
+    var fixture = try test_utils.DenShellFixture.init(allocator);
+    defer fixture.deinit();
+    // The printed figure was hand-maintained and had read 54 while 56 were
+    // listed; it is checked against the listing now.
+    const r = try fixture.execDirect(
+        // `cut` rather than awk: a single-quoted `$2` inside a command
+        // substitution keeps den's internal escape when it reaches an external
+        // program, which is a separate pre-existing bug and not what this test
+        // is about.
+        "listed=$(help | grep -c '^  '); " ++
+            "stated=$(help | grep '^Total:' | cut -d' ' -f2); " ++
+            "echo \"listed=$listed stated=$stated\"",
+    );
+    defer allocator.free(r.stdout);
+    defer allocator.free(r.stderr);
+
+    try test_utils.TestAssert.expectContains(r.stdout, "listed=163 stated=163");
+}
