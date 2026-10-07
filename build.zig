@@ -1288,6 +1288,17 @@ pub fn build(b: *std.Build) void {
     // Add to all tests
     all_tests_step.dependOn(&run_concurrency_tests.step);
 
+    // Suites that declare a `test-*` step but were never reached from test-all,
+    // so nothing ever compiled them. test-modules and test-prompt had both
+    // rotted into compile errors while unreachable here. `test-runner` stays
+    // out on purpose: it is the den-test executable, which shells out to
+    // `zig build <step>` and would recurse.
+    all_tests_step.dependOn(&run_module_tests.step);
+    all_tests_step.dependOn(&run_prompt_tests.step);
+    all_tests_step.dependOn(&run_completion_unit_tests.step);
+    all_tests_step.dependOn(&run_spawn_tests.step);
+    all_tests_step.dependOn(&run_suffix_alias_tests.step);
+
     // ==================== Examples ====================
 
     // Create utils module for examples
