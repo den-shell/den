@@ -390,10 +390,11 @@ pub fn build(b: *std.Build) void {
 
     // Prompt tests
     const prompt_test_module = b.createModule(.{
-        .root_source_file = b.path("src/prompt/test_prompt.zig"),
+        .root_source_file = b.path("src/test_prompt_root.zig"),
         .target = target,
         .optimize = optimize,
     });
+    prompt_test_module.addImport("compat", compat_module);
 
     const prompt_tests = b.addTest(.{
         .root_module = prompt_test_module,
@@ -409,6 +410,7 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
     });
+    module_test_module.addImport("compat", compat_module);
 
     const module_tests = b.addTest(.{
         .root_module = module_test_module,

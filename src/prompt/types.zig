@@ -155,6 +155,10 @@ pub const PromptContext = struct {
         };
     }
 
+    /// Frees every string field, so a PromptContext owns the strings assigned to
+    /// it -- see updatePromptContext in shell/prompt_context.zig, which dupes on
+    /// the way in and frees the previous value before replacing it. Assigning a
+    /// literal and then calling deinit frees .rodata and takes the process down.
     pub fn deinit(self: *PromptContext) void {
         if (self.current_dir.len > 0) self.allocator.free(self.current_dir);
         if (self.home_dir) |v| self.allocator.free(v);

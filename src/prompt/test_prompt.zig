@@ -48,7 +48,7 @@ test "PlaceholderRegistry - expand user" {
 
     var ctx = PromptContext.init(allocator);
     defer ctx.deinit();
-    ctx.username = "testuser";
+    ctx.username = try allocator.dupe(u8, "testuser");
 
     const result = try registry.expand("user", &ctx);
     try std.testing.expect(result != null);
@@ -66,7 +66,7 @@ test "PlaceholderRegistry - expand host" {
 
     var ctx = PromptContext.init(allocator);
     defer ctx.deinit();
-    ctx.hostname = "localhost";
+    ctx.hostname = try allocator.dupe(u8, "localhost");
 
     const result = try registry.expand("host", &ctx);
     try std.testing.expect(result != null);
@@ -91,7 +91,8 @@ test "PlaceholderRegistry - expand symbol (success)" {
     try std.testing.expect(result != null);
     defer if (result) |r| allocator.free(r);
 
-    try std.testing.expectEqualStrings("❯", result.?);
+    // expandSymbol renders the configured symbol in bold green on success.
+    try std.testing.expectEqualStrings("\x1b[1;32m\xE2\x9E\x9C\x1b[0m ", result.?);
 }
 
 test "PlaceholderRegistry - expand symbol (error)" {
@@ -110,7 +111,8 @@ test "PlaceholderRegistry - expand symbol (error)" {
     try std.testing.expect(result != null);
     defer if (result) |r| allocator.free(r);
 
-    try std.testing.expectEqualStrings("✗", result.?);
+    // Same symbol, bold red, when the previous command failed.
+    try std.testing.expectEqualStrings("\x1b[1;31m\xE2\x9E\x9C\x1b[0m ", result.?);
 }
 
 test "PlaceholderRegistry - expand symbol (root)" {
@@ -128,7 +130,8 @@ test "PlaceholderRegistry - expand symbol (root)" {
     try std.testing.expect(result != null);
     defer if (result) |r| allocator.free(r);
 
-    try std.testing.expectEqualStrings("#", result.?);
+    // Root gets a red # instead of the configured symbol.
+    try std.testing.expectEqualStrings("\x1b[91m#\x1b[0m ", result.?);
 }
 
 test "PlaceholderRegistry - expand git (no branch)" {
@@ -157,14 +160,16 @@ test "PlaceholderRegistry - expand git (with branch)" {
 
     var ctx = PromptContext.init(allocator);
     defer ctx.deinit();
-    ctx.git_branch = "main";
+    ctx.git_branch = try allocator.dupe(u8, "main");
     ctx.git_dirty = false;
 
     const result = try registry.expand("git", &ctx);
     try std.testing.expect(result != null);
     defer if (result) |r| allocator.free(r);
 
-    try std.testing.expectEqualStrings("(main)", result.?);
+    // git_style defaults to .compact: " git:(main)" with bold-blue braces and
+    // a red branch name. A clean tree adds no status markers.
+    try std.testing.expectEqualStrings(" \x1b[1;34mgit:(\x1b[0;31mmain\x1b[34m)\x1b[0m", result.?);
 }
 
 test "PlaceholderRegistry - expand git (dirty)" {
@@ -176,14 +181,15 @@ test "PlaceholderRegistry - expand git (dirty)" {
 
     var ctx = PromptContext.init(allocator);
     defer ctx.deinit();
-    ctx.git_branch = "main";
+    ctx.git_branch = try allocator.dupe(u8, "main");
     ctx.git_dirty = true;
 
     const result = try registry.expand("git", &ctx);
     try std.testing.expect(result != null);
     defer if (result) |r| allocator.free(r);
 
-    try std.testing.expect(std.mem.indexOf(u8, result.?, "*") != null);
+    // With no counters set, a dirty tree is flagged with a bare yellow ✗.
+    try std.testing.expect(std.mem.indexOf(u8, result.?, "\xE2\x9C\x97") != null);
 }
 
 test "PlaceholderRegistry - expand exitcode" {
@@ -234,9 +240,8 @@ test "PromptTemplate - initDefault" {
 test "PromptRenderer - initialization" {
     const allocator = std.testing.allocator;
     const template = try PromptTemplate.initDefault(allocator);
-    var template_mut = template;
-    defer template_mut.deinit(allocator);
-
+    // No `template.deinit` here: PromptRenderer.init takes the template by
+    // value and its deinit frees it, so freeing a copy as well is a double free.
     var renderer = try PromptRenderer.init(allocator, template);
     defer renderer.deinit();
 }
@@ -244,9 +249,8 @@ test "PromptRenderer - initialization" {
 test "PromptRenderer - render simple" {
     const allocator = std.testing.allocator;
     const template = try PromptTemplate.initSimple(allocator);
-    var template_mut = template;
-    defer template_mut.deinit(allocator);
-
+    // No `template.deinit` here: PromptRenderer.init takes the template by
+    // value and its deinit frees it, so freeing a copy as well is a double free.
     var renderer = try PromptRenderer.init(allocator, template);
     defer renderer.deinit();
 
@@ -263,23 +267,24 @@ test "PromptRenderer - render simple" {
 test "PromptRenderer - expand template" {
     const allocator = std.testing.allocator;
     const template = try PromptTemplate.initDefault(allocator);
-    var template_mut = template;
-    defer template_mut.deinit(allocator);
-
+    // No `template.deinit` here: PromptRenderer.init takes the template by
+    // value and its deinit frees it, so freeing a copy as well is a double free.
     var renderer = try PromptRenderer.init(allocator, template);
     defer renderer.deinit();
 
     var ctx = PromptContext.init(allocator);
     defer ctx.deinit();
-    ctx.username = "test";
-    ctx.hostname = "localhost";
-    ctx.current_dir = "/home/test";
+    ctx.username = try allocator.dupe(u8, "test");
+    ctx.hostname = try allocator.dupe(u8, "localhost");
+    ctx.current_dir = try allocator.dupe(u8, "/home/test");
 
     const result = try renderer.render(&ctx, 80);
     defer allocator.free(result);
 
-    try std.testing.expect(std.mem.indexOf(u8, result, "test") != null);
-    try std.testing.expect(std.mem.indexOf(u8, result, "localhost") != null);
+    // The default left_format is {symbol}{path}{git}{pkg}{runtimes}{battery} --
+    // it has no {host} or {user}, so only the path reaches the output.
+    try std.testing.expect(std.mem.indexOf(u8, result, "/home/test") != null);
+    try std.testing.expect(std.mem.indexOf(u8, result, "localhost") == null);
 }
 
 test "PromptRenderer - visible width" {
