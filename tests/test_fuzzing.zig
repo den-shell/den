@@ -1,11 +1,33 @@
 const std = @import("std");
 const test_utils = @import("test_utils.zig");
 const TestAssert = test_utils.TestAssert;
-const ShellFixture = test_utils.ShellFixture;
+const DenShellFixture = test_utils.DenShellFixture;
 const TempDir = test_utils.TempDir;
 
 // Comprehensive Fuzzing Tests
 // Tests for completion, expansion, and input handling robustness
+//
+// These run den. They used to run /bin/sh through ShellFixture, so whatever
+// they found was a property of the system shell and nothing here was ever
+// exercised -- and one of the inputs left /bin/sh waiting on the test runner's
+// terminal, so the suite hung rather than finishing.
+
+/// Run one fuzz input and check the one thing a fuzz case can promise.
+///
+/// The exit status is deliberately not asserted: many of these inputs are
+/// errors and ought to fail. What is never a correct answer is den being killed
+/// by a signal, or hanging -- the fixture points stdin at /dev/null so a command
+/// that reads it cannot block.
+fn fuzz(fixture: *DenShellFixture, allocator: std.mem.Allocator, input: []const u8) !void {
+    const result = try fixture.exec(input);
+    defer allocator.free(result.stdout);
+    defer allocator.free(result.stderr);
+
+    if (result.signaled) {
+        std.debug.print("den was killed by a signal on input: {s}\n", .{input});
+        return error.ShellCrashed;
+    }
+}
 
 // =============================================================================
 // Variable Expansion Fuzzing
@@ -13,7 +35,7 @@ const TempDir = test_utils.TempDir;
 
 test "fuzz: variable expansion with special chars" {
     const allocator = std.testing.allocator;
-    var fixture = try ShellFixture.init(allocator);
+    var fixture = try DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     const test_vars = [_][]const u8{
@@ -30,9 +52,7 @@ test "fuzz: variable expansion with special chars" {
         var cmd_buf: [256]u8 = undefined;
         const cmd = std.fmt.bufPrint(&cmd_buf, "export {s} && echo done", .{var_def}) catch continue;
 
-        const result = try fixture.exec(cmd);
-        defer allocator.free(result.stdout);
-        defer allocator.free(result.stderr);
+        try fuzz(&fixture, allocator, cmd);
 
         // Should not crash
     }
@@ -40,7 +60,7 @@ test "fuzz: variable expansion with special chars" {
 
 test "fuzz: nested variable expansion" {
     const allocator = std.testing.allocator;
-    var fixture = try ShellFixture.init(allocator);
+    var fixture = try DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     const inputs = [_][]const u8{
@@ -52,16 +72,13 @@ test "fuzz: nested variable expansion" {
     };
 
     for (inputs) |input| {
-        const result = try fixture.exec(input);
-        defer allocator.free(result.stdout);
-        defer allocator.free(result.stderr);
-        // Should not crash
+        try fuzz(&fixture, allocator, input);
     }
 }
 
 test "fuzz: arithmetic expansion edge cases" {
     const allocator = std.testing.allocator;
-    var fixture = try ShellFixture.init(allocator);
+    var fixture = try DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     const inputs = [_][]const u8{
@@ -81,16 +98,13 @@ test "fuzz: arithmetic expansion edge cases" {
     };
 
     for (inputs) |input| {
-        const result = try fixture.exec(input);
-        defer allocator.free(result.stdout);
-        defer allocator.free(result.stderr);
-        // Should handle arithmetic operations
+        try fuzz(&fixture, allocator, input);
     }
 }
 
 test "fuzz: command substitution nesting" {
     const allocator = std.testing.allocator;
-    var fixture = try ShellFixture.init(allocator);
+    var fixture = try DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     const inputs = [_][]const u8{
@@ -102,10 +116,7 @@ test "fuzz: command substitution nesting" {
     };
 
     for (inputs) |input| {
-        const result = try fixture.exec(input);
-        defer allocator.free(result.stdout);
-        defer allocator.free(result.stderr);
-        // Should handle nesting
+        try fuzz(&fixture, allocator, input);
     }
 }
 
@@ -115,7 +126,7 @@ test "fuzz: command substitution nesting" {
 
 test "fuzz: glob patterns" {
     const allocator = std.testing.allocator;
-    var fixture = try ShellFixture.init(allocator);
+    var fixture = try DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     const inputs = [_][]const u8{
@@ -132,16 +143,13 @@ test "fuzz: glob patterns" {
     };
 
     for (inputs) |input| {
-        const result = try fixture.exec(input);
-        defer allocator.free(result.stdout);
-        defer allocator.free(result.stderr);
-        // Should handle globs
+        try fuzz(&fixture, allocator, input);
     }
 }
 
 test "fuzz: brace expansion" {
     const allocator = std.testing.allocator;
-    var fixture = try ShellFixture.init(allocator);
+    var fixture = try DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     const inputs = [_][]const u8{
@@ -155,16 +163,13 @@ test "fuzz: brace expansion" {
     };
 
     for (inputs) |input| {
-        const result = try fixture.exec(input);
-        defer allocator.free(result.stdout);
-        defer allocator.free(result.stderr);
-        // Should handle brace expansion
+        try fuzz(&fixture, allocator, input);
     }
 }
 
 test "fuzz: tilde expansion" {
     const allocator = std.testing.allocator;
-    var fixture = try ShellFixture.init(allocator);
+    var fixture = try DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     const inputs = [_][]const u8{
@@ -178,10 +183,7 @@ test "fuzz: tilde expansion" {
     };
 
     for (inputs) |input| {
-        const result = try fixture.exec(input);
-        defer allocator.free(result.stdout);
-        defer allocator.free(result.stderr);
-        // Should handle tilde expansion
+        try fuzz(&fixture, allocator, input);
     }
 }
 
@@ -191,7 +193,7 @@ test "fuzz: tilde expansion" {
 
 test "fuzz: control characters" {
     const allocator = std.testing.allocator;
-    var fixture = try ShellFixture.init(allocator);
+    var fixture = try DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     // Test printable commands (control chars in strings would be problematic)
@@ -202,16 +204,13 @@ test "fuzz: control characters" {
     };
 
     for (inputs) |input| {
-        const result = try fixture.exec(input);
-        defer allocator.free(result.stdout);
-        defer allocator.free(result.stderr);
-        // Should handle input
+        try fuzz(&fixture, allocator, input);
     }
 }
 
 test "fuzz: escape sequences" {
     const allocator = std.testing.allocator;
-    var fixture = try ShellFixture.init(allocator);
+    var fixture = try DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     const inputs = [_][]const u8{
@@ -226,16 +225,13 @@ test "fuzz: escape sequences" {
     };
 
     for (inputs) |input| {
-        const result = try fixture.exec(input);
-        defer allocator.free(result.stdout);
-        defer allocator.free(result.stderr);
-        // Should handle escapes
+        try fuzz(&fixture, allocator, input);
     }
 }
 
 test "fuzz: line continuations" {
     const allocator = std.testing.allocator;
-    var fixture = try ShellFixture.init(allocator);
+    var fixture = try DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     // Line continuation with backslash-newline
@@ -245,16 +241,13 @@ test "fuzz: line continuations" {
     };
 
     for (inputs) |input| {
-        const result = try fixture.exec(input);
-        defer allocator.free(result.stdout);
-        defer allocator.free(result.stderr);
-        // Should handle line continuations
+        try fuzz(&fixture, allocator, input);
     }
 }
 
 test "fuzz: long lines" {
     const allocator = std.testing.allocator;
-    var fixture = try ShellFixture.init(allocator);
+    var fixture = try DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     // Test long command lines
@@ -275,12 +268,15 @@ test "fuzz: long lines" {
     defer allocator.free(result.stdout);
     defer allocator.free(result.stderr);
 
+    try std.testing.expect(!result.signaled);
+    // A 2000-character echo is long but perfectly valid, so this one does have
+    // a right answer.
     try TestAssert.expectEqual(@as(u8, 0), result.exit_code);
 }
 
 test "fuzz: unicode input" {
     const allocator = std.testing.allocator;
-    var fixture = try ShellFixture.init(allocator);
+    var fixture = try DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     const inputs = [_][]const u8{
@@ -297,6 +293,8 @@ test "fuzz: unicode input" {
         defer allocator.free(result.stdout);
         defer allocator.free(result.stderr);
 
+        try std.testing.expect(!result.signaled);
+        // Echoing text is valid whatever script it is written in.
         try TestAssert.expectEqual(@as(u8, 0), result.exit_code);
     }
 }
@@ -324,7 +322,7 @@ test "fuzz: path completion patterns" {
 
 test "fuzz: command name patterns" {
     const allocator = std.testing.allocator;
-    var fixture = try ShellFixture.init(allocator);
+    var fixture = try DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     // Test various command patterns
@@ -338,10 +336,7 @@ test "fuzz: command name patterns" {
     };
 
     for (cmds) |cmd| {
-        const result = try fixture.exec(cmd);
-        defer allocator.free(result.stdout);
-        defer allocator.free(result.stderr);
-        // Should handle command execution
+        try fuzz(&fixture, allocator, cmd);
     }
 }
 
@@ -351,7 +346,7 @@ test "fuzz: command name patterns" {
 
 test "fuzz: redirection patterns" {
     const allocator = std.testing.allocator;
-    var fixture = try ShellFixture.init(allocator);
+    var fixture = try DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     const inputs = [_][]const u8{
@@ -365,16 +360,13 @@ test "fuzz: redirection patterns" {
     };
 
     for (inputs) |input| {
-        const result = try fixture.exec(input);
-        defer allocator.free(result.stdout);
-        defer allocator.free(result.stderr);
-        // Should handle redirections
+        try fuzz(&fixture, allocator, input);
     }
 }
 
 test "fuzz: here-doc patterns" {
     const allocator = std.testing.allocator;
-    var fixture = try ShellFixture.init(allocator);
+    var fixture = try DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     const inputs = [_][]const u8{
@@ -384,16 +376,13 @@ test "fuzz: here-doc patterns" {
     };
 
     for (inputs) |input| {
-        const result = try fixture.exec(input);
-        defer allocator.free(result.stdout);
-        defer allocator.free(result.stderr);
-        // Should handle here-docs
+        try fuzz(&fixture, allocator, input);
     }
 }
 
 test "fuzz: here-string" {
     const allocator = std.testing.allocator;
-    var fixture = try ShellFixture.init(allocator);
+    var fixture = try DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     const inputs = [_][]const u8{
@@ -403,10 +392,7 @@ test "fuzz: here-string" {
     };
 
     for (inputs) |input| {
-        const result = try fixture.exec(input);
-        defer allocator.free(result.stdout);
-        defer allocator.free(result.stderr);
-        // Should handle here-strings
+        try fuzz(&fixture, allocator, input);
     }
 }
 
@@ -416,7 +402,7 @@ test "fuzz: here-string" {
 
 test "fuzz: deep pipelines" {
     const allocator = std.testing.allocator;
-    var fixture = try ShellFixture.init(allocator);
+    var fixture = try DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     const inputs = [_][]const u8{
@@ -432,6 +418,8 @@ test "fuzz: deep pipelines" {
         defer allocator.free(result.stdout);
         defer allocator.free(result.stderr);
 
+        try std.testing.expect(!result.signaled);
+        // However deep the pipeline, `a` has to come out the far end.
         try TestAssert.expectEqual(@as(u8, 0), result.exit_code);
         try TestAssert.expectContains(result.stdout, "a");
     }
@@ -439,7 +427,7 @@ test "fuzz: deep pipelines" {
 
 test "fuzz: pipeline with redirections" {
     const allocator = std.testing.allocator;
-    var fixture = try ShellFixture.init(allocator);
+    var fixture = try DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     const inputs = [_][]const u8{
@@ -449,10 +437,7 @@ test "fuzz: pipeline with redirections" {
     };
 
     for (inputs) |input| {
-        const result = try fixture.exec(input);
-        defer allocator.free(result.stdout);
-        defer allocator.free(result.stderr);
-        // Should handle combined pipeline and redirections
+        try fuzz(&fixture, allocator, input);
     }
 }
 
@@ -462,7 +447,7 @@ test "fuzz: pipeline with redirections" {
 
 test "fuzz: operator combinations" {
     const allocator = std.testing.allocator;
-    var fixture = try ShellFixture.init(allocator);
+    var fixture = try DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     const inputs = [_][]const u8{
@@ -477,16 +462,13 @@ test "fuzz: operator combinations" {
     };
 
     for (inputs) |input| {
-        const result = try fixture.exec(input);
-        defer allocator.free(result.stdout);
-        defer allocator.free(result.stderr);
-        // Should handle operator combinations
+        try fuzz(&fixture, allocator, input);
     }
 }
 
 test "fuzz: negation operator" {
     const allocator = std.testing.allocator;
-    var fixture = try ShellFixture.init(allocator);
+    var fixture = try DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     const inputs = [_][]const u8{
@@ -497,10 +479,7 @@ test "fuzz: negation operator" {
     };
 
     for (inputs) |input| {
-        const result = try fixture.exec(input);
-        defer allocator.free(result.stdout);
-        defer allocator.free(result.stderr);
-        // Should handle negation
+        try fuzz(&fixture, allocator, input);
     }
 }
 
@@ -510,7 +489,7 @@ test "fuzz: negation operator" {
 
 test "fuzz: subshell patterns" {
     const allocator = std.testing.allocator;
-    var fixture = try ShellFixture.init(allocator);
+    var fixture = try DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     const inputs = [_][]const u8{
@@ -522,16 +501,13 @@ test "fuzz: subshell patterns" {
     };
 
     for (inputs) |input| {
-        const result = try fixture.exec(input);
-        defer allocator.free(result.stdout);
-        defer allocator.free(result.stderr);
-        // Should handle subshells
+        try fuzz(&fixture, allocator, input);
     }
 }
 
 test "fuzz: brace grouping patterns" {
     const allocator = std.testing.allocator;
-    var fixture = try ShellFixture.init(allocator);
+    var fixture = try DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     const inputs = [_][]const u8{
@@ -541,10 +517,7 @@ test "fuzz: brace grouping patterns" {
     };
 
     for (inputs) |input| {
-        const result = try fixture.exec(input);
-        defer allocator.free(result.stdout);
-        defer allocator.free(result.stderr);
-        // Should handle brace grouping
+        try fuzz(&fixture, allocator, input);
     }
 }
 
@@ -554,7 +527,7 @@ test "fuzz: brace grouping patterns" {
 
 test "fuzz: empty and whitespace" {
     const allocator = std.testing.allocator;
-    var fixture = try ShellFixture.init(allocator);
+    var fixture = try DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     const inputs = [_][]const u8{
@@ -567,16 +540,13 @@ test "fuzz: empty and whitespace" {
     };
 
     for (inputs) |input| {
-        const result = try fixture.exec(input);
-        defer allocator.free(result.stdout);
-        defer allocator.free(result.stderr);
-        // Should handle empty input
+        try fuzz(&fixture, allocator, input);
     }
 }
 
 test "fuzz: special shell variables" {
     const allocator = std.testing.allocator;
-    var fixture = try ShellFixture.init(allocator);
+    var fixture = try DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     const inputs = [_][]const u8{
@@ -590,16 +560,13 @@ test "fuzz: special shell variables" {
     };
 
     for (inputs) |input| {
-        const result = try fixture.exec(input);
-        defer allocator.free(result.stdout);
-        defer allocator.free(result.stderr);
-        // Should handle special variables
+        try fuzz(&fixture, allocator, input);
     }
 }
 
 test "fuzz: word splitting edge cases" {
     const allocator = std.testing.allocator;
-    var fixture = try ShellFixture.init(allocator);
+    var fixture = try DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     const inputs = [_][]const u8{
@@ -611,9 +578,26 @@ test "fuzz: word splitting edge cases" {
     };
 
     for (inputs) |input| {
-        const result = try fixture.exec(input);
-        defer allocator.free(result.stdout);
-        defer allocator.free(result.stderr);
-        // Should handle word splitting correctly
+        try fuzz(&fixture, allocator, input);
     }
+}
+
+// =============================================================================
+// The guard itself
+// =============================================================================
+
+test "fuzz: a crash is actually detected" {
+    const allocator = std.testing.allocator;
+    var fixture = try DenShellFixture.init(allocator);
+    defer fixture.deinit();
+
+    // Every test above rests on `signaled`, so it is worth proving it reports
+    // what it claims. Without this, breaking the fixture would quietly turn the
+    // whole suite vacuous again -- which is the state it was in when it ran
+    // /bin/sh and asserted nothing.
+    const result = try fixture.exec("kill -SEGV $$");
+    defer allocator.free(result.stdout);
+    defer allocator.free(result.stderr);
+
+    try std.testing.expect(result.signaled);
 }
