@@ -354,8 +354,18 @@ pub fn builtinWhich(shell: *Shell, cmd: *types.ParsedCommand) !void {
 
 /// Builtin: help - show available builtins
 pub fn builtinHelp(shell: *Shell, cmd: *types.ParsedCommand) !void {
-    _ = shell;
-    _ = cmd;
+    // `help <topic>` has per-command entries in the executor's help system, and
+    // they were unreachable: this builtin wins the dispatch and ignored its
+    // argument, so `help cd` printed the whole list.
+    if (cmd.args.len > 0) {
+        const help_system = @import("../executor/builtins/help_system.zig");
+        if (help_system.hasTopic(cmd.args[0])) {
+            shell.last_exit_code = help_system.helpCmd(shell.allocator, cmd) catch 1;
+            return;
+        }
+        // No entry for that name: fall through to the full listing, which is what
+        // a bare `help` shows and what this did for every argument before.
+    }
 
     try IO.print("Den Shell - Built-in Commands\n\n", .{});
     try IO.print("Core Commands:\n", .{});
@@ -437,9 +447,123 @@ pub fn builtinHelp(shell: *Shell, cmd: *types.ParsedCommand) !void {
     try IO.print("  add-zsh-hook h fn Run fn on chpwd/precmd/preexec/zshexit\n", .{});
     try IO.print("  compinit          Accepted; completion needs no setup\n", .{});
     try IO.print("  is-at-least ver   Compare shell versions\n", .{});
-    // Counts the entries actually listed above. It read 54 while 56 were
-    // enumerated; the docs' separate figure of 58 is unverified and left alone.
-    try IO.print("\nTotal: 63 builtin commands available\n", .{});
+    try IO.print("\nPOSIX and bash compatibility:\n", .{});
+    try IO.print("  . file [args]     Read and run a file in the current shell\n", .{});
+    try IO.print("  :                 Do nothing, successfully\n", .{});
+    try IO.print("  [[ expr ]]        Conditional with pattern and regex matching\n", .{});
+    try IO.print("  let expr          Evaluate an arithmetic expression\n", .{});
+    try IO.print("  typeset [-opts]   Declare variables and attributes (as declare)\n", .{});
+    try IO.print("  mapfile var       Read lines of input into an array\n", .{});
+    try IO.print("  readarray var     Read lines of input into an array (as mapfile)\n", .{});
+    try IO.print("  caller [n]        Show the current call stack frame\n", .{});
+    try IO.print("  enable [-a] name  Enable or disable a builtin, or list them all\n", .{});
+    try IO.print("  compgen -X [pfx]  Generate completions of one kind\n", .{});
+    try IO.print("  shopt [-su] opt   Set or show a bash shell option\n", .{});
+    try IO.print("\nMore zsh compatibility:\n", .{});
+    try IO.print("  setopt [name]     Turn on a zsh option, or list what is on\n", .{});
+    try IO.print("  unsetopt name     Turn off a zsh option\n", .{});
+    try IO.print("  bashcompinit      Accepted; complete and compgen are always on\n", .{});
+    try IO.print("  compdef fn cmd    Accepted; completion is context-aware already\n", .{});
+    try IO.print("  zmodload module   Accepted; den has no loadable modules\n", .{});
+    try IO.print("  emulate [-L] sh   Accepted for sh, ksh and zsh; csh is refused\n", .{});
+    try IO.print("\nFiles and searching:\n", .{});
+    try IO.print("  ls [-la] [path]   List directory contents\n", .{});
+    try IO.print("  tree [path]       Print a directory tree\n", .{});
+    try IO.print("  find [path]       Find files by name, type, size or time\n", .{});
+    try IO.print("  ft [pattern]      Fuzzy file finder\n", .{});
+    try IO.print("  ifind [pattern]   Interactive file finder with fuzzy matching\n", .{});
+    try IO.print("  grep [-inv] pat   Search files for a pattern\n", .{});
+    try IO.print("  watch path cmd    Run a command when a file or directory changes\n", .{});
+    try IO.print("\nText and data:\n", .{});
+    try IO.print("  calc expression   Evaluate an arithmetic expression\n", .{});
+    try IO.print("  seq [start] end   Print a sequence of numbers\n", .{});
+    try IO.print("  seq-char a z      Print a sequence of characters\n", .{});
+    try IO.print("  uuid              Generate a random UUID\n", .{});
+    try IO.print("  base64 [-d] text  Encode or decode base64\n", .{});
+    try IO.print("  encode fmt [in]   Encode as base64, hex or url\n", .{});
+    try IO.print("  decode fmt [in]   Decode from base64, hex or url\n", .{});
+    try IO.print("  json file         Query and format a JSON file\n", .{});
+    try IO.print("  str sub [args]    String ops: trim, upcase, replace, split, ...\n", .{});
+    try IO.print("  path sub [args]   Path ops: basename, dirname, join, exists, ...\n", .{});
+    try IO.print("  math sub          Aggregate input: sum, avg, min, max, median, ...\n", .{});
+    try IO.print("  into type         Convert input to int, float, string, bool, ...\n", .{});
+    try IO.print("  detect            Split whitespace-aligned output into columns\n", .{});
+    try IO.print("\nStructured data (operate on the input given; see note below):\n", .{});
+    try IO.print("  from fmt          Parse json, csv, toml or yaml into a table\n", .{});
+    try IO.print("  to fmt            Render as json, csv, toml or yaml (stub)\n", .{});
+    try IO.print("  table             Render input as a table\n", .{});
+    try IO.print("  grid              Render input as a space-separated grid\n", .{});
+    try IO.print("  first [n]         Keep the first n rows (default 1)\n", .{});
+    try IO.print("  last [n]          Keep the last n rows (default 1)\n", .{});
+    try IO.print("  take n            Keep the first n rows (as first)\n", .{});
+    try IO.print("  skip n            Drop the first n rows\n", .{});
+    try IO.print("  length            Count the rows\n", .{});
+    try IO.print("  reverse           Reverse the row order\n", .{});
+    try IO.print("  uniq              Drop repeated rows\n", .{});
+    try IO.print("  sort-by col       Sort rows by a column\n", .{});
+    try IO.print("  group-by col      Group rows by a column\n", .{});
+    try IO.print("  enumerate         Number the rows\n", .{});
+    try IO.print("  wrap name         Wrap the input in a named column\n", .{});
+    try IO.print("  append value      Add a row at the end\n", .{});
+    try IO.print("  prepend value     Add a row at the start\n", .{});
+    try IO.print("  rename old new    Rename a column\n", .{});
+    try IO.print("  flatten           Flatten nested structure\n", .{});
+    try IO.print("  transpose         Swap rows and columns\n", .{});
+    try IO.print("  compact           Drop empty rows\n", .{});
+    try IO.print("  generate i n ex   Produce a sequence from an expression\n", .{});
+    try IO.print("  par-each cmd      Run a command for each row, in parallel\n", .{});
+    try IO.print("  explore           Browse the input in an interactive view\n", .{});
+    try IO.print("  select cols       Keep only the named columns\n", .{});
+    try IO.print("  get field         Read one field (stub)\n", .{});
+    try IO.print("  where f op v      Filter rows (stub)\n", .{});
+    try IO.print("  reject col        Drop a column (stub)\n", .{});
+    try IO.print("  columns           List column names (stub)\n", .{});
+    try IO.print("  values            List column values (stub)\n", .{});
+    try IO.print("  headers           Use the first row as headers (stub)\n", .{});
+    try IO.print("\nMonitoring:\n", .{});
+    try IO.print("  sys-stats         Show CPU, memory, disk and uptime\n", .{});
+    try IO.print("  netstats          Show network statistics\n", .{});
+    try IO.print("  net-check [host]  Check network connectivity\n", .{});
+    try IO.print("  proc-monitor      Monitor running processes\n", .{});
+    try IO.print("  log-tail file     Tail a log with filtering and highlighting\n", .{});
+    try IO.print("  log-parse file    Parse a structured log file\n", .{});
+    try IO.print("\nNetwork:\n", .{});
+    try IO.print("  http verb url     Make an HTTP request\n", .{});
+    try IO.print("  web url           Print the command that opens a URL\n", .{});
+    try IO.print("  ip                Print how to look up your public IP (stub)\n", .{});
+    try IO.print("  localip           Print how to look up your local IP (stub)\n", .{});
+    try IO.print("\nWorkflow shortcuts:\n", .{});
+    try IO.print("  bookmark [name]   Manage directory bookmarks\n", .{});
+    try IO.print("  dotfiles cmd      Manage dotfiles\n", .{});
+    try IO.print("  library cmd       Manage shell function libraries\n", .{});
+    try IO.print("  hook cmd          Manage custom command hooks\n", .{});
+    try IO.print("  reload            Reload the shell configuration\n", .{});
+    try IO.print("  wip [message]     git add and commit with a WIP message\n", .{});
+    try IO.print("  use module        Import a module's functions\n", .{});
+    try IO.print("  shrug             Print a shrug\n", .{});
+    try IO.print("\nmacOS helpers:\n", .{});
+    try IO.print("  code [path]       Open a path in VS Code\n", .{});
+    try IO.print("  pstorm [path]     Open a path in PhpStorm\n", .{});
+    try IO.print("  copyssh           Copy the SSH public key to the clipboard\n", .{});
+    try IO.print("  emptytrash        Empty the Trash\n", .{});
+    try IO.print("  hide file...      Set the hidden attribute on files\n", .{});
+    try IO.print("  show file...      Remove the hidden attribute from files\n", .{});
+    try IO.print("  reloaddns         Flush the DNS cache\n", .{});
+    try IO.print("\nExtras:\n", .{});
+    try IO.print("  ai [prompt]       AI-assisted completions and suggestions\n", .{});
+    try IO.print("  wasm cmd          Manage WebAssembly plugins\n", .{});
+    try IO.print("  coproc [n] cmd    Run a command as a coprocess with two pipes\n", .{});
+    try IO.print("  bench [-r n] cmd  Benchmark a command over several rounds\n", .{});
+    try IO.print("  parallel cmd      Run commands in parallel (stub)\n", .{});
+    try IO.print("  date [fmt]        Print or format the date\n", .{});
+    try IO.print("  yes [string]      Repeat a string until stopped\n", .{});
+    try IO.print("\nNote: each structured-data command works on the text it is\n", .{});
+    try IO.print("given. Structure is not carried between stages of a pipeline, so\n", .{});
+    try IO.print("`from json | get x` does not see the parsed table.\n", .{});
+
+    // Counts the entries actually listed above, which is now every builtin:
+    // `compgen -b` and this agree, and tests/test_builtins.zig checks it.
+    try IO.print("\nTotal: 163 builtin commands available\n", .{});
     try IO.print("For more help, use 'man bash' or visit docs.den.sh\n", .{});
 }
 
