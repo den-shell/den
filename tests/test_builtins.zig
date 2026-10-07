@@ -2612,3 +2612,114 @@ test "array assignment: a temporary variable prefix still works" {
     try test_utils.TestAssert.expectContains(r.stdout, "tempvar-ok");
     try test_utils.TestAssert.expectContains(r.stdout, "1");
 }
+
+test "script file: a one-line function definition followed by a call" {
+    const allocator = std.testing.allocator;
+    var fixture = try test_utils.DenShellFixture.init(allocator);
+    defer fixture.deinit();
+    // A script is read line by line, and the whole line was consumed as the
+    // definition, so the call sharing it was dropped: the function was defined
+    // and nothing ran. `-c` was unaffected, because it splits on `;` first.
+    const path = try fixture.createFile("one.sh", "g() { echo inside; }; g\n");
+    defer allocator.free(path);
+
+    const r = try fixture.execScript(path);
+    defer allocator.free(r.stdout);
+    defer allocator.free(r.stderr);
+
+    try test_utils.TestAssert.expectContains(r.stdout, "inside");
+}
+
+test "script file: two function definitions on one line" {
+    const allocator = std.testing.allocator;
+    var fixture = try test_utils.DenShellFixture.init(allocator);
+    defer fixture.deinit();
+    // The closing brace was found with a search for the last `}` on the line,
+    // so g's body ran into h's definition: g printed A, then h was never
+    // defined and the leftover braces were a syntax error.
+    const path = try fixture.createFile(
+        "two.sh",
+        "g() { echo A; }; h() { echo B; }\ng\nh\n",
+    );
+    defer allocator.free(path);
+
+    const r = try fixture.execScript(path);
+    defer allocator.free(r.stdout);
+    defer allocator.free(r.stderr);
+
+    try test_utils.TestAssert.expectContains(r.stdout, "A");
+    try test_utils.TestAssert.expectContains(r.stdout, "B");
+    try test_utils.TestAssert.expectEqual(@as(usize, 0), r.stderr.len);
+}
+
+test "script file: a brace inside a string does not end the body" {
+    const allocator = std.testing.allocator;
+    var fixture = try test_utils.DenShellFixture.init(allocator);
+    defer fixture.deinit();
+    const path = try fixture.createFile("brace.sh", "g() { echo \"}\"; }; g\n");
+    defer allocator.free(path);
+
+    const r = try fixture.execScript(path);
+    defer allocator.free(r.stdout);
+    defer allocator.free(r.stderr);
+
+    try test_utils.TestAssert.expectContains(r.stdout, "}");
+}
+
+test "script file: a command after the closing brace of a multi-line function" {
+    const allocator = std.testing.allocator;
+    var fixture = try test_utils.DenShellFixture.init(allocator);
+    defer fixture.deinit();
+    // The closing line carries the call, so the multi-line path needs the same
+    // treatment as the one-line one.
+    const path = try fixture.createFile("multi.sh", "g() {\n  echo A\n}; g\n");
+    defer allocator.free(path);
+
+    const r = try fixture.execScript(path);
+    defer allocator.free(r.stdout);
+    defer allocator.free(r.stderr);
+
+    try test_utils.TestAssert.expectContains(r.stdout, "A");
+}
+
+test "script file: nested definition and several trailing commands" {
+    const allocator = std.testing.allocator;
+    var fixture = try test_utils.DenShellFixture.init(allocator);
+    defer fixture.deinit();
+    const nested = try fixture.createFile(
+        "nested.sh",
+        "outer() { inner() { echo deep; }; inner; }; outer\n",
+    );
+    defer allocator.free(nested);
+
+    const r = try fixture.execScript(nested);
+    defer allocator.free(r.stdout);
+    defer allocator.free(r.stderr);
+    try test_utils.TestAssert.expectContains(r.stdout, "deep");
+
+    const several = try fixture.createFile("several.sh", "g() { echo A; }; echo B; g\n");
+    defer allocator.free(several);
+
+    const r2 = try fixture.execScript(several);
+    defer allocator.free(r2.stdout);
+    defer allocator.free(r2.stderr);
+
+    const b_at = std.mem.indexOf(u8, r2.stdout, "B") orelse return error.MissingB;
+    const a_at = std.mem.indexOf(u8, r2.stdout, "A") orelse return error.MissingA;
+    // Order matters: the trailing commands run in the order written.
+    try std.testing.expect(b_at < a_at);
+}
+
+test "script file: the function keyword form also runs its trailing command" {
+    const allocator = std.testing.allocator;
+    var fixture = try test_utils.DenShellFixture.init(allocator);
+    defer fixture.deinit();
+    const path = try fixture.createFile("kw.sh", "function g { echo A; }; g\n");
+    defer allocator.free(path);
+
+    const r = try fixture.execScript(path);
+    defer allocator.free(r.stdout);
+    defer allocator.free(r.stderr);
+
+    try test_utils.TestAssert.expectContains(r.stdout, "A");
+}

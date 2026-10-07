@@ -398,6 +398,14 @@ test "ShellFixture environment variables" {
 /// Den Shell fixture for testing Den-specific features
 /// Uses the actual Den shell binary instead of system sh
 pub const DenShellFixture = struct {
+    /// Captured output of one den run. Named rather than anonymous so the
+    /// several entry points share one type.
+    pub const Result = struct {
+        stdout: []const u8,
+        stderr: []const u8,
+        exit_code: u8,
+    };
+
     temp_dir: TempDir,
     allocator: std.mem.Allocator,
     den_binary: []const u8,
@@ -544,11 +552,22 @@ pub const DenShellFixture = struct {
         };
     }
 
-    pub fn execDirect(self: *DenShellFixture, command: []const u8) !struct { stdout: []const u8, stderr: []const u8, exit_code: u8 } {
-        const args = [_][]const u8{ self.den_binary, "-c", command };
+    /// Run a script file through den, the way `den script.sh` does.
+    ///
+    /// Not the same path as `-c`: a script is read line by line, so a bug can
+    /// live in one and not the other.
+    pub fn execScript(self: *DenShellFixture, script_path: []const u8) !Result {
+        return self.spawnDen(&[_][]const u8{ self.den_binary, script_path });
+    }
+
+    pub fn execDirect(self: *DenShellFixture, command: []const u8) !Result {
+        return self.spawnDen(&[_][]const u8{ self.den_binary, "-c", command });
+    }
+
+    fn spawnDen(self: *DenShellFixture, args: []const []const u8) !Result {
 
         var child = try std.process.spawn(io, .{
-            .argv = &args,
+            .argv = args,
             .stdout = .pipe,
             .stderr = .pipe,
         });
