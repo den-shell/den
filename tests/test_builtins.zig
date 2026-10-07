@@ -2931,3 +2931,88 @@ test "grep does not colour output that is not a terminal" {
     try test_utils.TestAssert.expectContains(r.stdout, "alpha");
     try std.testing.expect(std.mem.indexOfScalar(u8, r.stdout, 0x1b) == null);
 }
+
+test "tab completion offers builtins, not just what is on PATH" {
+    const allocator = std.testing.allocator;
+    var fixture = try test_utils.DenShellFixture.init(allocator);
+    defer fixture.deinit();
+    // Completion walked PATH only, so a builtin with no binary of the same name
+    // could never be completed -- which was most of them. `echo` was offered
+    // solely because /bin/echo happens to exist.
+    const r = try fixture.execDirect(
+        "compgen -c zsty; compgen -c bindk; compgen -c setop; " ++
+            "compgen -c autolo; compgen -c add-zsh; compgen -c compin",
+    );
+    defer allocator.free(r.stdout);
+    defer allocator.free(r.stderr);
+
+    try test_utils.TestAssert.expectContains(r.stdout, "zstyle");
+    try test_utils.TestAssert.expectContains(r.stdout, "bindkey");
+    try test_utils.TestAssert.expectContains(r.stdout, "setopt");
+    try test_utils.TestAssert.expectContains(r.stdout, "autoload");
+    try test_utils.TestAssert.expectContains(r.stdout, "add-zsh-hook");
+    try test_utils.TestAssert.expectContains(r.stdout, "compinit");
+}
+
+test "a builtin that shadows a binary is offered once" {
+    const allocator = std.testing.allocator;
+    var fixture = try test_utils.DenShellFixture.init(allocator);
+    defer fixture.deinit();
+    // `echo` is both a builtin and /bin/echo. Builtins are added before the PATH
+    // walk, which skips a name already collected.
+    const r = try fixture.execDirect("compgen -c echo | grep -c '^echo$'");
+    defer allocator.free(r.stdout);
+    defer allocator.free(r.stderr);
+
+    try test_utils.TestAssert.expectContains(r.stdout, "1");
+}
+
+test "every name compgen -b lists is really a builtin" {
+    const allocator = std.testing.allocator;
+    var fixture = try test_utils.DenShellFixture.init(allocator);
+    defer fixture.deinit();
+    // The invariant the four hand-kept lists used to break in both directions.
+    // Checked through den rather than by comparing two arrays in Zig, so it also
+    // covers the dispatch actually being wired.
+    const r = try fixture.execDirect(
+        "for b in $(compgen -b); do type \"$b\" > /dev/null 2>&1 || echo \"BAD:$b\"; done; echo CHECKED",
+    );
+    defer allocator.free(r.stdout);
+    defer allocator.free(r.stderr);
+
+    try test_utils.TestAssert.expectContains(r.stdout, "CHECKED");
+    try std.testing.expect(std.mem.indexOf(u8, r.stdout, "BAD:") == null);
+}
+
+test "every builtin can be completed" {
+    const allocator = std.testing.allocator;
+    var fixture = try test_utils.DenShellFixture.init(allocator);
+    defer fixture.deinit();
+    // Completing a builtin's full name must offer it back. This is what was
+    // broken for about 95 of them.
+    const r = try fixture.execDirect(
+        "for b in $(compgen -b); do compgen -c \"$b\" | grep -qxF \"$b\" || echo \"MISSING:$b\"; done; echo CHECKED",
+    );
+    defer allocator.free(r.stdout);
+    defer allocator.free(r.stderr);
+
+    try test_utils.TestAssert.expectContains(r.stdout, "CHECKED");
+    try std.testing.expect(std.mem.indexOf(u8, r.stdout, "MISSING:") == null);
+}
+
+test "compgen -b and enable -a list the same builtins" {
+    const allocator = std.testing.allocator;
+    var fixture = try test_utils.DenShellFixture.init(allocator);
+    defer fixture.deinit();
+    // Two listings from one list. They held 63 and 67 of the 163 names before,
+    // and not the same ones.
+    const r = try fixture.execDirect(
+        "compgen -b | sort > /tmp/den_cb.txt; " ++
+            "enable -a | grep '^  ' | sed 's/^  //' | sort > /tmp/den_ea.txt; " ++
+            "diff /tmp/den_cb.txt /tmp/den_ea.txt > /dev/null && echo SAME || echo DIFFER",
+    );
+    defer allocator.free(r.stdout);
+    defer allocator.free(r.stderr);
+
+    try test_utils.TestAssert.expectContains(r.stdout, "SAME");
+}
