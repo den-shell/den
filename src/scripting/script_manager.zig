@@ -498,6 +498,12 @@ pub const ScriptManager = struct {
                     break;
                 };
                 line_num = result.end;
+                // A command sharing the line with the definition, as in
+                // `g() { echo hi; }; g`, which was being discarded.
+                if (result.rest.len > 0) {
+                    _ = shell.executeCommand(result.rest) catch {};
+                    if (shell.exit_requested) break;
+                }
                 continue;
             }
 

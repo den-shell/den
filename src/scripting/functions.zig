@@ -345,6 +345,49 @@ pub const FunctionParser = struct {
     /// Quote-aware, so a `{` or `}` inside a string does not count towards the
     /// nesting - `hi() { echo "}"; }` closes at the last brace, not the quoted
     /// one.
+    /// The opening `{` of a one-line definition and the `}` that matches it.
+    ///
+    /// Matching matters rather than taking the last `}` on the line: with the
+    /// last one, `g() { echo A; }; h() { echo B; }` gave `g` a body running into
+    /// h's definition, and a `}` inside a string -- `g() { echo "}"; }` -- cut
+    /// the body short. Quotes and backslash escapes are skipped, in the same
+    /// shape as `isSingleLineDefinition`.
+    fn braceSpan(line: []const u8) ?struct { open: usize, close: usize } {
+        var depth: i32 = 0;
+        var open_at: ?usize = null;
+        var in_sq = false;
+        var in_dq = false;
+        var i: usize = 0;
+
+        while (i < line.len) : (i += 1) {
+            const c = line[i];
+            if (c == '\\' and !in_sq and i + 1 < line.len) {
+                i += 1;
+                continue;
+            }
+            if (c == '\'' and !in_dq) {
+                in_sq = !in_sq;
+                continue;
+            }
+            if (c == '"' and !in_sq) {
+                in_dq = !in_dq;
+                continue;
+            }
+            if (in_sq or in_dq) continue;
+
+            if (c == '{') {
+                depth += 1;
+                if (open_at == null) open_at = i;
+            } else if (c == '}') {
+                depth -= 1;
+                if (depth == 0) {
+                    if (open_at) |o| return .{ .open = o, .close = i };
+                }
+            }
+        }
+        return null;
+    }
+
     fn isSingleLineDefinition(line: []const u8) bool {
         var depth: i32 = 0;
         var opened = false;
@@ -453,7 +496,12 @@ pub const FunctionParser = struct {
         return count;
     }
 
-    pub fn parseFunction(self: *FunctionParser, lines: [][]const u8, start: usize) !struct { name: []const u8, body: [][]const u8, end: usize } {
+    /// Parse a function definition starting at `lines[start]`.
+    ///
+    /// `name` and `body` are owned by the caller. `rest` is not: it borrows from
+    /// `lines[end]` and holds whatever followed the definition on that line, for
+    /// the caller to run as its own command.
+    pub fn parseFunction(self: *FunctionParser, lines: [][]const u8, start: usize) !struct { name: []const u8, body: [][]const u8, end: usize, rest: []const u8 } {
         const first_line = std.mem.trim(u8, lines[start], &std.ascii.whitespace);
 
         var name: []const u8 = undefined;
@@ -503,28 +551,41 @@ pub const FunctionParser = struct {
         // silent. `source` avoided it by routing one-liners elsewhere; `-c`
         // and a script file argument came straight here.
         if (isSingleLineDefinition(first_line)) {
-            const open = std.mem.indexOfScalar(u8, first_line, '{').?;
-            const close = std.mem.lastIndexOfScalar(u8, first_line, '}').?;
-            const inner = std.mem.trim(u8, first_line[open + 1 .. close], &std.ascii.whitespace);
+            const span = braceSpan(first_line) orelse return error.InvalidFunctionSyntax;
+            const inner = std.mem.trim(u8, first_line[span.open + 1 .. span.close], &std.ascii.whitespace);
 
             body_count = try splitStatements(self.allocator, inner, &body_buffer);
 
             const body = try self.allocator.alloc([]const u8, body_count);
             @memcpy(body, body_buffer[0..body_count]);
 
-            return .{ .name = name, .body = body, .end = start };
+            // Anything after the closing brace is a separate command sharing
+            // the line, as in `g() { echo hi; }; g`. The caller runs it; it was
+            // being dropped, so the definition took effect and the call did not.
+            var rest = std.mem.trim(u8, first_line[span.close + 1 ..], &std.ascii.whitespace);
+            if (rest.len > 0 and rest[0] == ';') {
+                rest = std.mem.trim(u8, rest[1..], &std.ascii.whitespace);
+            }
+
+            return .{ .name = name, .body = body, .end = start, .rest = rest };
         }
 
         while (i < lines.len) : (i += 1) {
             const line = lines[i];
 
-            // Count braces
-            for (line) |c| {
+            // Count braces, remembering where the one that closes the
+            // definition sits: a closing line can carry a command after it, as
+            // in `}; g`, and that command was being dropped.
+            var close_at: ?usize = null;
+            for (line, 0..) |c, ci| {
                 if (c == '{') {
                     brace_count += 1;
                     found_opening = true;
                 } else if (c == '}') {
                     brace_count -= 1;
+                    if (found_opening and brace_count == 0 and close_at == null) {
+                        close_at = ci;
+                    }
                 }
             }
 
@@ -545,10 +606,19 @@ pub const FunctionParser = struct {
                 const body = try self.allocator.alloc([]const u8, body_count);
                 @memcpy(body, body_buffer[0..body_count]);
 
+                var rest: []const u8 = "";
+                if (close_at) |ca| {
+                    rest = std.mem.trim(u8, line[ca + 1 ..], &std.ascii.whitespace);
+                    if (rest.len > 0 and rest[0] == ';') {
+                        rest = std.mem.trim(u8, rest[1..], &std.ascii.whitespace);
+                    }
+                }
+
                 return .{
                     .name = name,
                     .body = body,
                     .end = i,
+                    .rest = rest,
                 };
             }
         }
