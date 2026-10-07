@@ -409,6 +409,19 @@ pub const Expansion = struct {
                 result_len += 1;
                 i += 1;
             } else if (char == '`') {
+                // An escaped backtick is a literal one, the same rule the `$`
+                // branch below already followed. Single quotes are turned into
+                // these escapes by the tokenizer, so without this `echo '`x`'`
+                // printed the backslashes it had added.
+                if (i > 0 and input[i - 1] == '\\') {
+                    if (result_len > 0) result_len -= 1;
+                    if (result_len >= result_buffer.len) return error.ExpansionTooLong;
+                    result_buffer[result_len] = '`';
+                    result_len += 1;
+                    i += 1;
+                    continue;
+                }
+
                 // Backtick command substitution
                 const expansion_result = try self.expandBacktick(input[i..]);
                 defer if (expansion_result.owned) self.allocator.free(@constCast(expansion_result.value));

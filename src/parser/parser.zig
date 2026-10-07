@@ -77,6 +77,21 @@ pub const Parser = struct {
         }
 
         // Allocate and copy
+        // A stray paren left unconsumed means the line did not parse. The loop
+        // above simply stops at a token it does not recognise, so `echo (hello`
+        // dropped `(hello` and reported success -- every other shell calls that
+        // a syntax error.
+        //
+        // Only parens are rejected, not any leftover token: compound commands
+        // are handled before this parser is reached, and erroring on everything
+        // left over would reject the keywords they start with.
+        if (self.pos < self.tokens.len) {
+            switch (self.tokens[self.pos].type) {
+                .lparen, .rparen => return error.UnexpectedToken,
+                else => {},
+            }
+        }
+
         const commands = try self.allocator.alloc(types.ParsedCommand, cmd_count);
         errdefer self.allocator.free(commands);
         @memcpy(commands, commands_buffer[0..cmd_count]);

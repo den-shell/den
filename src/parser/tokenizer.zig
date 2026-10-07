@@ -893,8 +893,11 @@ pub const Tokenizer = struct {
             }
 
             // Add character to word
-            // If in single quotes, escape special characters ($, `) so they're not expanded
-            if (in_single_quote and char == '$') {
+            // If in single quotes, escape special characters ($, `) so they're
+            // not expanded. The backtick was named in this comment but never
+            // actually escaped, so `echo '`pwd`'` ran pwd -- command
+            // substitution inside single quotes, which must never happen.
+            if (in_single_quote and (char == '$' or char == '`')) {
                 if (word_len + 1 >= word_buffer.len) return error.WordTooLong;
                 word_buffer[word_len] = '\\';
                 word_len += 1;
