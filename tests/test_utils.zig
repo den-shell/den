@@ -404,6 +404,12 @@ pub const DenShellFixture = struct {
         stdout: []const u8,
         stderr: []const u8,
         exit_code: u8,
+        /// True when den did not exit normally -- killed by a signal, which is
+        /// what a crash looks like from here. `exit_code` cannot show this on
+        /// its own, since an abnormal end is reported as 1 like any other
+        /// failure, so a test asserting only on the status would pass straight
+        /// through a segfault.
+        signaled: bool = false,
     };
 
     temp_dir: TempDir,
@@ -440,116 +446,22 @@ pub const DenShellFixture = struct {
 
     /// Execute a command using the Den shell and capture output
     /// The command is run from the temp directory
-    pub fn exec(self: *DenShellFixture, command: []const u8) !struct { stdout: []const u8, stderr: []const u8, exit_code: u8 } {
+    pub fn exec(self: *DenShellFixture, command: []const u8) !Result {
         // Build command that changes to temp dir first, then runs the command
         const full_command = try std.fmt.allocPrint(self.allocator, "cd {s} && {s}", .{ self.temp_dir.path, command });
         defer self.allocator.free(full_command);
 
-        const args = [_][]const u8{ self.den_binary, "-c", full_command };
-
-        var child = try std.process.spawn(io, .{
-            .argv = &args,
-            .stdout = .pipe,
-            .stderr = .pipe,
-        });
-
-        // Read output using ArrayList for Zig 0.16 compatibility
-        var stdout_list = std.ArrayList(u8).empty;
-        errdefer stdout_list.deinit(self.allocator);
-        var stderr_list = std.ArrayList(u8).empty;
-        errdefer stderr_list.deinit(self.allocator);
-
-        var read_buf: [4096]u8 = undefined;
-
-        if (child.stdout) |stdout| {
-            while (true) {
-                const n = stdout.readStreaming(io, &.{&read_buf}) catch break;
-                if (n == 0) break;
-                try stdout_list.appendSlice(self.allocator, read_buf[0..n]);
-            }
-        }
-
-        if (child.stderr) |stderr| {
-            while (true) {
-                const n = stderr.readStreaming(io, &.{&read_buf}) catch break;
-                if (n == 0) break;
-                try stderr_list.appendSlice(self.allocator, read_buf[0..n]);
-            }
-        }
-
-        const term = try child.wait(io);
-        const exit_code: u8 = switch (term) {
-            .exited => |code| @intCast(code),
-            else => 1,
-        };
-
-        const stdout_owned = try stdout_list.toOwnedSlice(self.allocator);
-        const stderr_owned = try stderr_list.toOwnedSlice(self.allocator);
-
-        return .{
-            .stdout = stdout_owned,
-            .stderr = stderr_owned,
-            .exit_code = exit_code,
-        };
+        return self.spawnDen(&[_][]const u8{ self.den_binary, "-c", full_command }, null);
     }
 
-    /// Execute a command directly (not prefixed with cd to temp dir)
-    /// Execute a command with den *started in* the temp directory, rather than
-    /// cd'ing once it is already running.
-    ///
-    /// Anything den reads at startup -- `den.jsonc`, and so the history file it
-    /// points at -- then comes from the temp directory, which is what makes a
-    /// test hermetic instead of reading the developer's own files. The binary
-    /// path has to be absolute here, since the relative one is resolved against
-    /// the child's working directory.
-    pub fn execInTempDir(self: *DenShellFixture, command: []const u8) !struct { stdout: []const u8, stderr: []const u8, exit_code: u8 } {
+    pub fn execInTempDir(self: *DenShellFixture, command: []const u8) !Result {
         var cwd_buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
         const cwd_len = try std.process.currentPath(io, &cwd_buf);
         const abs_binary = try std.fmt.allocPrint(self.allocator, "{s}/zig-out/bin/den", .{cwd_buf[0..cwd_len]});
         defer self.allocator.free(abs_binary);
 
-        const args = [_][]const u8{ abs_binary, "-c", command };
-
-        var child = try std.process.spawn(io, .{
-            .argv = &args,
-            .stdout = .pipe,
-            .stderr = .pipe,
-            .cwd = .{ .path = self.temp_dir.path },
-        });
-
-        var stdout_list = std.ArrayList(u8).empty;
-        errdefer stdout_list.deinit(self.allocator);
-        var stderr_list = std.ArrayList(u8).empty;
-        errdefer stderr_list.deinit(self.allocator);
-
-        var read_buf: [4096]u8 = undefined;
-
-        if (child.stdout) |stdout| {
-            while (true) {
-                const n = stdout.readStreaming(io, &.{&read_buf}) catch break;
-                if (n == 0) break;
-                try stdout_list.appendSlice(self.allocator, read_buf[0..n]);
-            }
-        }
-        if (child.stderr) |stderr| {
-            while (true) {
-                const n = stderr.readStreaming(io, &.{&read_buf}) catch break;
-                if (n == 0) break;
-                try stderr_list.appendSlice(self.allocator, read_buf[0..n]);
-            }
-        }
-
-        const term = try child.wait(io);
-        const exit_code: u8 = switch (term) {
-            .exited => |code| code,
-            else => 1,
-        };
-
-        return .{
-            .stdout = try stdout_list.toOwnedSlice(self.allocator),
-            .stderr = try stderr_list.toOwnedSlice(self.allocator),
-            .exit_code = exit_code,
-        };
+        // Started in the temp directory so a den.jsonc there is read at startup.
+        return self.spawnDen(&[_][]const u8{ abs_binary, "-c", command }, self.temp_dir.path);
     }
 
     /// Run a script file through den, the way `den script.sh` does.
@@ -557,17 +469,27 @@ pub const DenShellFixture = struct {
     /// Not the same path as `-c`: a script is read line by line, so a bug can
     /// live in one and not the other.
     pub fn execScript(self: *DenShellFixture, script_path: []const u8) !Result {
-        return self.spawnDen(&[_][]const u8{ self.den_binary, script_path });
+        return self.spawnDen(&[_][]const u8{ self.den_binary, script_path }, null);
     }
 
     pub fn execDirect(self: *DenShellFixture, command: []const u8) !Result {
-        return self.spawnDen(&[_][]const u8{ self.den_binary, "-c", command });
+        return self.spawnDen(&[_][]const u8{ self.den_binary, "-c", command }, null);
     }
 
-    fn spawnDen(self: *DenShellFixture, args: []const []const u8) !Result {
+    /// Spawn den and capture its output.
+    ///
+    /// `cwd` is the directory to start it in, for the cases where den must read
+    /// a config file sitting beside the test; null leaves the parent's.
+    fn spawnDen(self: *DenShellFixture, args: []const []const u8, cwd: ?[]const u8) !Result {
 
         var child = try std.process.spawn(io, .{
             .argv = args,
+            .cwd = if (cwd) |dir| .{ .path = dir } else .inherit,
+            // /dev/null rather than the inherited terminal: a command that reads
+            // stdin -- `cat`, `read`, an unterminated here-document -- would
+            // otherwise block forever on the test runner's terminal, and the
+            // suite hangs instead of failing.
+            .stdin = .ignore,
             .stdout = .pipe,
             .stderr = .pipe,
         });
@@ -609,6 +531,7 @@ pub const DenShellFixture = struct {
             .stdout = stdout_owned,
             .stderr = stderr_owned,
             .exit_code = exit_code,
+            .signaled = term != .exited,
         };
     }
 };
