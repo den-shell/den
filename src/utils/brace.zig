@@ -33,7 +33,7 @@ pub const BraceExpander = struct {
                 // Sequence expansion: {1..10} or {a..z}
                 const expanded = try self.expandSequence(prefix, brace_content, suffix, sep_pos);
                 // Recursively expand any remaining braces in the results
-                return try self.expandAllRecursive(expanded);
+                return try self.recurseUnlessUnchanged(input, expanded);
             }
         }
 
@@ -41,7 +41,7 @@ pub const BraceExpander = struct {
         if (self.hasCommaAtTopLevel(brace_content)) {
             const expanded = try self.expandListNested(prefix, brace_content, suffix);
             // Recursively expand any remaining braces in the results
-            return try self.expandAllRecursive(expanded);
+            return try self.recurseUnlessUnchanged(input, expanded);
         }
 
         // Not a valid brace pattern, return as-is
@@ -49,6 +49,28 @@ pub const BraceExpander = struct {
         errdefer self.allocator.free(result);
         result[0] = try self.allocator.dupe(u8, input);
         return result;
+    }
+
+    /// Recurse into the results, unless expansion changed nothing.
+    ///
+    /// A pattern that is not a valid expansion comes back with its braces --
+    /// `{o..5}` exceeds the character-range limit, `{1..z}` has no numeric end,
+    /// `{x..}` has no end at all. Recursing on that re-expands the same text,
+    /// which re-expands the same text: `echo {o..5}` ran until the stack gave
+    /// out and den died of a segfault.
+    ///
+    /// Reaching a fixed point means the text is literal, so it is returned as
+    /// it is. The check belongs here, before the descent, rather than inside
+    /// `expandAllRecursive`, where it would be reached only after the recursive
+    /// call it is meant to prevent. Being in one place also means a future
+    /// fallback cannot reintroduce the loop.
+    fn recurseUnlessUnchanged(
+        self: *BraceExpander,
+        input: []const u8,
+        expanded: [][]const u8,
+    ) error{OutOfMemory}![][]const u8 {
+        if (expanded.len == 1 and std.mem.eql(u8, expanded[0], input)) return expanded;
+        return self.expandAllRecursive(expanded);
     }
 
     /// Find the outermost matching braces, handling nesting
@@ -143,7 +165,6 @@ pub const BraceExpander = struct {
             if (std.mem.indexOfScalar(u8, item, '{') != null) {
                 const expanded = try self.expand(item);
                 defer self.allocator.free(expanded);
-
                 for (expanded) |exp_item| {
                     try all_results.append(self.allocator, exp_item);
                 }
@@ -678,4 +699,47 @@ test "formatZeroPadded @abs() handles negative numbers safely" {
     try std.testing.expectEqual(@as(usize, 5), result.len);
     try std.testing.expectEqualStrings("-002", result[0]);
     try std.testing.expectEqualStrings("002", result[4]);
+}
+
+test "invalid ranges stay literal instead of recursing forever" {
+    // Each of these came back from expansion unchanged, braces and all, and the
+    // result was then expanded again: `echo {o..5}` recursed until the stack ran
+    // out and den died of a segfault. A fuzz case found it.
+    const cases = [_][]const u8{
+        "{o..5}", // a character range wider than the limit
+        "{5..o}", // the same, descending
+        "{1..z}", // numeric start, non-numeric end
+        "{x..}", // no end
+        "{..z}", // no start
+        "{..}", // neither
+        "{z..}",
+    };
+
+    for (cases) |input| {
+        var expander = BraceExpander.init(std.testing.allocator);
+        const result = try expander.expand(input);
+        defer {
+            for (result) |r| std.testing.allocator.free(r);
+            std.testing.allocator.free(result);
+        }
+
+        // Literal, and one word -- which is what bash does with all of these.
+        try std.testing.expectEqual(@as(usize, 1), result.len);
+        try std.testing.expectEqualStrings(input, result[0]);
+    }
+}
+
+test "valid ranges still expand after the fixed-point guard" {
+    var expander = BraceExpander.init(std.testing.allocator);
+
+    const result = try expander.expand("{1..3}{a,b}");
+    defer {
+        for (result) |r| std.testing.allocator.free(r);
+        std.testing.allocator.free(result);
+    }
+
+    // The guard must not stop a nested expansion that is making progress.
+    try std.testing.expectEqual(@as(usize, 6), result.len);
+    try std.testing.expectEqualStrings("1a", result[0]);
+    try std.testing.expectEqualStrings("3b", result[5]);
 }
