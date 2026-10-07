@@ -1296,16 +1296,13 @@ pub const Shell = struct {
         // through to the paths below.
         if (try compound_exec.tryExecute(self, input)) return;
 
-        // Handle ! negation prefix (negate exit code)
-        const neg_trimmed = std.mem.trim(u8, input, &std.ascii.whitespace);
-        if (std.mem.startsWith(u8, neg_trimmed, "! ")) {
-            const inner = std.mem.trim(u8, neg_trimmed[2..], &std.ascii.whitespace);
-            if (inner.len > 0) {
-                self.executeCommand(inner) catch {};
-                self.last_exit_code = if (self.last_exit_code == 0) @as(i32, 1) else @as(i32, 0);
-                return;
-            }
-        }
+        // `!` used to be handled here, by stripping it and negating whatever the
+        // rest of the line returned. That negated the entire and-or list, so
+        // `! false && echo reached` inverted `false && echo reached` as a whole
+        // -- the echo never ran, where every other shell runs it, because `!`
+        // applies to one pipeline and `&&` joins pipelines. The executor handles
+        // it per command now, which is also what makes it work in the middle of
+        // a chain.
 
         // Check for function definition (name() { ... } or function name { ... })
         const fn_trimmed = std.mem.trim(u8, input, &std.ascii.whitespace);

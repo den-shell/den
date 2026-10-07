@@ -27,6 +27,7 @@ const BuiltinContext = builtins.BuiltinContext;
 const Shell = @import("../shell.zig").Shell;
 const autoload_builtin = @import("../shell/autoload_builtin.zig");
 const variable_handling = @import("../shell/variable_handling.zig");
+const platform = @import("../utils/platform.zig");
 const shell_mod_for_arrays = variable_handling;
 
 // Plugin hook types for command_not_found hook
@@ -607,8 +608,34 @@ pub const Executor = struct {
         // Exec (no fork - we're already in child)
         // Use C's environ directly which is updated by setenv/unsetenv
         _ = c.execvp(cmd_z.ptr, @ptrCast(argv.ptr));
-        IO.eprint("den: {s}: command not found\n", .{command.name}) catch {};
-        std.c._exit(127);
+        // execvp failed. Which way it failed matters: a directory or a file
+        // without its executable bit is 126, not 127.
+        std.c._exit(@intCast(reportUnrunnable(command.name)));
+    }
+
+    /// Report a command that could not be run, and give the status POSIX asks
+    /// for: 126 when the file is there but cannot be executed, 127 only when
+    /// nothing was found.
+    ///
+    /// den reported 127 for everything, so `./script.sh` without its executable
+    /// bit looked like a misspelling rather than a permissions problem.
+    ///
+    /// Only a name containing a slash is examined. A bare word is a PATH lookup,
+    /// and a non-executable file of that name sitting in the working directory
+    /// was never a candidate -- bash says `command not found` there too.
+    fn reportUnrunnable(name: []const u8) i32 {
+        if (std.mem.indexOfScalar(u8, name, '/') != null and platform.fileExists(name)) {
+            if (platform.isDirectory(name)) {
+                IO.eprint("den: {s}: is a directory\n", .{name}) catch {};
+                return 126;
+            }
+            if (!platform.isExecutable(name)) {
+                IO.eprint("den: {s}: Permission denied\n", .{name}) catch {};
+                return 126;
+            }
+        }
+        IO.eprint("den: {s}: command not found\n", .{name}) catch {};
+        return 127;
     }
 
     fn applyRedirections(self: *Executor, redirections: []types.Redirection) !void {
@@ -747,6 +774,23 @@ pub const Executor = struct {
                 return shell.last_exit_code;
             }
             return 0;
+        }
+
+        // `!` negates the command that follows it.
+        //
+        // This was handled only when `!` was the first word of the whole input,
+        // so it worked for `! false` and not for `true && ! false`, where `!`
+        // was looked up as a command and reported as not found with status 127.
+        // Done here so it applies wherever a command can appear.
+        if (std.mem.eql(u8, command.name, "!") and command.args.len > 0) {
+            // Shares the argument and redirection slices with `command`, which
+            // still owns them; this is a view for dispatch, not a copy to free.
+            var inner = command.*;
+            inner.name = command.args[0];
+            inner.args = command.args[1..];
+
+            const status = try self.executeCommand(&inner);
+            return if (status == 0) 1 else 0;
         }
 
         // `name=(...)` and `name+=(...)`: an array assignment. The tokenizer keeps
@@ -1600,18 +1644,36 @@ pub const Executor = struct {
                 }
             }
 
-            try IO.eprint("den: {s}: command not found\n", .{command.name});
-
-            // Try to provide typo correction suggestions
-            var tc = TypoCorrection.init(self.allocator);
-            if (tc.formatSuggestionMessage(command.name)) |maybe_msg| {
-                if (maybe_msg) |suggestion_msg| {
-                    defer self.allocator.free(suggestion_msg);
-                    try IO.eprint("{s}\n", .{suggestion_msg});
+            // Reported in the parent, which has not applied the command's
+            // redirections -- a child would have. Without this, `./x 2>/dev/null`
+            // still printed, where every other shell stays quiet.
+            const status = blk: {
+                if (command.redirections.len == 0 or builtin.os.tag == .windows) {
+                    break :blk reportUnrunnable(command.name);
                 }
-            } else |_| {}
+                var saved = redirection.SavedFds.save();
+                self.applyRedirections(command.redirections) catch {
+                    saved.restore();
+                    break :blk reportUnrunnable(command.name);
+                };
+                const s2 = reportUnrunnable(command.name);
+                saved.restore();
+                break :blk s2;
+            };
 
-            return 127; // Standard "command not found" exit code
+            // Suggestions only help when the name was not found at all; a file
+            // that is simply not executable is not a misspelling.
+            if (status == 127) {
+                var tc = TypoCorrection.init(self.allocator);
+                if (tc.formatSuggestionMessage(command.name)) |maybe_msg| {
+                    if (maybe_msg) |suggestion_msg| {
+                        defer self.allocator.free(suggestion_msg);
+                        try IO.eprint("{s}\n", .{suggestion_msg});
+                    }
+                } else |_| {}
+            }
+
+            return status;
         }
 
         if (builtin.os.tag == .windows) {
@@ -1810,9 +1872,9 @@ pub const Executor = struct {
 
             // Use C's environ directly which is updated by setenv/unsetenv
             _ = c.execvp(cmd_z.ptr, @ptrCast(argv.ptr));
-            // If execvp returns, it failed
-            IO.eprint("den: {s}: command not found\n", .{command.name}) catch {};
-            std.c._exit(127);
+            // If execvp returns, it failed. Which way it failed matters: a
+            // directory or a file without its executable bit is 126, not 127.
+            std.c._exit(@intCast(reportUnrunnable(command.name)));
         } else {
             // Parent process - wait for child (retry on EINTR from signals)
             var wait_status_exec: c_int = 0;
@@ -1920,9 +1982,9 @@ pub const Executor = struct {
 
             // Use C's environ directly which is updated by setenv/unsetenv
             _ = c.execvp(cmd_z.ptr, @ptrCast(argv.ptr));
-            // If execvp returns, it failed
-            IO.eprint("den: {s}: command not found\n", .{command.name}) catch {};
-            std.c._exit(127);
+            // If execvp returns, it failed. Which way it failed matters: a
+            // directory or a file without its executable bit is 126, not 127.
+            std.c._exit(@intCast(reportUnrunnable(command.name)));
         } else {
             // Parent process - don't wait; record the job so `$!` and `wait` see it.
             try self.registerBackgroundJob(pid, command);
