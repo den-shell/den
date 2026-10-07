@@ -182,6 +182,7 @@ pub const getVariableValue = variable_handling.getVariableValue;
 pub const setVariableValue = variable_handling.setVariableValue;
 pub const isArrayAssignment = variable_handling.isArrayAssignment;
 pub const executeArrayAssignment = variable_handling.executeArrayAssignment;
+pub const wordEnd = variable_handling.wordEnd;
 pub const isArrayElementAssignment = variable_handling.isArrayElementAssignment;
 pub const executeArrayElementAssignment = variable_handling.executeArrayElementAssignment;
 pub const executeAssocArrayAssignment = variable_handling.executeAssocArrayAssignment;

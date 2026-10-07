@@ -26,6 +26,8 @@ const BuiltinContext = builtins.BuiltinContext;
 // Forward declaration for Shell type
 const Shell = @import("../shell.zig").Shell;
 const autoload_builtin = @import("../shell/autoload_builtin.zig");
+const variable_handling = @import("../shell/variable_handling.zig");
+const shell_mod_for_arrays = variable_handling;
 
 // Plugin hook types for command_not_found hook
 const HookType = @import("../plugins/interface.zig").HookType;
@@ -745,6 +747,21 @@ pub const Executor = struct {
                 return shell.last_exit_code;
             }
             return 0;
+        }
+
+        // `name=(...)` and `name+=(...)`: an array assignment. The tokenizer keeps
+        // it as a single word, so it reaches here wherever a command can appear --
+        // in an and-or chain, a pipeline, a loop body. Before this it only worked
+        // as a whole line, recognised by the shell before the parser saw it, so
+        // `true && a=(x) && echo done` assigned nothing and ran nothing.
+        if (self.shell) |shell| {
+            if (variable_handling.isArrayAssignment(command.name)) {
+                shell_mod_for_arrays.executeArrayAssignment(shell, command.name) catch {
+                    IO.eprint("den: {s}: invalid array assignment\n", .{command.name}) catch {};
+                    return 1;
+                };
+                return shell.last_exit_code;
+            }
         }
 
         // Handle bare variable assignment: VAR=value (when command name contains =)

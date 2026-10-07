@@ -8,8 +8,42 @@ const Shell = @import("../shell.zig").Shell;
 const HookContext = @import("../plugins/interface.zig").HookContext;
 const expansion = @import("../utils/expansion.zig");
 const cmd_exp = @import("command_expansion.zig");
+const tokenizer = @import("../parser/tokenizer.zig");
 const Glob = @import("../utils/glob.zig").Glob;
 const BraceExpander = @import("../utils/brace.zig").BraceExpander;
+
+/// End of the word beginning at `start`, one past its last character.
+///
+/// Quote-aware, and aware that `name=(` opens a parenthesised value: without
+/// that, `a=(x y) && echo ok` scanned as the word `a=(x`, which looked like a
+/// temporary variable assignment, leaving `y) && echo ok` to be run as the
+/// command. An unterminated quote or paren runs to the end, as the callers'
+/// own loops did.
+pub fn wordEnd(text: []const u8, start: usize) usize {
+    var i = start;
+    var sq = false;
+    var dq = false;
+    while (i < text.len) {
+        const c = text[i];
+        if (c == '\'' and !dq) {
+            sq = !sq;
+        } else if (c == '"' and !sq) {
+            dq = !dq;
+        } else if (c == ' ' and !sq and !dq) {
+            break;
+        } else if (c == '(' and !sq and !dq and
+            tokenizer.isArrayAssignPrefix(text[start..i]))
+        {
+            if (matchingParen(text, i)) |close| {
+                i = close + 1;
+                continue;
+            }
+            return text.len;
+        }
+        i += 1;
+    }
+    return i;
+}
 
 /// Resolve nameref chain to get the actual variable name
 pub fn resolveNameref(self: *Shell, name: []const u8) []const u8 {
@@ -229,8 +263,39 @@ pub fn isArrayAssignment(input: []const u8) bool {
         if (!std.ascii.isAlphanumeric(c) and c != '_') return false;
     }
 
-    // Check for closing paren
-    return std.mem.indexOfScalar(u8, trimmed[eq_pos + 2 ..], ')') != null;
+    // The value must be a complete `(...)` with nothing after it.
+    //
+    // Matching the closing paren matters: a chain like `a=(x) && echo done` was
+    // claimed whole here, assigned, and the rest silently dropped. Rejecting it
+    // lets the parser handle the line, where the tokenizer keeps `a=(x)` as one
+    // word and the executor assigns it as a chain segment.
+    const close = matchingParen(trimmed, eq_pos + 1) orelse return false;
+    return std.mem.trim(u8, trimmed[close + 1 ..], &std.ascii.whitespace).len == 0;
+}
+
+/// Index of the `)` closing the `(` at `open`, counting nesting and skipping
+/// quoted text. Null if it is never closed.
+pub fn matchingParen(text: []const u8, open: usize) ?usize {
+    var depth: usize = 0;
+    var quote: u8 = 0;
+    var i = open;
+    while (i < text.len) : (i += 1) {
+        const c = text[i];
+        if (quote != 0) {
+            if (c == quote) quote = 0;
+            continue;
+        }
+        switch (c) {
+            '\'', '"' => quote = c,
+            '(' => depth += 1,
+            ')' => {
+                depth -= 1;
+                if (depth == 0) return i;
+            },
+            else => {},
+        }
+    }
+    return null;
 }
 
 /// Parse and execute array assignment (or array append with +=)

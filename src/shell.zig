@@ -1636,18 +1636,7 @@ pub const Shell = struct {
                             if (qa_check_pos >= trimmed_input.len) break;
                             // Find end of this token (respecting quotes)
                             const qa_tok_start = qa_check_pos;
-                            var qa_sq = false;
-                            var qa_dq = false;
-                            while (qa_check_pos < trimmed_input.len) : (qa_check_pos += 1) {
-                                const qc = trimmed_input[qa_check_pos];
-                                if (qc == '\'' and !qa_dq) {
-                                    qa_sq = !qa_sq;
-                                } else if (qc == '"' and !qa_sq) {
-                                    qa_dq = !qa_dq;
-                                } else if (qc == ' ' and !qa_sq and !qa_dq) {
-                                    break;
-                                }
-                            }
+                            qa_check_pos = shell_mod.wordEnd(trimmed_input, qa_tok_start);
                             const qa_tok = trimmed_input[qa_tok_start..qa_check_pos];
                             // Check if this token is a valid assignment (name=...)
                             var qa_found_eq = false;
@@ -1719,18 +1708,7 @@ pub const Shell = struct {
 
                                 // Find end of this token (respecting quotes)
                                 const tok_start = scan_pos;
-                                var sq = false;
-                                var dq = false;
-                                while (scan_pos < trimmed_input.len) : (scan_pos += 1) {
-                                    const sc = trimmed_input[scan_pos];
-                                    if (sc == '\'' and !dq) {
-                                        sq = !sq;
-                                    } else if (sc == '"' and !sq) {
-                                        dq = !dq;
-                                    } else if (sc == ' ' and !sq and !dq) {
-                                        break;
-                                    }
-                                }
+                                scan_pos = shell_mod.wordEnd(trimmed_input, tok_start);
                                 const tok = trimmed_input[tok_start..scan_pos];
 
                                 // Check if this token is an assignment
