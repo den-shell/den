@@ -2537,3 +2537,78 @@ test "command arguments: a backtick substitution field-splits" {
 
     try test_utils.TestAssert.expectContains(r.stdout, "[p][q]");
 }
+
+test "array assignment: works as a chain segment" {
+    const allocator = std.testing.allocator;
+    var fixture = try test_utils.DenShellFixture.init(allocator);
+    defer fixture.deinit();
+    // Only a whole line was recognised before, by the shell ahead of the parser.
+    // In a chain the `(` became a subshell and the rest was swallowed: this
+    // assigned nothing and ran nothing.
+    const r = try fixture.execDirect(
+        "true && a=(x y) && echo \"chain=${#a[@]} [${a[@]}]\"; " ++
+            "b=(p) && echo \"first=${#b[@]}\"; " ++
+            "false || c=(q r); echo \"or=${#c[@]} [${c[@]}]\"; " ++
+            "true && o=() && echo \"empty=${#o[@]}\"",
+    );
+    defer allocator.free(r.stdout);
+    defer allocator.free(r.stderr);
+
+    try test_utils.TestAssert.expectContains(r.stdout, "chain=2 [x y]");
+    try test_utils.TestAssert.expectContains(r.stdout, "first=1");
+    try test_utils.TestAssert.expectContains(r.stdout, "or=2 [q r]");
+    try test_utils.TestAssert.expectContains(r.stdout, "empty=0");
+}
+
+test "array assignment: works inside if, for and a subshell" {
+    const allocator = std.testing.allocator;
+    var fixture = try test_utils.DenShellFixture.init(allocator);
+    defer fixture.deinit();
+    const r = try fixture.execDirect(
+        "if true; then e=(i j); echo \"if=${#e[@]} [${e[@]}]\"; fi; " ++
+            "for i in 1; do f=(k l); echo \"for=${#f[@]} [${f[@]}]\"; done; " ++
+            "(s=(y z); echo \"sub=${#s[@]} [${s[@]}]\")",
+    );
+    defer allocator.free(r.stdout);
+    defer allocator.free(r.stderr);
+
+    try test_utils.TestAssert.expectContains(r.stdout, "if=2 [i j]");
+    try test_utils.TestAssert.expectContains(r.stdout, "for=2 [k l]");
+    try test_utils.TestAssert.expectContains(r.stdout, "sub=2 [y z]");
+}
+
+test "array assignment: a chain element may contain spaces and substitutions" {
+    const allocator = std.testing.allocator;
+    var fixture = try test_utils.DenShellFixture.init(allocator);
+    defer fixture.deinit();
+    // The word scanners that look for a `VAR=val cmd` prefix split on
+    // whitespace without tracking parens, so `a=(z "q r") && ...` was read as
+    // the assignment `a=(z` followed by the command `"q r") && ...`.
+    const r = try fixture.execDirect(
+        "a=(z \"q r\") && echo \"quoted=${#a[@]} [${a[@]}]\"; " ++
+            "m=($(echo p) \"q r\") && echo \"sub=${#m[@]} [${m[@]}]\"; " ++
+            "n=(a) && n+=($(echo b c)) && echo \"append=${#n[@]} [${n[@]}]\"",
+    );
+    defer allocator.free(r.stdout);
+    defer allocator.free(r.stderr);
+
+    try test_utils.TestAssert.expectContains(r.stdout, "quoted=2 [z q r]");
+    try test_utils.TestAssert.expectContains(r.stdout, "sub=2 [p q r]");
+    try test_utils.TestAssert.expectContains(r.stdout, "append=3 [a b c]");
+}
+
+test "array assignment: a temporary variable prefix still works" {
+    const allocator = std.testing.allocator;
+    var fixture = try test_utils.DenShellFixture.init(allocator);
+    defer fixture.deinit();
+    // The paren-aware scanner must not disturb `VAR=val cmd`, which is what
+    // those scanners exist for.
+    const r = try fixture.execDirect(
+        "V=1 echo tempvar-ok; V=1 W=2 env | grep -c '^V=1$'",
+    );
+    defer allocator.free(r.stdout);
+    defer allocator.free(r.stderr);
+
+    try test_utils.TestAssert.expectContains(r.stdout, "tempvar-ok");
+    try test_utils.TestAssert.expectContains(r.stdout, "1");
+}
