@@ -277,17 +277,22 @@ Input String → Tokenizer → Parser → AST → Expansion → Command Tree
 - Manages redirections (<, >, >>, 2>&1)
 - Implements job control (fg, bg, jobs)
 
-#### Builtin Commands (src/builtins/)
+#### Builtin Commands (src/executor/builtins/, src/shell/)
 
-The builtins system is organized into logical modules:
+Builtins live in two places, and which one matters:
 
-- **Registry** (`mod.zig`): `BuiltinRegistry` interface for registering and executing builtins
-- **Filesystem** (`filesystem.zig`): `basename`, `dirname`, `realpath`
-- **Directory** (`directory.zig`): `pushd`, `popd`, `dirs`
-- **I/O** (`io.zig`): `printf`, `read`
-- **Process** (`process.zig`): `exec`, `wait`, `kill`, `disown`
-- **Variables** (`variables.zig`): `local`, `declare`, `readonly`, `typeset`, `let`
-- **Misc** (`misc.zig`): `sleep`, `help`, `clear`, `uname`, `whoami`, `umask`, `time`, `caller`
+- **Executor builtins** (`src/executor/builtins/`) are plain functions that take a
+  parsed command and return an exit code. They are grouped by subject --
+  `io_builtins.zig`, `env_builtins.zig`, `dir_builtins.zig`, `data_builtins.zig`
+  and so on -- and re-exported from `src/executor/builtins/mod.zig`.
+- **Shell-level builtins** (`src/shell/<name>_builtin.zig`) take `*Shell` because
+  they read or change shell state: `zstyle`, `bindkey`, `setopt`, `alias`, job
+  control. `src/shell/builtin_dispatch.zig` routes them.
+
+Two files keep the set honest. `src/utils/builtin_names.zig` is the canonical
+list of every builtin name, used by the syntax highlighter, `compgen -b`,
+`enable -a` and command completion; `builtin_dispatch.zig` carries a test
+asserting its routing list is a subset of it.
 
 Core builtins include:
 
@@ -727,20 +732,31 @@ See [MEMORY_OPTIMIZATION.md](MEMORY_OPTIMIZATION.md) for details:
 
 ### 1. Builtin Commands
 
-Add new builtins by implementing in `src/builtins/`:
+Add a builtin that needs no shell state in `src/executor/builtins/`:
 
 ```zig
-pub fn myBuiltin(
-    shell: _Shell,
-    args: []const []const u8,
-    stdout: anytype,
-) !i32 {
-    // Implementation
+pub fn myBuiltin(allocator: std.mem.Allocator, command: *types.ParsedCommand) !i32 {
+    _ = allocator;
+    _ = command;
     return 0;
 }
 ```
 
-Register in `src/builtins/mod.zig`.
+Re-export it from `src/executor/builtins/mod.zig` and add its name to
+`src/utils/builtin_names.zig`.
+
+A builtin that reads or changes shell state goes in `src/shell/<name>_builtin.zig`
+instead, takes `*Shell`, and sets `self.last_exit_code` itself:
+
+```zig
+pub fn builtinMine(self: *Shell, cmd: *types.ParsedCommand) !void {
+    _ = cmd;
+    self.last_exit_code = 0;
+}
+```
+
+Route it from `src/shell/builtin_dispatch.zig` and give it a `help` line in
+`src/shell/builtins.zig`.
 
 ### 2. Plugins
 

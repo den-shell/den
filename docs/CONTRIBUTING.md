@@ -143,7 +143,8 @@ den/
 ### Key Directories
 
 - **src/**: All source code
-- **src/builtins/**: Builtin command implementations
+- **src/executor/builtins/**: Builtin commands that need no shell state
+- **src/shell/**: Shell state, and the builtins that read or change it
 - **src/parser/**: Tokenizer and parser
 - **src/executor/**: Command execution engine
 - **src/plugins/**: Plugin system and builtin plugins
@@ -157,7 +158,7 @@ den/
 
 ```bash
 # Edit files
-vim src/builtins/my_builtin.zig
+vim src/executor/builtins/my_builtins.zig
 
 # Build to check for errors
 zig build
@@ -170,7 +171,7 @@ zig build test
 
 ```bash
 # Run specific test
-zig test src/builtins/my_builtin.zig
+zig build test-builtins
 
 # Run all tests
 zig build test
@@ -195,7 +196,7 @@ zig fmt bench/
 
 ```bash
 # Stage changes
-git add src/builtins/my_builtin.zig
+git add src/executor/builtins/my_builtins.zig
 
 # Commit with descriptive message
 git commit -m "feat(builtins): add my_builtin command
@@ -414,7 +415,7 @@ chmod +x test/test_myfeature.sh
 zig build test
 
 # Specific file
-zig test src/builtins/cd.zig
+zig build test-builtins
 
 # With coverage (if available)
 zig build test -Dcoverage
@@ -634,40 +635,39 @@ zig build bench
 
 ### Adding a Builtin Command
 
-1. Create file in `src/builtins/`:
+Builtins that need no shell state live in `src/executor/builtins/`, grouped by
+subject. Add to the group that fits rather than creating a file per command:
 
 ```zig
-// src/builtins/mycommand.zig
-const std = @import("std");
-const Shell = @import("../shell.zig").Shell;
-
-pub fn myCommand(
-    shell: _Shell,
-    args: []const []const u8,
-    stdout: anytype,
-) !i32 {
-    // Implementation
-    _ = shell;
-    _ = args;
-    try stdout.writeAll("Hello from mycommand\n");
+// src/executor/builtins/misc_builtins.zig
+pub fn mycommand(command: *types.ParsedCommand) !i32 {
+    _ = command;
+    try IO.print("Hello from mycommand\n", .{});
     return 0;
 }
+```
 
-test "mycommand basic" {
-    // Tests
+A builtin that reads or changes shell state takes `*Shell` and sets the exit
+code itself, in its own `src/shell/<name>_builtin.zig`:
+
+```zig
+pub fn builtinMycommand(self: *Shell, cmd: *types.ParsedCommand) !void {
+    _ = cmd;
+    self.last_exit_code = 0;
 }
 ```
 
-2. Register in `src/builtins/mod.zig`:
+Then, in either case:
 
-```zig
-pub const BUILTINS = std.ComptimeStringMap(_const BuiltinFn, .{
-    // ... existing builtins
-    .{ "mycommand", myCommand },
-});
-```
-
-3. Add tests and documentation
+1. Re-export the module from `src/executor/builtins/mod.zig` if it is new.
+2. Add the name to `src/utils/builtin_names.zig` -- the canonical list behind
+   syntax highlighting, `compgen -b`, `enable -a` and command completion.
+3. Route it: `Executor.executeBuiltin`, or `shell_builtins` in
+   `src/shell/builtin_dispatch.zig` for a shell-level builtin.
+4. Add a `help` line in `src/shell/builtins.zig`. A test checks that every name
+   in the canonical list has one.
+5. Add tests to `tests/test_builtins.zig` using `DenShellFixture`, which runs
+   the real `./zig-out/bin/den`.
 
 ### Adding a Parser Feature
 

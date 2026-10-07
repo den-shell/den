@@ -371,7 +371,7 @@ From `docs/CPU_OPTIMIZATION.md`:
 - [ ] **Optimized parser fast path**: integrate `OptimizedParser` as the default path for simple commands (see 2.1).
 - [ ] **Fuzzy matching in completion**: use `fuzzyScore` + ranking in core completion (see 5.1).
 - [ ] **History index**: replace linear history searches with `HistoryIndex` (see 4.2).
-- [ ] **Path resolution caching**: create a `PathCache` using `LRUCache` in `utils/path.zig` and wire it into any expensive realpath/path-search operations.
+- [ ] **Path resolution caching**: create a `PathCache` using `LRUCache` and wire it into any expensive realpath/path-search operations. (`utils/path.zig` was an unreachable duplicate of `std.fs.path` and has been removed -- pick the home for this when the work starts.)
 - [ ] **String matching utilities**: apply `FastStringMatcher` where repeated substring search is used on large buffers.
 
 From `docs/MEMORY_OPTIMIZATION.md`:
@@ -463,7 +463,7 @@ From `docs/profiling.md`:
 
 - [ ] Periodically audit:
   - [ ] `docs/FEATURES.md` vs actual supported syntax & builtins.
-  - [ ] `docs/BUILTINS.md` vs `src/builtins` and help output.
+  - [ ] `docs/BUILTINS.md` vs `src/utils/builtin_names.zig` and help output.
   - [ ] `docs/API.md` vs Zig types exposed for plugin authors.
 - [ ] Add a lightweight doc-check step (even manual for now) to pull requests that change public behavior.
 
