@@ -175,6 +175,11 @@ pub fn expandWordInto(
 }
 
 /// Brace-expand a field, glob each result, and append what comes out.
+///
+/// `set -f` turns off the glob step and nothing else: brace expansion is a
+/// separate mechanism and keeps working, which is what bash does. The flag was
+/// being recorded by `set -f` and read by nothing, so pathname expansion
+/// happened regardless and `set -f` did not do the one thing it is for.
 fn braceAndGlobInto(
     self: *Shell,
     brace: *BraceExpander,
@@ -188,6 +193,16 @@ fn braceAndGlobInto(
         for (brace_exp) |item| self.allocator.free(item);
         self.allocator.free(brace_exp);
     }
+
+    if (self.option_noglob) {
+        for (brace_exp) |brace_item| {
+            const stripped = try stripGlobEscapes(self.allocator, brace_item);
+            errdefer self.allocator.free(stripped);
+            try out.append(self.allocator, stripped);
+        }
+        return;
+    }
+
     for (brace_exp) |brace_item| {
         const glob_exp = try glob.expand(brace_item, cwd);
         defer {

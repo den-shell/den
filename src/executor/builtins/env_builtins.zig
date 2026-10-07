@@ -219,6 +219,57 @@ pub fn exportBuiltin(ctx: *BuiltinContext, command: *types.ParsedCommand) !i32 {
     return 0;
 }
 
+/// Apply one long option name, as `set -o name` spells it.
+///
+/// Shared so that `-o pipefail` and the `o` inside a cluster like
+/// `-euo pipefail` cannot drift apart. Returns false for a name that is not an
+/// option; `error.RestrictedLocked` for the one that cannot be turned off.
+fn applyLongOption(shell_ref: anytype, name: []const u8, enable: bool) error{RestrictedLocked}!bool {
+    if (std.mem.eql(u8, name, "errexit")) {
+        shell_ref.option_errexit = enable;
+    } else if (std.mem.eql(u8, name, "errtrace")) {
+        shell_ref.option_errtrace = enable;
+    } else if (std.mem.eql(u8, name, "xtrace")) {
+        shell_ref.option_xtrace = enable;
+    } else if (std.mem.eql(u8, name, "nounset")) {
+        shell_ref.option_nounset = enable;
+    } else if (std.mem.eql(u8, name, "pipefail")) {
+        shell_ref.option_pipefail = enable;
+    } else if (std.mem.eql(u8, name, "noexec")) {
+        shell_ref.option_noexec = enable;
+    } else if (std.mem.eql(u8, name, "verbose")) {
+        shell_ref.option_verbose = enable;
+    } else if (std.mem.eql(u8, name, "noglob")) {
+        shell_ref.option_noglob = enable;
+    } else if (std.mem.eql(u8, name, "noclobber")) {
+        shell_ref.option_noclobber = enable;
+    } else if (std.mem.eql(u8, name, "restricted")) {
+        if (enable) {
+            shell_ref.option_restricted = true;
+        } else if (shell_ref.option_restricted) {
+            return error.RestrictedLocked;
+        }
+    } else {
+        return false;
+    }
+    return true;
+}
+
+/// Print every option and whether it is on, which is what a bare `-o` does.
+fn printOptionSettings(shell_ref: anytype) !void {
+    try IO.print("Current option settings:\n", .{});
+    try IO.print("errexit        {s}\n", .{if (shell_ref.option_errexit) "on" else "off"});
+    try IO.print("errtrace       {s}\n", .{if (shell_ref.option_errtrace) "on" else "off"});
+    try IO.print("xtrace         {s}\n", .{if (shell_ref.option_xtrace) "on" else "off"});
+    try IO.print("nounset        {s}\n", .{if (shell_ref.option_nounset) "on" else "off"});
+    try IO.print("pipefail       {s}\n", .{if (shell_ref.option_pipefail) "on" else "off"});
+    try IO.print("noexec         {s}\n", .{if (shell_ref.option_noexec) "on" else "off"});
+    try IO.print("verbose        {s}\n", .{if (shell_ref.option_verbose) "on" else "off"});
+    try IO.print("noglob         {s}\n", .{if (shell_ref.option_noglob) "on" else "off"});
+    try IO.print("noclobber      {s}\n", .{if (shell_ref.option_noclobber) "on" else "off"});
+    try IO.print("restricted     {s}\n", .{if (shell_ref.option_restricted) "on" else "off"});
+}
+
 pub fn set(ctx: *BuiltinContext, command: *types.ParsedCommand) !i32 {
     if (command.args.len == 0) {
         return try env(ctx);
@@ -265,50 +316,17 @@ pub fn set(ctx: *BuiltinContext, command: *types.ParsedCommand) !i32 {
                 if (std.mem.eql(u8, option, "o")) {
                     if (arg_idx + 1 < command.args.len) {
                         const opt_name = command.args[arg_idx + 1];
-                        if (std.mem.eql(u8, opt_name, "errexit")) {
-                            shell_ref.option_errexit = enable;
-                        } else if (std.mem.eql(u8, opt_name, "errtrace")) {
-                            shell_ref.option_errtrace = enable;
-                        } else if (std.mem.eql(u8, opt_name, "xtrace")) {
-                            shell_ref.option_xtrace = enable;
-                        } else if (std.mem.eql(u8, opt_name, "nounset")) {
-                            shell_ref.option_nounset = enable;
-                        } else if (std.mem.eql(u8, opt_name, "pipefail")) {
-                            shell_ref.option_pipefail = enable;
-                        } else if (std.mem.eql(u8, opt_name, "noexec")) {
-                            shell_ref.option_noexec = enable;
-                        } else if (std.mem.eql(u8, opt_name, "verbose")) {
-                            shell_ref.option_verbose = enable;
-                        } else if (std.mem.eql(u8, opt_name, "noglob")) {
-                            shell_ref.option_noglob = enable;
-                        } else if (std.mem.eql(u8, opt_name, "noclobber")) {
-                            shell_ref.option_noclobber = enable;
-                        } else if (std.mem.eql(u8, opt_name, "restricted")) {
-                            if (enable) {
-                                shell_ref.option_restricted = true;
-                            } else {
-                                if (shell_ref.option_restricted) {
-                                    try IO.eprint("den: set: cannot unset restricted mode\n", .{});
-                                    return 1;
-                                }
-                            }
-                        } else {
+                        const known = applyLongOption(shell_ref, opt_name, enable) catch {
+                            try IO.eprint("den: set: cannot unset restricted mode\n", .{});
+                            return 1;
+                        };
+                        if (!known) {
                             try IO.eprint("den: set: {s}: invalid option name\n", .{opt_name});
                             return 1;
                         }
                         arg_idx += 1;
                     } else {
-                        try IO.print("Current option settings:\n", .{});
-                        try IO.print("errexit        {s}\n", .{if (shell_ref.option_errexit) "on" else "off"});
-                        try IO.print("errtrace       {s}\n", .{if (shell_ref.option_errtrace) "on" else "off"});
-                        try IO.print("xtrace         {s}\n", .{if (shell_ref.option_xtrace) "on" else "off"});
-                        try IO.print("nounset        {s}\n", .{if (shell_ref.option_nounset) "on" else "off"});
-                        try IO.print("pipefail       {s}\n", .{if (shell_ref.option_pipefail) "on" else "off"});
-                        try IO.print("noexec         {s}\n", .{if (shell_ref.option_noexec) "on" else "off"});
-                        try IO.print("verbose        {s}\n", .{if (shell_ref.option_verbose) "on" else "off"});
-                        try IO.print("noglob         {s}\n", .{if (shell_ref.option_noglob) "on" else "off"});
-                        try IO.print("noclobber      {s}\n", .{if (shell_ref.option_noclobber) "on" else "off"});
-                        try IO.print("restricted     {s}\n", .{if (shell_ref.option_restricted) "on" else "off"});
+                        try printOptionSettings(shell_ref);
                     }
                 } else {
                     // Iterate through each character in the option string to support
@@ -332,6 +350,28 @@ pub fn set(ctx: *BuiltinContext, command: *types.ParsedCommand) !i32 {
                                         try IO.eprint("den: set: cannot unset restricted mode\n", .{});
                                         return 1;
                                     }
+                                }
+                            },
+                            // `o` inside a cluster takes the next argument, so
+                            // `set -euo pipefail` works -- the most common line
+                            // in shell scripts, and it was rejected outright as
+                            // an unknown option because only a bare `-o` was
+                            // handled. With nothing after it, the settings are
+                            // printed, as a bare `-o` does.
+                            'o' => {
+                                if (arg_idx + 1 < command.args.len) {
+                                    const opt_name = command.args[arg_idx + 1];
+                                    const known = applyLongOption(shell_ref, opt_name, enable) catch {
+                                        try IO.eprint("den: set: cannot unset restricted mode\n", .{});
+                                        return 1;
+                                    };
+                                    if (!known) {
+                                        try IO.eprint("den: set: {s}: invalid option name\n", .{opt_name});
+                                        return 1;
+                                    }
+                                    arg_idx += 1;
+                                } else {
+                                    try printOptionSettings(shell_ref);
                                 }
                             },
                             else => {
