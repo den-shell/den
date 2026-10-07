@@ -11,7 +11,7 @@ const test_utils = @import("test_utils.zig");
 test "Operator: && with both success" {
     const allocator = std.testing.allocator;
 
-    var fixture = try test_utils.ShellFixture.init(allocator);
+    var fixture = try test_utils.DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     const result = try fixture.exec("true && echo success");
@@ -25,7 +25,7 @@ test "Operator: && with both success" {
 test "Operator: && with first failure" {
     const allocator = std.testing.allocator;
 
-    var fixture = try test_utils.ShellFixture.init(allocator);
+    var fixture = try test_utils.DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     const result = try fixture.exec("false && echo success");
@@ -39,7 +39,7 @@ test "Operator: && with first failure" {
 test "Operator: && chain multiple success" {
     const allocator = std.testing.allocator;
 
-    var fixture = try test_utils.ShellFixture.init(allocator);
+    var fixture = try test_utils.DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     const result = try fixture.exec("true && true && true && echo done");
@@ -53,7 +53,7 @@ test "Operator: && chain multiple success" {
 test "Operator: && chain stops at failure" {
     const allocator = std.testing.allocator;
 
-    var fixture = try test_utils.ShellFixture.init(allocator);
+    var fixture = try test_utils.DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     const result = try fixture.exec("true && false && echo never");
@@ -74,7 +74,7 @@ test "Operator: && chain stops at failure" {
 test "Operator: bare assignment as first segment of &&" {
     const allocator = std.testing.allocator;
 
-    var fixture = try test_utils.ShellFixture.init(allocator);
+    var fixture = try test_utils.DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     const result = try fixture.exec("V=x && echo $V");
@@ -90,7 +90,7 @@ test "Operator: bare assignment as first segment of &&" {
 test "Operator: assignment visible across && segments" {
     const allocator = std.testing.allocator;
 
-    var fixture = try test_utils.ShellFixture.init(allocator);
+    var fixture = try test_utils.DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     // The whole chain must NOT be expanded up front: $V has to reflect the
@@ -106,7 +106,7 @@ test "Operator: assignment visible across && segments" {
 test "Operator: bare assignment as first segment of ||" {
     const allocator = std.testing.allocator;
 
-    var fixture = try test_utils.ShellFixture.init(allocator);
+    var fixture = try test_utils.DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     // `V=y` succeeds, so the || short-circuits and `echo wrong` is skipped,
@@ -123,7 +123,7 @@ test "Operator: bare assignment as first segment of ||" {
 test "Operator: multiple leading assignments before &&" {
     const allocator = std.testing.allocator;
 
-    var fixture = try test_utils.ShellFixture.init(allocator);
+    var fixture = try test_utils.DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     const result = try fixture.exec("A=1 B=2 && echo $A $B");
@@ -137,7 +137,7 @@ test "Operator: multiple leading assignments before &&" {
 test "Operator: && / || not split inside backticks" {
     const allocator = std.testing.allocator;
 
-    var fixture = try test_utils.ShellFixture.init(allocator);
+    var fixture = try test_utils.DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     // The || lives inside backtick command substitution, so it must not be a
@@ -155,7 +155,7 @@ test "Operator: && / || not split inside backticks" {
 test "Operator: && not split inside quotes" {
     const allocator = std.testing.allocator;
 
-    var fixture = try test_utils.ShellFixture.init(allocator);
+    var fixture = try test_utils.DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     const result = try fixture.exec("echo 'a && b'");
@@ -169,7 +169,7 @@ test "Operator: && not split inside quotes" {
 test "Operator: mixed semicolon and && list" {
     const allocator = std.testing.allocator;
 
-    var fixture = try test_utils.ShellFixture.init(allocator);
+    var fixture = try test_utils.DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     // `;` separates two AND-OR lists; assignments stay visible across both.
@@ -185,7 +185,7 @@ test "Operator: mixed semicolon and && list" {
 test "Operator: && left-associative with ||" {
     const allocator = std.testing.allocator;
 
-    var fixture = try test_utils.ShellFixture.init(allocator);
+    var fixture = try test_utils.DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     // false && X || Y  ->  X skipped, Y runs (matches bash).
@@ -205,7 +205,7 @@ test "Operator: && left-associative with ||" {
 test "Operator: || with first success" {
     const allocator = std.testing.allocator;
 
-    var fixture = try test_utils.ShellFixture.init(allocator);
+    var fixture = try test_utils.DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     const result = try fixture.exec("true || echo fallback");
@@ -219,7 +219,7 @@ test "Operator: || with first success" {
 test "Operator: || with first failure" {
     const allocator = std.testing.allocator;
 
-    var fixture = try test_utils.ShellFixture.init(allocator);
+    var fixture = try test_utils.DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     const result = try fixture.exec("false || echo fallback");
@@ -233,7 +233,7 @@ test "Operator: || with first failure" {
 test "Operator: || chain" {
     const allocator = std.testing.allocator;
 
-    var fixture = try test_utils.ShellFixture.init(allocator);
+    var fixture = try test_utils.DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     const result = try fixture.exec("false || false || echo third");
@@ -246,7 +246,7 @@ test "Operator: || chain" {
 test "Operator: || stops at first success" {
     const allocator = std.testing.allocator;
 
-    var fixture = try test_utils.ShellFixture.init(allocator);
+    var fixture = try test_utils.DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     const result = try fixture.exec("false || true || echo never");
@@ -264,7 +264,7 @@ test "Operator: || stops at first success" {
 test "Operator: && then ||" {
     const allocator = std.testing.allocator;
 
-    var fixture = try test_utils.ShellFixture.init(allocator);
+    var fixture = try test_utils.DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     const result = try fixture.exec("true && echo yes || echo no");
@@ -278,7 +278,7 @@ test "Operator: && then ||" {
 test "Operator: || then &&" {
     const allocator = std.testing.allocator;
 
-    var fixture = try test_utils.ShellFixture.init(allocator);
+    var fixture = try test_utils.DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     const result = try fixture.exec("false || true && echo both");
@@ -291,7 +291,7 @@ test "Operator: || then &&" {
 test "Operator: complex chain" {
     const allocator = std.testing.allocator;
 
-    var fixture = try test_utils.ShellFixture.init(allocator);
+    var fixture = try test_utils.DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     const result = try fixture.exec("true && false || echo recovered && echo continued");
@@ -309,7 +309,7 @@ test "Operator: complex chain" {
 test "Operator: simple pipe" {
     const allocator = std.testing.allocator;
 
-    var fixture = try test_utils.ShellFixture.init(allocator);
+    var fixture = try test_utils.DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     const result = try fixture.exec("echo hello | cat");
@@ -323,7 +323,7 @@ test "Operator: simple pipe" {
 test "Operator: multi-stage pipe" {
     const allocator = std.testing.allocator;
 
-    var fixture = try test_utils.ShellFixture.init(allocator);
+    var fixture = try test_utils.DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     const result = try fixture.exec("echo 'hello world' | tr ' ' '\\n' | sort");
@@ -336,7 +336,7 @@ test "Operator: multi-stage pipe" {
 test "Operator: pipe with grep" {
     const allocator = std.testing.allocator;
 
-    var fixture = try test_utils.ShellFixture.init(allocator);
+    var fixture = try test_utils.DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     const result = try fixture.exec("printf 'apple\\nbanana\\ncherry' | grep an");
@@ -349,7 +349,7 @@ test "Operator: pipe with grep" {
 test "Operator: pipe exit code from last command" {
     const allocator = std.testing.allocator;
 
-    var fixture = try test_utils.ShellFixture.init(allocator);
+    var fixture = try test_utils.DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     const result = try fixture.exec("echo hello | false; echo $?");
@@ -366,7 +366,7 @@ test "Operator: pipe exit code from last command" {
 test "Operator: semicolon sequential" {
     const allocator = std.testing.allocator;
 
-    var fixture = try test_utils.ShellFixture.init(allocator);
+    var fixture = try test_utils.DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     const result = try fixture.exec("echo first; echo second");
@@ -380,7 +380,7 @@ test "Operator: semicolon sequential" {
 test "Operator: semicolon continues after failure" {
     const allocator = std.testing.allocator;
 
-    var fixture = try test_utils.ShellFixture.init(allocator);
+    var fixture = try test_utils.DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     const result = try fixture.exec("false; echo continued");
@@ -393,7 +393,7 @@ test "Operator: semicolon continues after failure" {
 test "Operator: multiple semicolons" {
     const allocator = std.testing.allocator;
 
-    var fixture = try test_utils.ShellFixture.init(allocator);
+    var fixture = try test_utils.DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     const result = try fixture.exec("echo a; echo b; echo c; echo d");
@@ -413,7 +413,7 @@ test "Operator: multiple semicolons" {
 test "Operator: background job" {
     const allocator = std.testing.allocator;
 
-    var fixture = try test_utils.ShellFixture.init(allocator);
+    var fixture = try test_utils.DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     const result = try fixture.exec("sleep 0.01 & wait; echo done");
@@ -426,7 +426,7 @@ test "Operator: background job" {
 test "Operator: multiple background jobs" {
     const allocator = std.testing.allocator;
 
-    var fixture = try test_utils.ShellFixture.init(allocator);
+    var fixture = try test_utils.DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     const result = try fixture.exec("sleep 0.01 & sleep 0.01 & wait; echo finished");
@@ -443,7 +443,7 @@ test "Operator: multiple background jobs" {
 test "Operator: output redirection >" {
     const allocator = std.testing.allocator;
 
-    var fixture = try test_utils.ShellFixture.init(allocator);
+    var fixture = try test_utils.DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     const file_path = try std.fs.path.join(allocator, &[_][]const u8{ fixture.temp_dir.path, "output.txt" });
@@ -462,7 +462,7 @@ test "Operator: output redirection >" {
 test "Operator: append redirection >>" {
     const allocator = std.testing.allocator;
 
-    var fixture = try test_utils.ShellFixture.init(allocator);
+    var fixture = try test_utils.DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     const file_path = try std.fs.path.join(allocator, &[_][]const u8{ fixture.temp_dir.path, "append.txt" });
@@ -482,7 +482,7 @@ test "Operator: append redirection >>" {
 test "Operator: input redirection <" {
     const allocator = std.testing.allocator;
 
-    var fixture = try test_utils.ShellFixture.init(allocator);
+    var fixture = try test_utils.DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     const file_path = try fixture.temp_dir.createFile("input.txt", "content from file");
@@ -501,7 +501,7 @@ test "Operator: input redirection <" {
 test "Operator: stderr redirection 2>" {
     const allocator = std.testing.allocator;
 
-    var fixture = try test_utils.ShellFixture.init(allocator);
+    var fixture = try test_utils.DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     const file_path = try std.fs.path.join(allocator, &[_][]const u8{ fixture.temp_dir.path, "stderr.txt" });
@@ -521,7 +521,7 @@ test "Operator: stderr redirection 2>" {
 test "Operator: stderr to stdout 2>&1" {
     const allocator = std.testing.allocator;
 
-    var fixture = try test_utils.ShellFixture.init(allocator);
+    var fixture = try test_utils.DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     const result = try fixture.exec("ls /nonexistent 2>&1 | cat");
@@ -539,7 +539,7 @@ test "Operator: stderr to stdout 2>&1" {
 test "Operator: subshell grouping ()" {
     const allocator = std.testing.allocator;
 
-    var fixture = try test_utils.ShellFixture.init(allocator);
+    var fixture = try test_utils.DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     const result = try fixture.exec("(echo grouped)");
@@ -552,7 +552,7 @@ test "Operator: subshell grouping ()" {
 test "Operator: subshell variable isolation" {
     const allocator = std.testing.allocator;
 
-    var fixture = try test_utils.ShellFixture.init(allocator);
+    var fixture = try test_utils.DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     const result = try fixture.exec("X=outer; (X=inner; echo $X); echo $X");
@@ -566,7 +566,7 @@ test "Operator: subshell variable isolation" {
 test "Operator: brace grouping {}" {
     const allocator = std.testing.allocator;
 
-    var fixture = try test_utils.ShellFixture.init(allocator);
+    var fixture = try test_utils.DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     const result = try fixture.exec("{ echo brace; echo group; }");
@@ -584,7 +584,7 @@ test "Operator: brace grouping {}" {
 test "Operator: negation of success" {
     const allocator = std.testing.allocator;
 
-    var fixture = try test_utils.ShellFixture.init(allocator);
+    var fixture = try test_utils.DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     const result = try fixture.exec("! true; echo $?");
@@ -597,7 +597,7 @@ test "Operator: negation of success" {
 test "Operator: negation of failure" {
     const allocator = std.testing.allocator;
 
-    var fixture = try test_utils.ShellFixture.init(allocator);
+    var fixture = try test_utils.DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     const result = try fixture.exec("! false; echo $?");
@@ -614,7 +614,7 @@ test "Operator: negation of failure" {
 test "Operator: pipe with && chain" {
     const allocator = std.testing.allocator;
 
-    var fixture = try test_utils.ShellFixture.init(allocator);
+    var fixture = try test_utils.DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     const result = try fixture.exec("echo test | grep test && echo found");
@@ -627,7 +627,7 @@ test "Operator: pipe with && chain" {
 test "Operator: semicolon with redirect" {
     const allocator = std.testing.allocator;
 
-    var fixture = try test_utils.ShellFixture.init(allocator);
+    var fixture = try test_utils.DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     const file_path = try std.fs.path.join(allocator, &[_][]const u8{ fixture.temp_dir.path, "multi.txt" });
@@ -647,7 +647,7 @@ test "Operator: semicolon with redirect" {
 test "Operator: background in pipeline" {
     const allocator = std.testing.allocator;
 
-    var fixture = try test_utils.ShellFixture.init(allocator);
+    var fixture = try test_utils.DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     const result = try fixture.exec("(sleep 0.01; echo bg) & wait; echo fg");
@@ -660,7 +660,7 @@ test "Operator: background in pipeline" {
 test "Operator: all operators combined" {
     const allocator = std.testing.allocator;
 
-    var fixture = try test_utils.ShellFixture.init(allocator);
+    var fixture = try test_utils.DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     const result = try fixture.exec("echo start; true && echo middle || echo fail; echo end");

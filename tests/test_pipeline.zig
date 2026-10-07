@@ -9,7 +9,7 @@ const test_utils = @import("test_utils.zig");
 test "pipeline: simple two-command pipe" {
     const allocator = std.testing.allocator;
 
-    var fixture = try test_utils.ShellFixture.init(allocator);
+    var fixture = try test_utils.DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     const result = try fixture.exec("echo hello | cat");
@@ -23,7 +23,7 @@ test "pipeline: simple two-command pipe" {
 test "pipeline: three-command pipe" {
     const allocator = std.testing.allocator;
 
-    var fixture = try test_utils.ShellFixture.init(allocator);
+    var fixture = try test_utils.DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     const result = try fixture.exec("echo 'hello world' | tr ' ' '\\n' | wc -l");
@@ -37,7 +37,7 @@ test "pipeline: three-command pipe" {
 test "pipeline: pipe with grep" {
     const allocator = std.testing.allocator;
 
-    var fixture = try test_utils.ShellFixture.init(allocator);
+    var fixture = try test_utils.DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     const result = try fixture.exec("printf 'apple\\nbanana\\ncherry\\n' | grep an");
@@ -51,7 +51,7 @@ test "pipeline: pipe with grep" {
 test "pipeline: pipe with sort" {
     const allocator = std.testing.allocator;
 
-    var fixture = try test_utils.ShellFixture.init(allocator);
+    var fixture = try test_utils.DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     // Use printf for cross-platform compatibility (macOS echo doesn't support -e)
@@ -66,7 +66,7 @@ test "pipeline: pipe with sort" {
 test "pipeline: pipe with head" {
     const allocator = std.testing.allocator;
 
-    var fixture = try test_utils.ShellFixture.init(allocator);
+    var fixture = try test_utils.DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     const result = try fixture.exec("printf '1\\n2\\n3\\n4\\n5\\n' | head -n 3");
@@ -82,7 +82,7 @@ test "pipeline: pipe with head" {
 test "pipeline: pipe with tail" {
     const allocator = std.testing.allocator;
 
-    var fixture = try test_utils.ShellFixture.init(allocator);
+    var fixture = try test_utils.DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     const result = try fixture.exec("printf '1\\n2\\n3\\n4\\n5\\n' | tail -n 2");
@@ -97,7 +97,7 @@ test "pipeline: pipe with tail" {
 test "pipeline: pipe with uniq" {
     const allocator = std.testing.allocator;
 
-    var fixture = try test_utils.ShellFixture.init(allocator);
+    var fixture = try test_utils.DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     const result = try fixture.exec("printf 'a\\na\\nb\\nb\\nc\\n' | uniq");
@@ -110,7 +110,7 @@ test "pipeline: pipe with uniq" {
 test "pipeline: pipe with cut" {
     const allocator = std.testing.allocator;
 
-    var fixture = try test_utils.ShellFixture.init(allocator);
+    var fixture = try test_utils.DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     const result = try fixture.exec("echo 'hello:world:test' | cut -d: -f2");
@@ -124,7 +124,7 @@ test "pipeline: pipe with cut" {
 test "pipeline: pipe with awk" {
     const allocator = std.testing.allocator;
 
-    var fixture = try test_utils.ShellFixture.init(allocator);
+    var fixture = try test_utils.DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     const result = try fixture.exec("echo 'hello world' | awk '{print $2}'");
@@ -138,7 +138,7 @@ test "pipeline: pipe with awk" {
 test "pipeline: pipe with sed" {
     const allocator = std.testing.allocator;
 
-    var fixture = try test_utils.ShellFixture.init(allocator);
+    var fixture = try test_utils.DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     const result = try fixture.exec("echo 'hello world' | sed 's/world/universe/'");
@@ -152,7 +152,7 @@ test "pipeline: pipe with sed" {
 test "pipeline: pipe preserves whitespace" {
     const allocator = std.testing.allocator;
 
-    var fixture = try test_utils.ShellFixture.init(allocator);
+    var fixture = try test_utils.DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     const result = try fixture.exec("echo '  spaced  ' | cat");
@@ -166,7 +166,7 @@ test "pipeline: pipe preserves whitespace" {
 test "pipeline: pipe with empty input" {
     const allocator = std.testing.allocator;
 
-    var fixture = try test_utils.ShellFixture.init(allocator);
+    var fixture = try test_utils.DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     const result = try fixture.exec("echo '' | cat");
@@ -179,7 +179,7 @@ test "pipeline: pipe with empty input" {
 test "pipeline: pipe large output" {
     const allocator = std.testing.allocator;
 
-    var fixture = try test_utils.ShellFixture.init(allocator);
+    var fixture = try test_utils.DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     const result = try fixture.exec("seq 1 1000 | wc -l");
@@ -193,7 +193,7 @@ test "pipeline: pipe large output" {
 test "pipeline: pipe with xargs" {
     const allocator = std.testing.allocator;
 
-    var fixture = try test_utils.ShellFixture.init(allocator);
+    var fixture = try test_utils.DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     const result = try fixture.exec("echo 'hello' | xargs echo 'prefix:'");
@@ -208,7 +208,7 @@ test "pipeline: pipe with xargs" {
 test "pipeline: first command fails" {
     const allocator = std.testing.allocator;
 
-    var fixture = try test_utils.ShellFixture.init(allocator);
+    var fixture = try test_utils.DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     const result = try fixture.exec("false | echo 'still runs'");
@@ -222,7 +222,7 @@ test "pipeline: first command fails" {
 test "pipeline: last command fails" {
     const allocator = std.testing.allocator;
 
-    var fixture = try test_utils.ShellFixture.init(allocator);
+    var fixture = try test_utils.DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     const result = try fixture.exec("echo test | false");
@@ -236,7 +236,7 @@ test "pipeline: last command fails" {
 test "pipeline: grep no match returns 1" {
     const allocator = std.testing.allocator;
 
-    var fixture = try test_utils.ShellFixture.init(allocator);
+    var fixture = try test_utils.DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     const result = try fixture.exec("echo 'hello' | grep 'xyz'");
@@ -250,7 +250,7 @@ test "pipeline: grep no match returns 1" {
 test "pipeline: multiple pipes with transformation" {
     const allocator = std.testing.allocator;
 
-    var fixture = try test_utils.ShellFixture.init(allocator);
+    var fixture = try test_utils.DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     const result = try fixture.exec("echo 'HELLO world' | tr 'A-Z' 'a-z' | tr ' ' '_'");
@@ -264,7 +264,7 @@ test "pipeline: multiple pipes with transformation" {
 test "pipeline: pipe to tee" {
     const allocator = std.testing.allocator;
 
-    var fixture = try test_utils.ShellFixture.init(allocator);
+    var fixture = try test_utils.DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     const result = try fixture.exec("echo 'test' | tee /dev/null");
@@ -278,7 +278,7 @@ test "pipeline: pipe to tee" {
 test "pipeline: pipe from cat" {
     const allocator = std.testing.allocator;
 
-    var fixture = try test_utils.ShellFixture.init(allocator);
+    var fixture = try test_utils.DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     // Create a temp file and cat it through a pipe
@@ -299,7 +299,7 @@ test "pipeline: pipe from cat" {
 test "pipeline: pipe with variable" {
     const allocator = std.testing.allocator;
 
-    var fixture = try test_utils.ShellFixture.init(allocator);
+    var fixture = try test_utils.DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     const result = try fixture.exec("VAR='hello' && echo $VAR | cat");
@@ -313,7 +313,7 @@ test "pipeline: pipe with variable" {
 test "pipeline: nested command substitution in pipe" {
     const allocator = std.testing.allocator;
 
-    var fixture = try test_utils.ShellFixture.init(allocator);
+    var fixture = try test_utils.DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     const result = try fixture.exec("echo $(echo inner) | cat");
@@ -327,7 +327,7 @@ test "pipeline: nested command substitution in pipe" {
 test "pipeline: long pipeline chain" {
     const allocator = std.testing.allocator;
 
-    var fixture = try test_utils.ShellFixture.init(allocator);
+    var fixture = try test_utils.DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     const result = try fixture.exec("echo 'test' | cat | cat | cat | cat | cat");
@@ -341,7 +341,7 @@ test "pipeline: long pipeline chain" {
 test "pipeline: pipe with binary data" {
     const allocator = std.testing.allocator;
 
-    var fixture = try test_utils.ShellFixture.init(allocator);
+    var fixture = try test_utils.DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     // Use printf to output bytes and count them

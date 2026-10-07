@@ -11,7 +11,7 @@ const test_utils = @import("test_utils.zig");
 test "scripting: if true then" {
     const allocator = std.testing.allocator;
 
-    var fixture = try test_utils.ShellFixture.init(allocator);
+    var fixture = try test_utils.DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     const result = try fixture.exec("if true; then echo 'yes'; fi");
@@ -25,7 +25,7 @@ test "scripting: if true then" {
 test "scripting: if false then" {
     const allocator = std.testing.allocator;
 
-    var fixture = try test_utils.ShellFixture.init(allocator);
+    var fixture = try test_utils.DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     const result = try fixture.exec("if false; then echo 'yes'; fi");
@@ -39,7 +39,7 @@ test "scripting: if false then" {
 test "scripting: if else" {
     const allocator = std.testing.allocator;
 
-    var fixture = try test_utils.ShellFixture.init(allocator);
+    var fixture = try test_utils.DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     const result = try fixture.exec("if false; then echo 'yes'; else echo 'no'; fi");
@@ -53,7 +53,7 @@ test "scripting: if else" {
 test "scripting: if elif else" {
     const allocator = std.testing.allocator;
 
-    var fixture = try test_utils.ShellFixture.init(allocator);
+    var fixture = try test_utils.DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     const result = try fixture.exec("if false; then echo 'first'; elif true; then echo 'second'; else echo 'third'; fi");
@@ -67,7 +67,7 @@ test "scripting: if elif else" {
 test "scripting: if with test command" {
     const allocator = std.testing.allocator;
 
-    var fixture = try test_utils.ShellFixture.init(allocator);
+    var fixture = try test_utils.DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     const result = try fixture.exec("if [ 1 -eq 1 ]; then echo 'equal'; fi");
@@ -81,7 +81,7 @@ test "scripting: if with test command" {
 test "scripting: if with string comparison" {
     const allocator = std.testing.allocator;
 
-    var fixture = try test_utils.ShellFixture.init(allocator);
+    var fixture = try test_utils.DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     const result = try fixture.exec("if [ 'hello' = 'hello' ]; then echo 'match'; fi");
@@ -95,7 +95,7 @@ test "scripting: if with string comparison" {
 test "scripting: if with variable" {
     const allocator = std.testing.allocator;
 
-    var fixture = try test_utils.ShellFixture.init(allocator);
+    var fixture = try test_utils.DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     const result = try fixture.exec("VAR=yes; if [ \"$VAR\" = 'yes' ]; then echo 'correct'; fi");
@@ -109,7 +109,7 @@ test "scripting: if with variable" {
 test "scripting: nested if" {
     const allocator = std.testing.allocator;
 
-    var fixture = try test_utils.ShellFixture.init(allocator);
+    var fixture = try test_utils.DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     const result = try fixture.exec("if true; then if true; then echo 'nested'; fi; fi");
@@ -125,7 +125,7 @@ test "scripting: nested if" {
 test "scripting: for loop basic" {
     const allocator = std.testing.allocator;
 
-    var fixture = try test_utils.ShellFixture.init(allocator);
+    var fixture = try test_utils.DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     const result = try fixture.exec("for i in a b c; do echo $i; done");
@@ -141,7 +141,7 @@ test "scripting: for loop basic" {
 test "scripting: for loop with numbers" {
     const allocator = std.testing.allocator;
 
-    var fixture = try test_utils.ShellFixture.init(allocator);
+    var fixture = try test_utils.DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     const result = try fixture.exec("for i in 1 2 3; do echo $i; done");
@@ -157,7 +157,7 @@ test "scripting: for loop with numbers" {
 test "scripting: for loop with seq" {
     const allocator = std.testing.allocator;
 
-    var fixture = try test_utils.ShellFixture.init(allocator);
+    var fixture = try test_utils.DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     const result = try fixture.exec("for i in $(seq 1 3); do echo $i; done");
@@ -173,7 +173,7 @@ test "scripting: for loop with seq" {
 test "scripting: for loop with glob" {
     const allocator = std.testing.allocator;
 
-    var fixture = try test_utils.ShellFixture.init(allocator);
+    var fixture = try test_utils.DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     // Create test files
@@ -197,7 +197,7 @@ test "scripting: for loop with glob" {
 test "scripting: for loop with break" {
     const allocator = std.testing.allocator;
 
-    var fixture = try test_utils.ShellFixture.init(allocator);
+    var fixture = try test_utils.DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     const result = try fixture.exec("for i in 1 2 3 4 5; do echo $i; if [ $i -eq 3 ]; then break; fi; done");
@@ -214,7 +214,7 @@ test "scripting: for loop with break" {
 test "scripting: for loop with continue" {
     const allocator = std.testing.allocator;
 
-    var fixture = try test_utils.ShellFixture.init(allocator);
+    var fixture = try test_utils.DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     const result = try fixture.exec("for i in 1 2 3; do if [ $i -eq 2 ]; then continue; fi; echo $i; done");
@@ -229,7 +229,7 @@ test "scripting: for loop with continue" {
 test "scripting: nested for loops" {
     const allocator = std.testing.allocator;
 
-    var fixture = try test_utils.ShellFixture.init(allocator);
+    var fixture = try test_utils.DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     const result = try fixture.exec("for i in a b; do for j in 1 2; do echo $i$j; done; done");
@@ -248,7 +248,7 @@ test "scripting: nested for loops" {
 test "scripting: while loop basic" {
     const allocator = std.testing.allocator;
 
-    var fixture = try test_utils.ShellFixture.init(allocator);
+    var fixture = try test_utils.DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     const result = try fixture.exec("i=0; while [ $i -lt 3 ]; do echo $i; i=$((i+1)); done");
@@ -264,7 +264,7 @@ test "scripting: while loop basic" {
 test "scripting: while false never runs" {
     const allocator = std.testing.allocator;
 
-    var fixture = try test_utils.ShellFixture.init(allocator);
+    var fixture = try test_utils.DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     const result = try fixture.exec("while false; do echo 'never'; done; echo 'done'");
@@ -279,7 +279,7 @@ test "scripting: while false never runs" {
 test "scripting: while with break" {
     const allocator = std.testing.allocator;
 
-    var fixture = try test_utils.ShellFixture.init(allocator);
+    var fixture = try test_utils.DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     const result = try fixture.exec("i=0; while true; do echo $i; i=$((i+1)); if [ $i -ge 3 ]; then break; fi; done");
@@ -295,7 +295,7 @@ test "scripting: while with break" {
 test "scripting: while read line" {
     const allocator = std.testing.allocator;
 
-    var fixture = try test_utils.ShellFixture.init(allocator);
+    var fixture = try test_utils.DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     // Use printf for cross-platform compatibility (macOS echo doesn't support -e)
@@ -314,7 +314,7 @@ test "scripting: while read line" {
 test "scripting: until loop basic" {
     const allocator = std.testing.allocator;
 
-    var fixture = try test_utils.ShellFixture.init(allocator);
+    var fixture = try test_utils.DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     const result = try fixture.exec("i=0; until [ $i -ge 3 ]; do echo $i; i=$((i+1)); done");
@@ -330,7 +330,7 @@ test "scripting: until loop basic" {
 test "scripting: until true never runs" {
     const allocator = std.testing.allocator;
 
-    var fixture = try test_utils.ShellFixture.init(allocator);
+    var fixture = try test_utils.DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     const result = try fixture.exec("until true; do echo 'never'; done; echo 'done'");
@@ -347,7 +347,7 @@ test "scripting: until true never runs" {
 test "scripting: case basic match" {
     const allocator = std.testing.allocator;
 
-    var fixture = try test_utils.ShellFixture.init(allocator);
+    var fixture = try test_utils.DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     const result = try fixture.exec("case 'hello' in hello) echo 'matched';; esac");
@@ -361,7 +361,7 @@ test "scripting: case basic match" {
 test "scripting: case no match" {
     const allocator = std.testing.allocator;
 
-    var fixture = try test_utils.ShellFixture.init(allocator);
+    var fixture = try test_utils.DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     const result = try fixture.exec("case 'hello' in world) echo 'matched';; esac");
@@ -375,7 +375,7 @@ test "scripting: case no match" {
 test "scripting: case with wildcard" {
     const allocator = std.testing.allocator;
 
-    var fixture = try test_utils.ShellFixture.init(allocator);
+    var fixture = try test_utils.DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     const result = try fixture.exec("case 'hello' in h*) echo 'matched';; esac");
@@ -389,7 +389,7 @@ test "scripting: case with wildcard" {
 test "scripting: case with default" {
     const allocator = std.testing.allocator;
 
-    var fixture = try test_utils.ShellFixture.init(allocator);
+    var fixture = try test_utils.DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     const result = try fixture.exec("case 'unknown' in hello) echo 'hello';; *) echo 'default';; esac");
@@ -403,7 +403,7 @@ test "scripting: case with default" {
 test "scripting: case multiple patterns" {
     const allocator = std.testing.allocator;
 
-    var fixture = try test_utils.ShellFixture.init(allocator);
+    var fixture = try test_utils.DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     const result = try fixture.exec("case 'yes' in yes|y) echo 'affirmative';; no|n) echo 'negative';; esac");
@@ -417,7 +417,7 @@ test "scripting: case multiple patterns" {
 test "scripting: case with variable" {
     const allocator = std.testing.allocator;
 
-    var fixture = try test_utils.ShellFixture.init(allocator);
+    var fixture = try test_utils.DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     const result = try fixture.exec("VAR=test; case $VAR in test) echo 'matched';; esac");
@@ -433,7 +433,7 @@ test "scripting: case with variable" {
 test "scripting: if inside for" {
     const allocator = std.testing.allocator;
 
-    var fixture = try test_utils.ShellFixture.init(allocator);
+    var fixture = try test_utils.DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     const result = try fixture.exec("for i in 1 2 3 4 5; do if [ $i -eq 3 ]; then echo 'three'; fi; done");
@@ -447,7 +447,7 @@ test "scripting: if inside for" {
 test "scripting: for inside if" {
     const allocator = std.testing.allocator;
 
-    var fixture = try test_utils.ShellFixture.init(allocator);
+    var fixture = try test_utils.DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     const result = try fixture.exec("if true; then for i in a b c; do echo $i; done; fi");
@@ -463,7 +463,7 @@ test "scripting: for inside if" {
 test "scripting: while inside for" {
     const allocator = std.testing.allocator;
 
-    var fixture = try test_utils.ShellFixture.init(allocator);
+    var fixture = try test_utils.DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     const result = try fixture.exec("for letter in A B; do i=0; while [ $i -lt 2 ]; do echo $letter$i; i=$((i+1)); done; done");
@@ -480,7 +480,7 @@ test "scripting: while inside for" {
 test "scripting: case inside for" {
     const allocator = std.testing.allocator;
 
-    var fixture = try test_utils.ShellFixture.init(allocator);
+    var fixture = try test_utils.DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     const result = try fixture.exec("for f in a.txt b.sh c.md; do case $f in *.txt) echo 'text';; *.sh) echo 'script';; *) echo 'other';; esac; done");
@@ -498,7 +498,7 @@ test "scripting: case inside for" {
 test "scripting: function definition and call" {
     const allocator = std.testing.allocator;
 
-    var fixture = try test_utils.ShellFixture.init(allocator);
+    var fixture = try test_utils.DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     const result = try fixture.exec("greet() { echo 'hello'; }; greet");
@@ -512,7 +512,7 @@ test "scripting: function definition and call" {
 test "scripting: function with arguments" {
     const allocator = std.testing.allocator;
 
-    var fixture = try test_utils.ShellFixture.init(allocator);
+    var fixture = try test_utils.DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     const result = try fixture.exec("greet() { echo \"hello $1\"; }; greet world");
@@ -526,7 +526,7 @@ test "scripting: function with arguments" {
 test "scripting: function with return" {
     const allocator = std.testing.allocator;
 
-    var fixture = try test_utils.ShellFixture.init(allocator);
+    var fixture = try test_utils.DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     const result = try fixture.exec("check() { return 42; }; check; echo $?");
@@ -541,7 +541,7 @@ test "scripting: function with return" {
 test "scripting: arithmetic expansion in condition" {
     const allocator = std.testing.allocator;
 
-    var fixture = try test_utils.ShellFixture.init(allocator);
+    var fixture = try test_utils.DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     const result = try fixture.exec("if [ $((2+2)) -eq 4 ]; then echo 'math works'; fi");
@@ -555,7 +555,7 @@ test "scripting: arithmetic expansion in condition" {
 test "scripting: arithmetic in for loop" {
     const allocator = std.testing.allocator;
 
-    var fixture = try test_utils.ShellFixture.init(allocator);
+    var fixture = try test_utils.DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     const result = try fixture.exec("sum=0; for i in 1 2 3; do sum=$((sum+i)); done; echo $sum");
@@ -573,7 +573,7 @@ test "scripting: arithmetic in for loop" {
 test "scripting: eval simple command" {
     const allocator = std.testing.allocator;
 
-    var fixture = try test_utils.ShellFixture.init(allocator);
+    var fixture = try test_utils.DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     const result = try fixture.exec("eval 'echo hello'");
@@ -587,7 +587,7 @@ test "scripting: eval simple command" {
 test "scripting: eval with variable expansion" {
     const allocator = std.testing.allocator;
 
-    var fixture = try test_utils.ShellFixture.init(allocator);
+    var fixture = try test_utils.DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     const result = try fixture.exec("CMD='echo test'; eval $CMD");
@@ -601,7 +601,7 @@ test "scripting: eval with variable expansion" {
 test "scripting: eval nested" {
     const allocator = std.testing.allocator;
 
-    var fixture = try test_utils.ShellFixture.init(allocator);
+    var fixture = try test_utils.DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     const result = try fixture.exec("eval 'eval \"echo nested\"'");
@@ -615,7 +615,7 @@ test "scripting: eval nested" {
 test "scripting: eval with special characters" {
     const allocator = std.testing.allocator;
 
-    var fixture = try test_utils.ShellFixture.init(allocator);
+    var fixture = try test_utils.DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     const result = try fixture.exec("eval 'echo \"hello world\"'");
@@ -629,7 +629,7 @@ test "scripting: eval with special characters" {
 test "scripting: errexit basic" {
     const allocator = std.testing.allocator;
 
-    var fixture = try test_utils.ShellFixture.init(allocator);
+    var fixture = try test_utils.DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     // With errexit, false should cause immediate exit
@@ -644,7 +644,7 @@ test "scripting: errexit basic" {
 test "scripting: errexit with conditional" {
     const allocator = std.testing.allocator;
 
-    var fixture = try test_utils.ShellFixture.init(allocator);
+    var fixture = try test_utils.DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     // False in conditional shouldn't trigger errexit
@@ -659,7 +659,7 @@ test "scripting: errexit with conditional" {
 test "scripting: errexit with && chain" {
     const allocator = std.testing.allocator;
 
-    var fixture = try test_utils.ShellFixture.init(allocator);
+    var fixture = try test_utils.DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     // false && true shouldn't trigger errexit (it's a checked command)
@@ -674,7 +674,7 @@ test "scripting: errexit with && chain" {
 test "scripting: pipefail basic" {
     const allocator = std.testing.allocator;
 
-    var fixture = try test_utils.ShellFixture.init(allocator);
+    var fixture = try test_utils.DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     // Without pipefail, exit code should be from last command
@@ -688,7 +688,7 @@ test "scripting: pipefail basic" {
 test "scripting: pipefail enabled" {
     const allocator = std.testing.allocator;
 
-    var fixture = try test_utils.ShellFixture.init(allocator);
+    var fixture = try test_utils.DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     // With pipefail, exit code should be from first failing command
@@ -702,7 +702,7 @@ test "scripting: pipefail enabled" {
 test "scripting: errexit with pipefail" {
     const allocator = std.testing.allocator;
 
-    var fixture = try test_utils.ShellFixture.init(allocator);
+    var fixture = try test_utils.DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     // With both errexit and pipefail, pipeline with failing command should exit
@@ -716,7 +716,7 @@ test "scripting: errexit with pipefail" {
 test "scripting: subshell inherits options" {
     const allocator = std.testing.allocator;
 
-    var fixture = try test_utils.ShellFixture.init(allocator);
+    var fixture = try test_utils.DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     const result = try fixture.exec("(echo 'subshell')");
@@ -730,7 +730,7 @@ test "scripting: subshell inherits options" {
 test "scripting: command substitution error handling" {
     const allocator = std.testing.allocator;
 
-    var fixture = try test_utils.ShellFixture.init(allocator);
+    var fixture = try test_utils.DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     const result = try fixture.exec("echo $(echo inner)");
@@ -744,7 +744,7 @@ test "scripting: command substitution error handling" {
 test "scripting: nested command substitution" {
     const allocator = std.testing.allocator;
 
-    var fixture = try test_utils.ShellFixture.init(allocator);
+    var fixture = try test_utils.DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     const result = try fixture.exec("echo $(echo $(echo deep))");
@@ -758,7 +758,7 @@ test "scripting: nested command substitution" {
 test "scripting: trap basic" {
     const allocator = std.testing.allocator;
 
-    var fixture = try test_utils.ShellFixture.init(allocator);
+    var fixture = try test_utils.DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     const result = try fixture.exec("trap 'echo trapped' EXIT; echo 'before'");
@@ -771,7 +771,7 @@ test "scripting: trap basic" {
 test "scripting: function local variables" {
     const allocator = std.testing.allocator;
 
-    var fixture = try test_utils.ShellFixture.init(allocator);
+    var fixture = try test_utils.DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     const result = try fixture.exec(
@@ -790,7 +790,7 @@ test "scripting: function local variables" {
 test "scripting: return from function" {
     const allocator = std.testing.allocator;
 
-    var fixture = try test_utils.ShellFixture.init(allocator);
+    var fixture = try test_utils.DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     const result = try fixture.exec(
@@ -807,7 +807,7 @@ test "scripting: return from function" {
 test "scripting: break in loop" {
     const allocator = std.testing.allocator;
 
-    var fixture = try test_utils.ShellFixture.init(allocator);
+    var fixture = try test_utils.DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     const result = try fixture.exec("for i in 1 2 3 4 5; do echo $i; if [ $i -eq 3 ]; then break; fi; done");
@@ -823,7 +823,7 @@ test "scripting: break in loop" {
 test "scripting: continue in loop" {
     const allocator = std.testing.allocator;
 
-    var fixture = try test_utils.ShellFixture.init(allocator);
+    var fixture = try test_utils.DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     const result = try fixture.exec("for i in 1 2 3; do if [ $i -eq 2 ]; then continue; fi; echo $i; done");
@@ -927,7 +927,7 @@ test "scripting: source still honors genuine multi-line quoted strings" {
 // (&&, ||, ;) at execution time, not up-front for the whole chain. This makes
 // a variable set in an earlier segment visible to a later one. These tests run
 // the real den binary (DenShellFixture) because they verify den-specific
-// timing — ShellFixture.exec would run system /bin/sh and always pass.
+// timing — DenShellFixture.exec would run system /bin/sh and always pass.
 // ----------------------------------------------------------------------------
 
 test "scripting: variable set in earlier && segment is visible to later segment" {

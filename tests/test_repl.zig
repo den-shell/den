@@ -11,7 +11,7 @@ const test_utils = @import("test_utils.zig");
 test "REPL: multi-line script execution" {
     const allocator = std.testing.allocator;
 
-    var fixture = try test_utils.ShellFixture.init(allocator);
+    var fixture = try test_utils.DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     const script =
@@ -36,7 +36,7 @@ test "REPL: multi-line script execution" {
 test "REPL: interactive variable state" {
     const allocator = std.testing.allocator;
 
-    var fixture = try test_utils.ShellFixture.init(allocator);
+    var fixture = try test_utils.DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     const script =
@@ -62,7 +62,7 @@ test "REPL: interactive variable state" {
 test "REPL: command history simulation" {
     const allocator = std.testing.allocator;
 
-    var fixture = try test_utils.ShellFixture.init(allocator);
+    var fixture = try test_utils.DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     const script =
@@ -92,7 +92,7 @@ test "REPL: command history simulation" {
 test "REPL: input from stdin" {
     const allocator = std.testing.allocator;
 
-    var fixture = try test_utils.ShellFixture.init(allocator);
+    var fixture = try test_utils.DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     const result = try fixture.exec("echo 'test input' | cat");
@@ -105,7 +105,7 @@ test "REPL: input from stdin" {
 test "REPL: read command simulation" {
     const allocator = std.testing.allocator;
 
-    var fixture = try test_utils.ShellFixture.init(allocator);
+    var fixture = try test_utils.DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     const result = try fixture.exec("echo 'simulated input' | while read line; do echo \"Got: $line\"; done");
@@ -118,7 +118,7 @@ test "REPL: read command simulation" {
 test "REPL: multi-line input" {
     const allocator = std.testing.allocator;
 
-    var fixture = try test_utils.ShellFixture.init(allocator);
+    var fixture = try test_utils.DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     const result = try fixture.exec("printf 'line1\\nline2\\nline3' | while read l; do echo \"Read: $l\"; done");
@@ -136,7 +136,7 @@ test "REPL: multi-line input" {
 test "REPL: PS1 prompt variable" {
     const allocator = std.testing.allocator;
 
-    var fixture = try test_utils.ShellFixture.init(allocator);
+    var fixture = try test_utils.DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     const result = try fixture.exec("PS1='$ ' && echo $PS1");
@@ -149,7 +149,7 @@ test "REPL: PS1 prompt variable" {
 test "REPL: PS2 continuation prompt" {
     const allocator = std.testing.allocator;
 
-    var fixture = try test_utils.ShellFixture.init(allocator);
+    var fixture = try test_utils.DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     const result = try fixture.exec("PS2='> ' && echo $PS2");
@@ -166,7 +166,7 @@ test "REPL: PS2 continuation prompt" {
 test "REPL: backslash line continuation" {
     const allocator = std.testing.allocator;
 
-    var fixture = try test_utils.ShellFixture.init(allocator);
+    var fixture = try test_utils.DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     const script =
@@ -188,7 +188,7 @@ test "REPL: backslash line continuation" {
 test "REPL: multi-line string" {
     const allocator = std.testing.allocator;
 
-    var fixture = try test_utils.ShellFixture.init(allocator);
+    var fixture = try test_utils.DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     const result = try fixture.exec("echo 'line1\nline2'");
@@ -205,7 +205,7 @@ test "REPL: multi-line string" {
 test "REPL: background job with wait" {
     const allocator = std.testing.allocator;
 
-    var fixture = try test_utils.ShellFixture.init(allocator);
+    var fixture = try test_utils.DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     const result = try fixture.exec("sleep 0.1 & wait; echo 'done'");
@@ -218,7 +218,7 @@ test "REPL: background job with wait" {
 test "REPL: multiple background jobs" {
     const allocator = std.testing.allocator;
 
-    var fixture = try test_utils.ShellFixture.init(allocator);
+    var fixture = try test_utils.DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     const result = try fixture.exec("sleep 0.05 & sleep 0.05 & wait; echo 'all done'");
@@ -235,7 +235,7 @@ test "REPL: multiple background jobs" {
 test "REPL: alias definition and use" {
     const allocator = std.testing.allocator;
 
-    var fixture = try test_utils.ShellFixture.init(allocator);
+    var fixture = try test_utils.DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     const script =
@@ -257,7 +257,7 @@ test "REPL: alias definition and use" {
 test "REPL: unalias command" {
     const allocator = std.testing.allocator;
 
-    var fixture = try test_utils.ShellFixture.init(allocator);
+    var fixture = try test_utils.DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     const script =
@@ -284,7 +284,7 @@ test "REPL: unalias command" {
 test "REPL: continue after error" {
     const allocator = std.testing.allocator;
 
-    var fixture = try test_utils.ShellFixture.init(allocator);
+    var fixture = try test_utils.DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     const script =
@@ -306,7 +306,7 @@ test "REPL: continue after error" {
 test "REPL: trap command" {
     const allocator = std.testing.allocator;
 
-    var fixture = try test_utils.ShellFixture.init(allocator);
+    var fixture = try test_utils.DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     const script =
@@ -333,7 +333,7 @@ test "REPL: trap command" {
 test "REPL: set -e exit on error" {
     const allocator = std.testing.allocator;
 
-    var fixture = try test_utils.ShellFixture.init(allocator);
+    var fixture = try test_utils.DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     const script =
@@ -356,7 +356,7 @@ test "REPL: set -e exit on error" {
 test "REPL: set -x trace" {
     const allocator = std.testing.allocator;
 
-    var fixture = try test_utils.ShellFixture.init(allocator);
+    var fixture = try test_utils.DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     const script =
@@ -379,7 +379,7 @@ test "REPL: set -x trace" {
 test "REPL: export variable" {
     const allocator = std.testing.allocator;
 
-    var fixture = try test_utils.ShellFixture.init(allocator);
+    var fixture = try test_utils.DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     const result = try fixture.exec("export MY_VAR=exported && sh -c 'echo $MY_VAR'");
@@ -396,7 +396,7 @@ test "REPL: export variable" {
 test "REPL: source command" {
     const allocator = std.testing.allocator;
 
-    var fixture = try test_utils.ShellFixture.init(allocator);
+    var fixture = try test_utils.DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     // Create a file to source
@@ -416,7 +416,7 @@ test "REPL: source command" {
 test "REPL: source with functions" {
     const allocator = std.testing.allocator;
 
-    var fixture = try test_utils.ShellFixture.init(allocator);
+    var fixture = try test_utils.DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     // Create a file with a function
@@ -440,7 +440,7 @@ test "REPL: source with functions" {
 test "REPL: command with tab-like completion chars" {
     const allocator = std.testing.allocator;
 
-    var fixture = try test_utils.ShellFixture.init(allocator);
+    var fixture = try test_utils.DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     const result = try fixture.exec("printf 'a\\tb\\tc'");
@@ -460,7 +460,7 @@ test "REPL: command with tab-like completion chars" {
 test "REPL: $$ pid variable" {
     const allocator = std.testing.allocator;
 
-    var fixture = try test_utils.ShellFixture.init(allocator);
+    var fixture = try test_utils.DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     const result = try fixture.exec("echo $$");
@@ -477,7 +477,7 @@ test "REPL: $$ pid variable" {
 test "REPL: $! background pid" {
     const allocator = std.testing.allocator;
 
-    var fixture = try test_utils.ShellFixture.init(allocator);
+    var fixture = try test_utils.DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     const result = try fixture.exec("sleep 0.01 & echo $! | grep -E '^[0-9]+$' || echo 'got pid'");
@@ -490,7 +490,7 @@ test "REPL: $! background pid" {
 test "REPL: $# argument count" {
     const allocator = std.testing.allocator;
 
-    var fixture = try test_utils.ShellFixture.init(allocator);
+    var fixture = try test_utils.DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     const script =
@@ -514,7 +514,7 @@ test "REPL: $# argument count" {
 test "REPL: $@ all arguments" {
     const allocator = std.testing.allocator;
 
-    var fixture = try test_utils.ShellFixture.init(allocator);
+    var fixture = try test_utils.DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     const script =
@@ -542,7 +542,7 @@ test "REPL: $@ all arguments" {
 test "REPL: multiple sequential commands" {
     const allocator = std.testing.allocator;
 
-    var fixture = try test_utils.ShellFixture.init(allocator);
+    var fixture = try test_utils.DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     const script =
@@ -571,7 +571,7 @@ test "REPL: multiple sequential commands" {
 test "REPL: nested function calls" {
     const allocator = std.testing.allocator;
 
-    var fixture = try test_utils.ShellFixture.init(allocator);
+    var fixture = try test_utils.DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     const script =
@@ -594,7 +594,7 @@ test "REPL: nested function calls" {
 test "REPL: recursive function" {
     const allocator = std.testing.allocator;
 
-    var fixture = try test_utils.ShellFixture.init(allocator);
+    var fixture = try test_utils.DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     const script =

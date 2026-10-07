@@ -11,7 +11,7 @@ const test_utils = @import("test_utils.zig");
 test "chaining: && runs second on success" {
     const allocator = std.testing.allocator;
 
-    var fixture = try test_utils.ShellFixture.init(allocator);
+    var fixture = try test_utils.DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     const result = try fixture.exec("true && echo 'success'");
@@ -25,7 +25,7 @@ test "chaining: && runs second on success" {
 test "chaining: && skips second on failure" {
     const allocator = std.testing.allocator;
 
-    var fixture = try test_utils.ShellFixture.init(allocator);
+    var fixture = try test_utils.DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     const result = try fixture.exec("false && echo 'should not run'");
@@ -39,7 +39,7 @@ test "chaining: && skips second on failure" {
 test "chaining: && chain multiple commands" {
     const allocator = std.testing.allocator;
 
-    var fixture = try test_utils.ShellFixture.init(allocator);
+    var fixture = try test_utils.DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     const result = try fixture.exec("echo 'one' && echo 'two' && echo 'three'");
@@ -55,7 +55,7 @@ test "chaining: && chain multiple commands" {
 test "chaining: && stops at first failure" {
     const allocator = std.testing.allocator;
 
-    var fixture = try test_utils.ShellFixture.init(allocator);
+    var fixture = try test_utils.DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     const result = try fixture.exec("echo 'one' && false && echo 'three'");
@@ -72,7 +72,7 @@ test "chaining: && stops at first failure" {
 test "chaining: || skips second on success" {
     const allocator = std.testing.allocator;
 
-    var fixture = try test_utils.ShellFixture.init(allocator);
+    var fixture = try test_utils.DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     const result = try fixture.exec("true || echo 'should not run'");
@@ -86,7 +86,7 @@ test "chaining: || skips second on success" {
 test "chaining: || runs second on failure" {
     const allocator = std.testing.allocator;
 
-    var fixture = try test_utils.ShellFixture.init(allocator);
+    var fixture = try test_utils.DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     const result = try fixture.exec("false || echo 'fallback'");
@@ -100,7 +100,7 @@ test "chaining: || runs second on failure" {
 test "chaining: || chain multiple fallbacks" {
     const allocator = std.testing.allocator;
 
-    var fixture = try test_utils.ShellFixture.init(allocator);
+    var fixture = try test_utils.DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     const result = try fixture.exec("false || false || echo 'final fallback'");
@@ -114,7 +114,7 @@ test "chaining: || chain multiple fallbacks" {
 test "chaining: || stops at first success" {
     const allocator = std.testing.allocator;
 
-    var fixture = try test_utils.ShellFixture.init(allocator);
+    var fixture = try test_utils.DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     const result = try fixture.exec("false || echo 'first' || echo 'second'");
@@ -131,7 +131,7 @@ test "chaining: || stops at first success" {
 test "chaining: ; runs both commands" {
     const allocator = std.testing.allocator;
 
-    var fixture = try test_utils.ShellFixture.init(allocator);
+    var fixture = try test_utils.DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     const result = try fixture.exec("echo 'first'; echo 'second'");
@@ -145,7 +145,7 @@ test "chaining: ; runs both commands" {
 test "chaining: ; continues after failure" {
     const allocator = std.testing.allocator;
 
-    var fixture = try test_utils.ShellFixture.init(allocator);
+    var fixture = try test_utils.DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     const result = try fixture.exec("false; echo 'still runs'");
@@ -158,7 +158,7 @@ test "chaining: ; continues after failure" {
 test "chaining: ; exit code is last command" {
     const allocator = std.testing.allocator;
 
-    var fixture = try test_utils.ShellFixture.init(allocator);
+    var fixture = try test_utils.DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     const result = try fixture.exec("true; false");
@@ -171,7 +171,7 @@ test "chaining: ; exit code is last command" {
 test "chaining: ; multiple commands" {
     const allocator = std.testing.allocator;
 
-    var fixture = try test_utils.ShellFixture.init(allocator);
+    var fixture = try test_utils.DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     const result = try fixture.exec("echo 'a'; echo 'b'; echo 'c'; echo 'd'");
@@ -189,7 +189,7 @@ test "chaining: ; multiple commands" {
 test "chaining: && and || combined" {
     const allocator = std.testing.allocator;
 
-    var fixture = try test_utils.ShellFixture.init(allocator);
+    var fixture = try test_utils.DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     const result = try fixture.exec("true && echo 'yes' || echo 'no'");
@@ -203,7 +203,7 @@ test "chaining: && and || combined" {
 test "chaining: || and && combined" {
     const allocator = std.testing.allocator;
 
-    var fixture = try test_utils.ShellFixture.init(allocator);
+    var fixture = try test_utils.DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     const result = try fixture.exec("false || echo 'fallback' && echo 'continued'");
@@ -217,7 +217,7 @@ test "chaining: || and && combined" {
 test "chaining: ; with && and ||" {
     const allocator = std.testing.allocator;
 
-    var fixture = try test_utils.ShellFixture.init(allocator);
+    var fixture = try test_utils.DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     const result = try fixture.exec("echo 'start'; true && echo 'middle'; false || echo 'end'");
@@ -232,7 +232,7 @@ test "chaining: ; with && and ||" {
 test "chaining: ternary-like pattern" {
     const allocator = std.testing.allocator;
 
-    var fixture = try test_utils.ShellFixture.init(allocator);
+    var fixture = try test_utils.DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     // Simulates: if true then 'yes' else 'no'
@@ -246,7 +246,7 @@ test "chaining: ternary-like pattern" {
 test "chaining: ternary-like pattern (false case)" {
     const allocator = std.testing.allocator;
 
-    var fixture = try test_utils.ShellFixture.init(allocator);
+    var fixture = try test_utils.DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     // Simulates: if false then 'yes' else 'no'
@@ -262,7 +262,7 @@ test "chaining: ternary-like pattern (false case)" {
 test "chaining: subshell grouping" {
     const allocator = std.testing.allocator;
 
-    var fixture = try test_utils.ShellFixture.init(allocator);
+    var fixture = try test_utils.DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     const result = try fixture.exec("(echo 'inside'; echo 'subshell')");
@@ -276,7 +276,7 @@ test "chaining: subshell grouping" {
 test "chaining: brace grouping" {
     const allocator = std.testing.allocator;
 
-    var fixture = try test_utils.ShellFixture.init(allocator);
+    var fixture = try test_utils.DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     const result = try fixture.exec("{ echo 'inside'; echo 'braces'; }");
@@ -290,7 +290,7 @@ test "chaining: brace grouping" {
 test "chaining: grouped commands with &&" {
     const allocator = std.testing.allocator;
 
-    var fixture = try test_utils.ShellFixture.init(allocator);
+    var fixture = try test_utils.DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     const result = try fixture.exec("true && (echo 'a'; echo 'b')");
@@ -304,7 +304,7 @@ test "chaining: grouped commands with &&" {
 test "chaining: grouped commands with ||" {
     const allocator = std.testing.allocator;
 
-    var fixture = try test_utils.ShellFixture.init(allocator);
+    var fixture = try test_utils.DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     const result = try fixture.exec("false || (echo 'fallback1'; echo 'fallback2')");
@@ -320,7 +320,7 @@ test "chaining: grouped commands with ||" {
 test "chaining: variable set and use" {
     const allocator = std.testing.allocator;
 
-    var fixture = try test_utils.ShellFixture.init(allocator);
+    var fixture = try test_utils.DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     const result = try fixture.exec("VAR=hello && echo $VAR");
@@ -333,7 +333,7 @@ test "chaining: variable set and use" {
 test "chaining: variable in condition" {
     const allocator = std.testing.allocator;
 
-    var fixture = try test_utils.ShellFixture.init(allocator);
+    var fixture = try test_utils.DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     const result = try fixture.exec("VAR=1 && [ $VAR -eq 1 ] && echo 'equal'");
@@ -348,7 +348,7 @@ test "chaining: variable in condition" {
 test "chaining: && with pipeline" {
     const allocator = std.testing.allocator;
 
-    var fixture = try test_utils.ShellFixture.init(allocator);
+    var fixture = try test_utils.DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     const result = try fixture.exec("echo 'hello' | grep 'hello' && echo 'found'");
@@ -361,7 +361,7 @@ test "chaining: && with pipeline" {
 test "chaining: || with pipeline failure" {
     const allocator = std.testing.allocator;
 
-    var fixture = try test_utils.ShellFixture.init(allocator);
+    var fixture = try test_utils.DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     const result = try fixture.exec("echo 'hello' | grep 'xyz' || echo 'not found'");
@@ -374,7 +374,7 @@ test "chaining: || with pipeline failure" {
 test "chaining: multiple pipelines chained" {
     const allocator = std.testing.allocator;
 
-    var fixture = try test_utils.ShellFixture.init(allocator);
+    var fixture = try test_utils.DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     const result = try fixture.exec("echo 'a' | cat && echo 'b' | cat");
@@ -390,7 +390,7 @@ test "chaining: multiple pipelines chained" {
 test "chaining: $? after success" {
     const allocator = std.testing.allocator;
 
-    var fixture = try test_utils.ShellFixture.init(allocator);
+    var fixture = try test_utils.DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     const result = try fixture.exec("true; echo $?");
@@ -403,7 +403,7 @@ test "chaining: $? after success" {
 test "chaining: $? after failure" {
     const allocator = std.testing.allocator;
 
-    var fixture = try test_utils.ShellFixture.init(allocator);
+    var fixture = try test_utils.DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     const result = try fixture.exec("false; echo $?");
@@ -416,7 +416,7 @@ test "chaining: $? after failure" {
 test "chaining: complex exit code chain" {
     const allocator = std.testing.allocator;
 
-    var fixture = try test_utils.ShellFixture.init(allocator);
+    var fixture = try test_utils.DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     const result = try fixture.exec("true && false || echo 'recovered' && echo $?");

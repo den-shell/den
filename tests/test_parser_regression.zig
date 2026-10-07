@@ -1,7 +1,7 @@
 const std = @import("std");
 const test_utils = @import("test_utils.zig");
 const TestAssert = test_utils.TestAssert;
-const ShellFixture = test_utils.ShellFixture;
+const DenShellFixture = test_utils.DenShellFixture;
 
 // Parser Regression Tests
 // Tests for edge cases, known bugs, and security-sensitive parsing scenarios
@@ -12,7 +12,7 @@ const ShellFixture = test_utils.ShellFixture;
 
 test "regression: empty input" {
     const allocator = std.testing.allocator;
-    var fixture = try ShellFixture.init(allocator);
+    var fixture = try DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     const result = try fixture.exec("");
@@ -25,7 +25,7 @@ test "regression: empty input" {
 
 test "regression: whitespace only input" {
     const allocator = std.testing.allocator;
-    var fixture = try ShellFixture.init(allocator);
+    var fixture = try DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     const result = try fixture.exec("   \t   ");
@@ -37,7 +37,7 @@ test "regression: whitespace only input" {
 
 test "regression: newlines only" {
     const allocator = std.testing.allocator;
-    var fixture = try ShellFixture.init(allocator);
+    var fixture = try DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     const result = try fixture.exec("\n\n\n");
@@ -53,7 +53,7 @@ test "regression: newlines only" {
 
 test "regression: unmatched double quote" {
     const allocator = std.testing.allocator;
-    var fixture = try ShellFixture.init(allocator);
+    var fixture = try DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     // Shell should handle or report unmatched quotes
@@ -66,7 +66,7 @@ test "regression: unmatched double quote" {
 
 test "regression: unmatched single quote" {
     const allocator = std.testing.allocator;
-    var fixture = try ShellFixture.init(allocator);
+    var fixture = try DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     const result = try fixture.exec("echo 'hello");
@@ -76,7 +76,7 @@ test "regression: unmatched single quote" {
 
 test "regression: empty quoted string" {
     const allocator = std.testing.allocator;
-    var fixture = try ShellFixture.init(allocator);
+    var fixture = try DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     const result = try fixture.exec("echo \"\"");
@@ -88,7 +88,7 @@ test "regression: empty quoted string" {
 
 test "regression: nested quotes - double in single" {
     const allocator = std.testing.allocator;
-    var fixture = try ShellFixture.init(allocator);
+    var fixture = try DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     const result = try fixture.exec("echo 'hello \"world\"'");
@@ -101,7 +101,7 @@ test "regression: nested quotes - double in single" {
 
 test "regression: nested quotes - single in double" {
     const allocator = std.testing.allocator;
-    var fixture = try ShellFixture.init(allocator);
+    var fixture = try DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     const result = try fixture.exec("echo \"hello 'world'\"");
@@ -114,7 +114,7 @@ test "regression: nested quotes - single in double" {
 
 test "regression: escaped quote in double quotes" {
     const allocator = std.testing.allocator;
-    var fixture = try ShellFixture.init(allocator);
+    var fixture = try DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     const result = try fixture.exec("echo \"hello \\\"world\\\"\"");
@@ -126,7 +126,7 @@ test "regression: escaped quote in double quotes" {
 
 test "regression: backslash at end of quoted string" {
     const allocator = std.testing.allocator;
-    var fixture = try ShellFixture.init(allocator);
+    var fixture = try DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     const result = try fixture.exec("echo \"test\\\\\"");
@@ -142,7 +142,7 @@ test "regression: backslash at end of quoted string" {
 
 test "regression: dollar sign in single quotes" {
     const allocator = std.testing.allocator;
-    var fixture = try ShellFixture.init(allocator);
+    var fixture = try DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     const result = try fixture.exec("echo '$HOME'");
@@ -155,7 +155,7 @@ test "regression: dollar sign in single quotes" {
 
 test "regression: backtick in single quotes" {
     const allocator = std.testing.allocator;
-    var fixture = try ShellFixture.init(allocator);
+    var fixture = try DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     const result = try fixture.exec("echo '`pwd`'");
@@ -168,7 +168,7 @@ test "regression: backtick in single quotes" {
 
 test "regression: semicolon in quotes" {
     const allocator = std.testing.allocator;
-    var fixture = try ShellFixture.init(allocator);
+    var fixture = try DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     const result = try fixture.exec("echo \"hello;world\"");
@@ -181,7 +181,7 @@ test "regression: semicolon in quotes" {
 
 test "regression: pipe in quotes" {
     const allocator = std.testing.allocator;
-    var fixture = try ShellFixture.init(allocator);
+    var fixture = try DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     const result = try fixture.exec("echo \"hello|world\"");
@@ -194,7 +194,7 @@ test "regression: pipe in quotes" {
 
 test "regression: ampersand in quotes" {
     const allocator = std.testing.allocator;
-    var fixture = try ShellFixture.init(allocator);
+    var fixture = try DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     const result = try fixture.exec("echo \"hello&world\"");
@@ -207,7 +207,7 @@ test "regression: ampersand in quotes" {
 
 test "regression: hash in quotes" {
     const allocator = std.testing.allocator;
-    var fixture = try ShellFixture.init(allocator);
+    var fixture = try DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     const result = try fixture.exec("echo \"hello#world\"");
@@ -224,7 +224,7 @@ test "regression: hash in quotes" {
 
 test "regression: multiple consecutive pipes" {
     const allocator = std.testing.allocator;
-    var fixture = try ShellFixture.init(allocator);
+    var fixture = try DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     const result = try fixture.exec("echo hello | cat | cat | cat");
@@ -237,7 +237,7 @@ test "regression: multiple consecutive pipes" {
 
 test "regression: pipe at end of line" {
     const allocator = std.testing.allocator;
-    var fixture = try ShellFixture.init(allocator);
+    var fixture = try DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     // Trailing pipe is an error in most shells
@@ -251,7 +251,7 @@ test "regression: pipe at end of line" {
 
 test "regression: double ampersand at end" {
     const allocator = std.testing.allocator;
-    var fixture = try ShellFixture.init(allocator);
+    var fixture = try DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     const result = try fixture.exec("echo hello &&");
@@ -264,7 +264,7 @@ test "regression: double ampersand at end" {
 
 test "regression: double pipe at end" {
     const allocator = std.testing.allocator;
-    var fixture = try ShellFixture.init(allocator);
+    var fixture = try DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     const result = try fixture.exec("echo hello ||");
@@ -277,7 +277,7 @@ test "regression: double pipe at end" {
 
 test "regression: chained AND operators" {
     const allocator = std.testing.allocator;
-    var fixture = try ShellFixture.init(allocator);
+    var fixture = try DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     const result = try fixture.exec("true && true && true && echo success");
@@ -290,7 +290,7 @@ test "regression: chained AND operators" {
 
 test "regression: chained OR operators" {
     const allocator = std.testing.allocator;
-    var fixture = try ShellFixture.init(allocator);
+    var fixture = try DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     const result = try fixture.exec("false || false || echo fallback");
@@ -303,7 +303,7 @@ test "regression: chained OR operators" {
 
 test "regression: mixed AND and OR" {
     const allocator = std.testing.allocator;
-    var fixture = try ShellFixture.init(allocator);
+    var fixture = try DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     const result = try fixture.exec("true && false || echo recovered");
@@ -320,7 +320,7 @@ test "regression: mixed AND and OR" {
 
 test "regression: redirection with no space" {
     const allocator = std.testing.allocator;
-    var fixture = try ShellFixture.init(allocator);
+    var fixture = try DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     const result = try fixture.exec("echo hello>/dev/null && echo done");
@@ -333,7 +333,7 @@ test "regression: redirection with no space" {
 
 test "regression: multiple output redirections" {
     const allocator = std.testing.allocator;
-    var fixture = try ShellFixture.init(allocator);
+    var fixture = try DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     // Last redirection wins
@@ -346,7 +346,7 @@ test "regression: multiple output redirections" {
 
 test "regression: stderr to stdout redirect" {
     const allocator = std.testing.allocator;
-    var fixture = try ShellFixture.init(allocator);
+    var fixture = try DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     const result = try fixture.exec("echo error >&2 2>&1");
@@ -358,7 +358,7 @@ test "regression: stderr to stdout redirect" {
 
 test "regression: append redirection" {
     const allocator = std.testing.allocator;
-    var fixture = try ShellFixture.init(allocator);
+    var fixture = try DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     const result = try fixture.exec("echo first >> /dev/null && echo second >> /dev/null && echo done");
@@ -375,7 +375,7 @@ test "regression: append redirection" {
 
 test "regression: simple command substitution" {
     const allocator = std.testing.allocator;
-    var fixture = try ShellFixture.init(allocator);
+    var fixture = try DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     const result = try fixture.exec("echo $(echo hello)");
@@ -388,7 +388,7 @@ test "regression: simple command substitution" {
 
 test "regression: nested command substitution" {
     const allocator = std.testing.allocator;
-    var fixture = try ShellFixture.init(allocator);
+    var fixture = try DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     const result = try fixture.exec("echo $(echo $(echo nested))");
@@ -401,7 +401,7 @@ test "regression: nested command substitution" {
 
 test "regression: command substitution with quotes" {
     const allocator = std.testing.allocator;
-    var fixture = try ShellFixture.init(allocator);
+    var fixture = try DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     const result = try fixture.exec("echo \"$(echo 'hello world')\"");
@@ -418,7 +418,7 @@ test "regression: command substitution with quotes" {
 
 test "regression: undefined variable" {
     const allocator = std.testing.allocator;
-    var fixture = try ShellFixture.init(allocator);
+    var fixture = try DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     const result = try fixture.exec("echo $UNDEFINED_VAR_12345");
@@ -431,7 +431,7 @@ test "regression: undefined variable" {
 
 test "regression: variable with default value" {
     const allocator = std.testing.allocator;
-    var fixture = try ShellFixture.init(allocator);
+    var fixture = try DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     const result = try fixture.exec("echo ${UNDEFINED:-default}");
@@ -444,7 +444,7 @@ test "regression: variable with default value" {
 
 test "regression: variable in double quotes" {
     const allocator = std.testing.allocator;
-    var fixture = try ShellFixture.init(allocator);
+    var fixture = try DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     try fixture.setEnv("TEST_VAR", "hello world");
@@ -457,7 +457,7 @@ test "regression: variable in double quotes" {
 
 test "regression: special variables" {
     const allocator = std.testing.allocator;
-    var fixture = try ShellFixture.init(allocator);
+    var fixture = try DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     // $$ - PID, $? - last exit code
@@ -474,7 +474,7 @@ test "regression: special variables" {
 
 test "regression: very long command" {
     const allocator = std.testing.allocator;
-    var fixture = try ShellFixture.init(allocator);
+    var fixture = try DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     // Command with many arguments using static string
@@ -488,7 +488,7 @@ test "regression: very long command" {
 
 test "regression: long pipeline" {
     const allocator = std.testing.allocator;
-    var fixture = try ShellFixture.init(allocator);
+    var fixture = try DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     const result = try fixture.exec("echo test | cat | cat | cat | cat | cat | cat | cat | cat | cat");
@@ -505,7 +505,7 @@ test "regression: long pipeline" {
 
 test "regression: comment at end of command" {
     const allocator = std.testing.allocator;
-    var fixture = try ShellFixture.init(allocator);
+    var fixture = try DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     const result = try fixture.exec("echo hello # this is a comment");
@@ -519,7 +519,7 @@ test "regression: comment at end of command" {
 
 test "regression: comment only line" {
     const allocator = std.testing.allocator;
-    var fixture = try ShellFixture.init(allocator);
+    var fixture = try DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     const result = try fixture.exec("# this is just a comment");
@@ -531,7 +531,7 @@ test "regression: comment only line" {
 
 test "regression: hash in middle of word" {
     const allocator = std.testing.allocator;
-    var fixture = try ShellFixture.init(allocator);
+    var fixture = try DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     // Hash must be at word boundary to start comment
@@ -549,7 +549,7 @@ test "regression: hash in middle of word" {
 
 test "regression: escaped newline" {
     const allocator = std.testing.allocator;
-    var fixture = try ShellFixture.init(allocator);
+    var fixture = try DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     const result = try fixture.exec("echo hello\\\nworld");
@@ -562,7 +562,7 @@ test "regression: escaped newline" {
 
 test "regression: escaped space" {
     const allocator = std.testing.allocator;
-    var fixture = try ShellFixture.init(allocator);
+    var fixture = try DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     const result = try fixture.exec("echo hello\\ world");
@@ -575,7 +575,7 @@ test "regression: escaped space" {
 
 test "regression: escaped dollar" {
     const allocator = std.testing.allocator;
-    var fixture = try ShellFixture.init(allocator);
+    var fixture = try DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     const result = try fixture.exec("echo \\$HOME");
@@ -588,7 +588,7 @@ test "regression: escaped dollar" {
 
 test "regression: double backslash" {
     const allocator = std.testing.allocator;
-    var fixture = try ShellFixture.init(allocator);
+    var fixture = try DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     const result = try fixture.exec("echo \\\\");
@@ -605,7 +605,7 @@ test "regression: double backslash" {
 
 test "regression: subshell grouping" {
     const allocator = std.testing.allocator;
-    var fixture = try ShellFixture.init(allocator);
+    var fixture = try DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     const result = try fixture.exec("(echo hello; echo world)");
@@ -619,7 +619,7 @@ test "regression: subshell grouping" {
 
 test "regression: brace grouping" {
     const allocator = std.testing.allocator;
-    var fixture = try ShellFixture.init(allocator);
+    var fixture = try DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     const result = try fixture.exec("{ echo hello; echo world; }");
@@ -633,7 +633,7 @@ test "regression: brace grouping" {
 
 test "regression: nested parentheses" {
     const allocator = std.testing.allocator;
-    var fixture = try ShellFixture.init(allocator);
+    var fixture = try DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     const result = try fixture.exec("(echo outer (echo inner))");
@@ -645,7 +645,7 @@ test "regression: nested parentheses" {
 
 test "regression: unmatched parenthesis" {
     const allocator = std.testing.allocator;
-    var fixture = try ShellFixture.init(allocator);
+    var fixture = try DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     const result = try fixture.exec("echo (hello");
@@ -662,7 +662,7 @@ test "regression: unmatched parenthesis" {
 
 test "regression: arithmetic expansion" {
     const allocator = std.testing.allocator;
-    var fixture = try ShellFixture.init(allocator);
+    var fixture = try DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     const result = try fixture.exec("echo $((1 + 2))");
@@ -675,7 +675,7 @@ test "regression: arithmetic expansion" {
 
 test "regression: nested arithmetic" {
     const allocator = std.testing.allocator;
-    var fixture = try ShellFixture.init(allocator);
+    var fixture = try DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     const result = try fixture.exec("echo $((2 * (3 + 4)))");
@@ -692,7 +692,7 @@ test "regression: nested arithmetic" {
 
 test "regression: asterisk glob" {
     const allocator = std.testing.allocator;
-    var fixture = try ShellFixture.init(allocator);
+    var fixture = try DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     // Should expand to files, or stay literal if no match
@@ -705,7 +705,7 @@ test "regression: asterisk glob" {
 
 test "regression: question mark glob" {
     const allocator = std.testing.allocator;
-    var fixture = try ShellFixture.init(allocator);
+    var fixture = try DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     const result = try fixture.exec("echo /tmp/?.txt");
@@ -717,7 +717,7 @@ test "regression: question mark glob" {
 
 test "regression: bracket glob" {
     const allocator = std.testing.allocator;
-    var fixture = try ShellFixture.init(allocator);
+    var fixture = try DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     const result = try fixture.exec("echo /tmp/[abc].txt");
@@ -733,7 +733,7 @@ test "regression: bracket glob" {
 
 test "regression: command injection via variable" {
     const allocator = std.testing.allocator;
-    var fixture = try ShellFixture.init(allocator);
+    var fixture = try DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     // Variable containing shell metacharacters should be properly handled
@@ -749,7 +749,7 @@ test "regression: command injection via variable" {
 
 test "regression: null byte handling" {
     const allocator = std.testing.allocator;
-    var fixture = try ShellFixture.init(allocator);
+    var fixture = try DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     // Null bytes should be handled gracefully
@@ -766,7 +766,7 @@ test "regression: null byte handling" {
 
 test "regression: unicode in command" {
     const allocator = std.testing.allocator;
-    var fixture = try ShellFixture.init(allocator);
+    var fixture = try DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     const result = try fixture.exec("echo '日本語'");
@@ -779,7 +779,7 @@ test "regression: unicode in command" {
 
 test "regression: unicode emoji" {
     const allocator = std.testing.allocator;
-    var fixture = try ShellFixture.init(allocator);
+    var fixture = try DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     const result = try fixture.exec("echo '🎉'");
@@ -796,7 +796,7 @@ test "regression: unicode emoji" {
 
 test "regression: true command" {
     const allocator = std.testing.allocator;
-    var fixture = try ShellFixture.init(allocator);
+    var fixture = try DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     const result = try fixture.exec("true");
@@ -808,7 +808,7 @@ test "regression: true command" {
 
 test "regression: false command" {
     const allocator = std.testing.allocator;
-    var fixture = try ShellFixture.init(allocator);
+    var fixture = try DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     const result = try fixture.exec("false");
@@ -820,7 +820,7 @@ test "regression: false command" {
 
 test "regression: exit with code" {
     const allocator = std.testing.allocator;
-    var fixture = try ShellFixture.init(allocator);
+    var fixture = try DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     const result = try fixture.exec("exit 42");
@@ -836,7 +836,7 @@ test "regression: exit with code" {
 
 test "regression: all features combined" {
     const allocator = std.testing.allocator;
-    var fixture = try ShellFixture.init(allocator);
+    var fixture = try DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     const result = try fixture.exec("echo \"hello $(echo world)\" | cat && echo done || echo failed");
@@ -850,7 +850,7 @@ test "regression: all features combined" {
 
 test "regression: deeply nested structure" {
     const allocator = std.testing.allocator;
-    var fixture = try ShellFixture.init(allocator);
+    var fixture = try DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     const result = try fixture.exec("echo $(echo $(echo $(echo deep)))");

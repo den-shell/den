@@ -7,7 +7,7 @@ const test_utils = @import("test_utils.zig");
 test "Integration: parse and execute simple command" {
     const allocator = std.testing.allocator;
 
-    var fixture = try test_utils.ShellFixture.init(allocator);
+    var fixture = try test_utils.DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     const result = try fixture.exec("echo hello");
@@ -21,7 +21,7 @@ test "Integration: parse and execute simple command" {
 test "Integration: pipe between commands" {
     const allocator = std.testing.allocator;
 
-    var fixture = try test_utils.ShellFixture.init(allocator);
+    var fixture = try test_utils.DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     const result = try fixture.exec("echo hello | cat");
@@ -35,7 +35,7 @@ test "Integration: pipe between commands" {
 test "Integration: AND operator with successful commands" {
     const allocator = std.testing.allocator;
 
-    var fixture = try test_utils.ShellFixture.init(allocator);
+    var fixture = try test_utils.DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     const result = try fixture.exec("echo first && echo second");
@@ -50,7 +50,7 @@ test "Integration: AND operator with successful commands" {
 test "Integration: OR operator with failed command" {
     const allocator = std.testing.allocator;
 
-    var fixture = try test_utils.ShellFixture.init(allocator);
+    var fixture = try test_utils.DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     const result = try fixture.exec("false || echo fallback");
@@ -63,7 +63,7 @@ test "Integration: OR operator with failed command" {
 test "Integration: semicolon command separator" {
     const allocator = std.testing.allocator;
 
-    var fixture = try test_utils.ShellFixture.init(allocator);
+    var fixture = try test_utils.DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     const result = try fixture.exec("echo first; echo second; echo third");
@@ -78,7 +78,7 @@ test "Integration: semicolon command separator" {
 test "Integration: output redirection" {
     const allocator = std.testing.allocator;
 
-    var fixture = try test_utils.ShellFixture.init(allocator);
+    var fixture = try test_utils.DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     const output_file = try std.fs.path.join(allocator, &[_][]const u8{ fixture.temp_dir.path, "output.txt" });
@@ -103,7 +103,7 @@ test "Integration: output redirection" {
 test "Integration: input redirection" {
     const allocator = std.testing.allocator;
 
-    var fixture = try test_utils.ShellFixture.init(allocator);
+    var fixture = try test_utils.DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     // Create input file
@@ -124,7 +124,7 @@ test "Integration: input redirection" {
 test "Integration: complex pipeline" {
     const allocator = std.testing.allocator;
 
-    var fixture = try test_utils.ShellFixture.init(allocator);
+    var fixture = try test_utils.DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     const result = try fixture.exec("echo 'line1\nline2\nline3' | grep line2");
@@ -137,7 +137,7 @@ test "Integration: complex pipeline" {
 test "Integration: command substitution" {
     const allocator = std.testing.allocator;
 
-    var fixture = try test_utils.ShellFixture.init(allocator);
+    var fixture = try test_utils.DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     const result = try fixture.exec("echo $(echo nested)");
@@ -150,7 +150,7 @@ test "Integration: command substitution" {
 test "Integration: variable expansion" {
     const allocator = std.testing.allocator;
 
-    var fixture = try test_utils.ShellFixture.init(allocator);
+    var fixture = try test_utils.DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     const result = try fixture.exec("TEST=hello && echo $TEST");
@@ -163,7 +163,7 @@ test "Integration: variable expansion" {
 test "Integration: mixed operators" {
     const allocator = std.testing.allocator;
 
-    var fixture = try test_utils.ShellFixture.init(allocator);
+    var fixture = try test_utils.DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     const result = try fixture.exec("echo a && echo b || echo c; echo d | cat");
@@ -178,7 +178,7 @@ test "Integration: mixed operators" {
 test "Integration: script execution" {
     const allocator = std.testing.allocator;
 
-    var fixture = try test_utils.ShellFixture.init(allocator);
+    var fixture = try test_utils.DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     const script_content =
@@ -203,7 +203,7 @@ test "Integration: script execution" {
 test "Integration: conditional execution" {
     const allocator = std.testing.allocator;
 
-    var fixture = try test_utils.ShellFixture.init(allocator);
+    var fixture = try test_utils.DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     const result = try fixture.exec("true && echo yes || echo no");
@@ -216,7 +216,7 @@ test "Integration: conditional execution" {
 test "Integration: multiple redirections" {
     const allocator = std.testing.allocator;
 
-    var fixture = try test_utils.ShellFixture.init(allocator);
+    var fixture = try test_utils.DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     const input_file = try fixture.temp_dir.createFile("input.txt", "input data");
@@ -243,7 +243,7 @@ test "Integration: multiple redirections" {
 test "Integration: error handling" {
     const allocator = std.testing.allocator;
 
-    var fixture = try test_utils.ShellFixture.init(allocator);
+    var fixture = try test_utils.DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     const result = try fixture.exec("nonexistent-command");
@@ -257,7 +257,7 @@ test "Integration: error handling" {
 test "Integration: long pipeline" {
     const allocator = std.testing.allocator;
 
-    var fixture = try test_utils.ShellFixture.init(allocator);
+    var fixture = try test_utils.DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     const result = try fixture.exec("echo hello | cat | cat | cat");
@@ -271,7 +271,7 @@ test "Integration: long pipeline" {
 test "Integration: subshell execution" {
     const allocator = std.testing.allocator;
 
-    var fixture = try test_utils.ShellFixture.init(allocator);
+    var fixture = try test_utils.DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     const result = try fixture.exec("(echo nested && echo commands)");
@@ -285,7 +285,7 @@ test "Integration: subshell execution" {
 test "Integration: glob expansion" {
     const allocator = std.testing.allocator;
 
-    var fixture = try test_utils.ShellFixture.init(allocator);
+    var fixture = try test_utils.DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     // Create test files

@@ -11,7 +11,7 @@ const test_utils = @import("test_utils.zig");
 test "ShellOption: set -e stops on error" {
     const allocator = std.testing.allocator;
 
-    var fixture = try test_utils.ShellFixture.init(allocator);
+    var fixture = try test_utils.DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     const script =
@@ -36,7 +36,7 @@ test "ShellOption: set -e stops on error" {
 test "ShellOption: set -e with successful commands" {
     const allocator = std.testing.allocator;
 
-    var fixture = try test_utils.ShellFixture.init(allocator);
+    var fixture = try test_utils.DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     const script =
@@ -63,7 +63,7 @@ test "ShellOption: set -e with successful commands" {
 test "ShellOption: set -e ignored in if condition" {
     const allocator = std.testing.allocator;
 
-    var fixture = try test_utils.ShellFixture.init(allocator);
+    var fixture = try test_utils.DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     const script =
@@ -92,7 +92,7 @@ test "ShellOption: set -e ignored in if condition" {
 test "ShellOption: set -e ignored in && chain" {
     const allocator = std.testing.allocator;
 
-    var fixture = try test_utils.ShellFixture.init(allocator);
+    var fixture = try test_utils.DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     const script =
@@ -116,7 +116,7 @@ test "ShellOption: set -e ignored in && chain" {
 test "ShellOption: set +e disables errexit" {
     const allocator = std.testing.allocator;
 
-    var fixture = try test_utils.ShellFixture.init(allocator);
+    var fixture = try test_utils.DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     const script =
@@ -144,7 +144,7 @@ test "ShellOption: set +e disables errexit" {
 test "ShellOption: set -u with set variable" {
     const allocator = std.testing.allocator;
 
-    var fixture = try test_utils.ShellFixture.init(allocator);
+    var fixture = try test_utils.DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     const script =
@@ -168,7 +168,7 @@ test "ShellOption: set -u with set variable" {
 test "ShellOption: set -u errors on unset variable" {
     const allocator = std.testing.allocator;
 
-    var fixture = try test_utils.ShellFixture.init(allocator);
+    var fixture = try test_utils.DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     const script =
@@ -192,7 +192,7 @@ test "ShellOption: set -u errors on unset variable" {
 test "ShellOption: set -u with default value" {
     const allocator = std.testing.allocator;
 
-    var fixture = try test_utils.ShellFixture.init(allocator);
+    var fixture = try test_utils.DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     const script =
@@ -215,7 +215,7 @@ test "ShellOption: set -u with default value" {
 test "ShellOption: set -u with special variables" {
     const allocator = std.testing.allocator;
 
-    var fixture = try test_utils.ShellFixture.init(allocator);
+    var fixture = try test_utils.DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     const script =
@@ -240,7 +240,7 @@ test "ShellOption: set -u with special variables" {
 test "ShellOption: set +u allows unset" {
     const allocator = std.testing.allocator;
 
-    var fixture = try test_utils.ShellFixture.init(allocator);
+    var fixture = try test_utils.DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     const script =
@@ -269,7 +269,7 @@ test "ShellOption: set +u allows unset" {
 test "ShellOption: set -x traces commands" {
     const allocator = std.testing.allocator;
 
-    var fixture = try test_utils.ShellFixture.init(allocator);
+    var fixture = try test_utils.DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     const script =
@@ -295,7 +295,7 @@ test "ShellOption: set -x traces commands" {
 test "ShellOption: set -x shows expanded variables" {
     const allocator = std.testing.allocator;
 
-    var fixture = try test_utils.ShellFixture.init(allocator);
+    var fixture = try test_utils.DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     const script =
@@ -319,7 +319,7 @@ test "ShellOption: set -x shows expanded variables" {
 test "ShellOption: set +x disables trace" {
     const allocator = std.testing.allocator;
 
-    var fixture = try test_utils.ShellFixture.init(allocator);
+    var fixture = try test_utils.DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     const script =
@@ -348,7 +348,7 @@ test "ShellOption: set +x disables trace" {
 test "ShellOption: pipefail detects pipe failure" {
     const allocator = std.testing.allocator;
 
-    var fixture = try test_utils.ShellFixture.init(allocator);
+    var fixture = try test_utils.DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     const script =
@@ -373,7 +373,7 @@ test "ShellOption: pipefail detects pipe failure" {
 test "ShellOption: without pipefail uses last exit code" {
     const allocator = std.testing.allocator;
 
-    var fixture = try test_utils.ShellFixture.init(allocator);
+    var fixture = try test_utils.DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     const result = try fixture.exec("false | true; echo $?");
@@ -387,7 +387,7 @@ test "ShellOption: without pipefail uses last exit code" {
 test "ShellOption: pipefail with all success" {
     const allocator = std.testing.allocator;
 
-    var fixture = try test_utils.ShellFixture.init(allocator);
+    var fixture = try test_utils.DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     const script =
@@ -414,7 +414,7 @@ test "ShellOption: pipefail with all success" {
 test "ShellOption: set -n parses without executing" {
     const allocator = std.testing.allocator;
 
-    var fixture = try test_utils.ShellFixture.init(allocator);
+    var fixture = try test_utils.DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     // -n flag should prevent execution
@@ -429,7 +429,7 @@ test "ShellOption: set -n parses without executing" {
 test "ShellOption: set -n detects syntax errors" {
     const allocator = std.testing.allocator;
 
-    var fixture = try test_utils.ShellFixture.init(allocator);
+    var fixture = try test_utils.DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     // Invalid syntax should be detected even with -n
@@ -448,7 +448,7 @@ test "ShellOption: set -n detects syntax errors" {
 test "ShellOption: set -v prints input" {
     const allocator = std.testing.allocator;
 
-    var fixture = try test_utils.ShellFixture.init(allocator);
+    var fixture = try test_utils.DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     const script =
@@ -475,7 +475,7 @@ test "ShellOption: set -v prints input" {
 test "ShellOption: combined -eu" {
     const allocator = std.testing.allocator;
 
-    var fixture = try test_utils.ShellFixture.init(allocator);
+    var fixture = try test_utils.DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     const script =
@@ -499,7 +499,7 @@ test "ShellOption: combined -eu" {
 test "ShellOption: combined -eux" {
     const allocator = std.testing.allocator;
 
-    var fixture = try test_utils.ShellFixture.init(allocator);
+    var fixture = try test_utils.DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     const script =
@@ -526,7 +526,7 @@ test "ShellOption: combined -eux" {
 test "ShellOption: set -f disables globbing" {
     const allocator = std.testing.allocator;
 
-    var fixture = try test_utils.ShellFixture.init(allocator);
+    var fixture = try test_utils.DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     const script =
@@ -549,7 +549,7 @@ test "ShellOption: set -f disables globbing" {
 test "ShellOption: set +f enables globbing" {
     const allocator = std.testing.allocator;
 
-    var fixture = try test_utils.ShellFixture.init(allocator);
+    var fixture = try test_utils.DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     // Create a test file
@@ -574,7 +574,7 @@ test "ShellOption: set +f enables globbing" {
 test "ShellOption: noclobber prevents overwrite" {
     const allocator = std.testing.allocator;
 
-    var fixture = try test_utils.ShellFixture.init(allocator);
+    var fixture = try test_utils.DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     const file = try fixture.temp_dir.createFile("existing.txt", "original");
@@ -606,7 +606,7 @@ test "ShellOption: noclobber prevents overwrite" {
 test "ShellOption: options preserved in subshell" {
     const allocator = std.testing.allocator;
 
-    var fixture = try test_utils.ShellFixture.init(allocator);
+    var fixture = try test_utils.DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     const script =

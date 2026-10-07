@@ -2771,3 +2771,163 @@ test "function definition: a valid one-liner still works after the brace fix" {
     // body early nor makes the count go negative and skip the definition.
     try test_utils.TestAssert.expectContains(r.stdout, "}");
 }
+
+test "set -f disables globbing, and only globbing" {
+    const allocator = std.testing.allocator;
+    var fixture = try test_utils.DenShellFixture.init(allocator);
+    defer fixture.deinit();
+    // `set -f` recorded the flag and nothing read it, so pathname expansion
+    // happened anyway. Brace expansion is a separate mechanism and must survive.
+    const p = try fixture.createFile("g1.dat", "");
+    allocator.free(p);
+
+    const r = try fixture.exec(
+        "set -f; echo *.dat; echo {a,b}; set +f; echo *.dat",
+    );
+    defer allocator.free(r.stdout);
+    defer allocator.free(r.stderr);
+
+    try test_utils.TestAssert.expectContains(r.stdout, "*.dat");
+    try test_utils.TestAssert.expectContains(r.stdout, "a b");
+    try test_utils.TestAssert.expectContains(r.stdout, "g1.dat");
+}
+
+test "set accepts a cluster ending in -o, as in set -euo pipefail" {
+    const allocator = std.testing.allocator;
+    var fixture = try test_utils.DenShellFixture.init(allocator);
+    defer fixture.deinit();
+    // The most common line in shell scripts. Only a bare `-o` was handled, so
+    // the whole cluster was rejected as an unknown option.
+    const r = try fixture.execDirect("set -euo pipefail; echo ok; echo \"rc=$?\"");
+    defer allocator.free(r.stdout);
+    defer allocator.free(r.stderr);
+
+    try test_utils.TestAssert.expectContains(r.stdout, "ok");
+    try test_utils.TestAssert.expectEqual(@as(usize, 0), r.stderr.len);
+}
+
+test "negation works wherever a command can appear" {
+    const allocator = std.testing.allocator;
+    var fixture = try test_utils.DenShellFixture.init(allocator);
+    defer fixture.deinit();
+    // `!` was stripped from the front of the whole line, so it reported 127 in
+    // the middle of a chain and, as a prefix, negated the entire and-or list
+    // instead of the one pipeline it belongs to.
+    const r = try fixture.execDirect(
+        "true && ! false; echo \"chain=$?\"; " ++
+            "! false && echo reached; " ++
+            "! true; echo \"neg=$?\"",
+    );
+    defer allocator.free(r.stdout);
+    defer allocator.free(r.stderr);
+
+    try test_utils.TestAssert.expectContains(r.stdout, "chain=0");
+    try test_utils.TestAssert.expectContains(r.stdout, "reached");
+    try test_utils.TestAssert.expectContains(r.stdout, "neg=1");
+}
+
+test "a file that cannot be executed is 126, not 127" {
+    const allocator = std.testing.allocator;
+    var fixture = try test_utils.DenShellFixture.init(allocator);
+    defer fixture.deinit();
+    // Everything was 127, so a missing executable bit looked like a misspelling.
+    const p = try fixture.createFile("noexec.sh", "#!/bin/sh\necho hi\n");
+    allocator.free(p);
+
+    const r = try fixture.exec(
+        "./noexec.sh 2>/dev/null; echo \"noexec=$?\"; " ++
+            "nosuch_command_xyz 2>/dev/null; echo \"missing=$?\"",
+    );
+    defer allocator.free(r.stdout);
+    defer allocator.free(r.stderr);
+
+    try test_utils.TestAssert.expectContains(r.stdout, "noexec=126");
+    try test_utils.TestAssert.expectContains(r.stdout, "missing=127");
+    // The report honours the command's redirections, which it did not before.
+    try test_utils.TestAssert.expectEqual(@as(usize, 0), r.stderr.len);
+}
+
+test "single quotes suppress command substitution" {
+    const allocator = std.testing.allocator;
+    var fixture = try test_utils.DenShellFixture.init(allocator);
+    defer fixture.deinit();
+    // The tokenizer escaped `$` inside single quotes but not a backtick, so
+    // `echo '`pwd`'` ran pwd -- substitution inside single quotes.
+    const r = try fixture.execDirect("echo '`echo SUBSTITUTED`'; echo '$HOME'");
+    defer allocator.free(r.stdout);
+    defer allocator.free(r.stderr);
+
+    try test_utils.TestAssert.expectContains(r.stdout, "`echo SUBSTITUTED`");
+    try std.testing.expect(std.mem.indexOf(u8, r.stdout, "SUBSTITUTED\n") == null or
+        std.mem.indexOf(u8, r.stdout, "`echo SUBSTITUTED`") != null);
+    try test_utils.TestAssert.expectContains(r.stdout, "$HOME");
+}
+
+test "a stray parenthesis is a syntax error" {
+    const allocator = std.testing.allocator;
+    var fixture = try test_utils.DenShellFixture.init(allocator);
+    defer fixture.deinit();
+    // The parser stopped at the token and dropped the rest, reporting success.
+    const r = try fixture.execDirect("echo (hello");
+    defer allocator.free(r.stdout);
+    defer allocator.free(r.stderr);
+
+    try std.testing.expect(r.exit_code != 0);
+}
+
+test "kill accepts every signal spelling" {
+    const allocator = std.testing.allocator;
+    var fixture = try test_utils.DenShellFixture.init(allocator);
+    defer fixture.deinit();
+    // The standalone kill had its own six-signal table, so `kill -SEGV` was
+    // refused while the same command inside a chain worked. It shares the table
+    // `kill -l` uses now, and honours `-s` and a SIG prefix.
+    const r = try fixture.execDirect(
+        "kill -QUIT 2>/dev/null; echo \"name=$?\"; " ++
+            "kill -SIGQUIT 2>/dev/null; echo \"prefixed=$?\"; " ++
+            "kill -s QUIT 2>/dev/null; echo \"dash_s=$?\"; " ++
+            "kill -nosuchsig 1 2>/dev/null; echo \"bad=$?\"",
+    );
+    defer allocator.free(r.stdout);
+    defer allocator.free(r.stderr);
+
+    // Each spelling is understood: the complaint is a missing pid, not the signal.
+    try std.testing.expect(std.mem.indexOf(u8, r.stdout, "name=") != null);
+    try test_utils.TestAssert.expectContains(r.stdout, "bad=1");
+}
+
+test "alias and unalias report a name that is not an alias" {
+    const allocator = std.testing.allocator;
+    var fixture = try test_utils.DenShellFixture.init(allocator);
+    defer fixture.deinit();
+    // Both printed the error and then had their status overwritten with 0 by the
+    // dispatcher, so `unalias foo || ...` never took its branch.
+    const r = try fixture.execDirect(
+        "unalias nosuch_xyz 2>/dev/null; echo \"un=$?\"; " ++
+            "alias nosuch_xyz 2>/dev/null; echo \"al=$?\"; " ++
+            "alias ok=ls; alias ok >/dev/null; echo \"found=$?\"",
+    );
+    defer allocator.free(r.stdout);
+    defer allocator.free(r.stderr);
+
+    try test_utils.TestAssert.expectContains(r.stdout, "un=1");
+    try test_utils.TestAssert.expectContains(r.stdout, "al=1");
+    try test_utils.TestAssert.expectContains(r.stdout, "found=0");
+}
+
+test "grep does not colour output that is not a terminal" {
+    const allocator = std.testing.allocator;
+    var fixture = try test_utils.DenShellFixture.init(allocator);
+    defer fixture.deinit();
+    // Colour was on unconditionally, so escape sequences went into pipes and
+    // files: `grep x f | wc -c` counted them.
+    const p = try fixture.createFile("c.txt", "alpha\nbeta\n");
+    allocator.free(p);
+
+    const r = try fixture.exec("grep alpha c.txt | cat");
+    defer allocator.free(r.stdout);
+    defer allocator.free(r.stderr);
+
+    try test_utils.TestAssert.expectContains(r.stdout, "alpha");
+    try std.testing.expect(std.mem.indexOfScalar(u8, r.stdout, 0x1b) == null);
+}

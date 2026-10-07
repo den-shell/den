@@ -7,7 +7,7 @@ const test_utils = @import("test_utils.zig");
 test "E2E: basic echo command" {
     const allocator = std.testing.allocator;
 
-    var fixture = try test_utils.ShellFixture.init(allocator);
+    var fixture = try test_utils.DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     const result = try fixture.exec("echo 'Hello, World!'");
@@ -21,7 +21,7 @@ test "E2E: basic echo command" {
 test "E2E: file operations" {
     const allocator = std.testing.allocator;
 
-    var fixture = try test_utils.ShellFixture.init(allocator);
+    var fixture = try test_utils.DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     // Create a file
@@ -52,7 +52,7 @@ test "E2E: file operations" {
 test "E2E: directory navigation" {
     const allocator = std.testing.allocator;
 
-    var fixture = try test_utils.ShellFixture.init(allocator);
+    var fixture = try test_utils.DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     // Create subdirectory
@@ -74,7 +74,7 @@ test "E2E: directory navigation" {
 test "E2E: complex pipeline with filtering" {
     const allocator = std.testing.allocator;
 
-    var fixture = try test_utils.ShellFixture.init(allocator);
+    var fixture = try test_utils.DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     // Create a test file with multiple lines
@@ -95,7 +95,7 @@ test "E2E: complex pipeline with filtering" {
 test "E2E: script with multiple commands" {
     const allocator = std.testing.allocator;
 
-    var fixture = try test_utils.ShellFixture.init(allocator);
+    var fixture = try test_utils.DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     const script_content =
@@ -122,7 +122,7 @@ test "E2E: script with multiple commands" {
 test "E2E: conditional logic" {
     const allocator = std.testing.allocator;
 
-    var fixture = try test_utils.ShellFixture.init(allocator);
+    var fixture = try test_utils.DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     const script_content =
@@ -147,7 +147,7 @@ test "E2E: conditional logic" {
 test "E2E: loop execution" {
     const allocator = std.testing.allocator;
 
-    var fixture = try test_utils.ShellFixture.init(allocator);
+    var fixture = try test_utils.DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     const script_content =
@@ -172,7 +172,7 @@ test "E2E: loop execution" {
 test "E2E: error propagation" {
     const allocator = std.testing.allocator;
 
-    var fixture = try test_utils.ShellFixture.init(allocator);
+    var fixture = try test_utils.DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     const result = try fixture.exec("false && echo 'should not print'");
@@ -187,7 +187,7 @@ test "E2E: error propagation" {
 test "E2E: multiple file operations" {
     const allocator = std.testing.allocator;
 
-    var fixture = try test_utils.ShellFixture.init(allocator);
+    var fixture = try test_utils.DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     const file1 = try std.fs.path.join(allocator, &[_][]const u8{ fixture.temp_dir.path, "file1.txt" });
@@ -223,7 +223,7 @@ test "E2E: multiple file operations" {
 test "E2E: text processing pipeline" {
     const allocator = std.testing.allocator;
 
-    var fixture = try test_utils.ShellFixture.init(allocator);
+    var fixture = try test_utils.DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     // Create a file with content
@@ -247,7 +247,7 @@ test "E2E: text processing pipeline" {
 test "E2E: append operation" {
     const allocator = std.testing.allocator;
 
-    var fixture = try test_utils.ShellFixture.init(allocator);
+    var fixture = try test_utils.DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     const output_file = try std.fs.path.join(allocator, &[_][]const u8{ fixture.temp_dir.path, "append.txt" });
@@ -284,7 +284,7 @@ test "E2E: append operation" {
 test "E2E: command chaining with different operators" {
     const allocator = std.testing.allocator;
 
-    var fixture = try test_utils.ShellFixture.init(allocator);
+    var fixture = try test_utils.DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     const result = try fixture.exec("echo a ; echo b && echo c || echo d");
@@ -299,7 +299,7 @@ test "E2E: command chaining with different operators" {
 test "E2E: working directory persistence" {
     const allocator = std.testing.allocator;
 
-    var fixture = try test_utils.ShellFixture.init(allocator);
+    var fixture = try test_utils.DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     const subdir = try fixture.temp_dir.createDir("persistent");
@@ -323,7 +323,7 @@ test "E2E: working directory persistence" {
 test "E2E: large output handling" {
     const allocator = std.testing.allocator;
 
-    var fixture = try test_utils.ShellFixture.init(allocator);
+    var fixture = try test_utils.DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     // Generate large output
@@ -339,7 +339,7 @@ test "E2E: large output handling" {
 test "E2E: special characters in filenames" {
     const allocator = std.testing.allocator;
 
-    var fixture = try test_utils.ShellFixture.init(allocator);
+    var fixture = try test_utils.DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     const file_name = "test-file_123.txt";
@@ -360,7 +360,7 @@ test "E2E: special characters in filenames" {
 test "E2E: exit code propagation" {
     const allocator = std.testing.allocator;
 
-    var fixture = try test_utils.ShellFixture.init(allocator);
+    var fixture = try test_utils.DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     const result = try fixture.exec("false");
@@ -374,7 +374,7 @@ test "E2E: exit code propagation" {
 test "E2E: true command success" {
     const allocator = std.testing.allocator;
 
-    var fixture = try test_utils.ShellFixture.init(allocator);
+    var fixture = try test_utils.DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     const result = try fixture.exec("true");
@@ -391,7 +391,7 @@ test "E2E: true command success" {
 test "E2E: simple variable expansion" {
     const allocator = std.testing.allocator;
 
-    var fixture = try test_utils.ShellFixture.init(allocator);
+    var fixture = try test_utils.DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     const result = try fixture.exec("VAR=hello && echo $VAR");
@@ -405,7 +405,7 @@ test "E2E: simple variable expansion" {
 test "E2E: variable with braces" {
     const allocator = std.testing.allocator;
 
-    var fixture = try test_utils.ShellFixture.init(allocator);
+    var fixture = try test_utils.DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     const result = try fixture.exec("NAME=world && echo \"Hello ${NAME}!\"");
@@ -419,7 +419,7 @@ test "E2E: variable with braces" {
 test "E2E: variable default value" {
     const allocator = std.testing.allocator;
 
-    var fixture = try test_utils.ShellFixture.init(allocator);
+    var fixture = try test_utils.DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     const result = try fixture.exec("echo ${UNDEFINED_VAR:-default}");
@@ -433,7 +433,7 @@ test "E2E: variable default value" {
 test "E2E: exit code variable" {
     const allocator = std.testing.allocator;
 
-    var fixture = try test_utils.ShellFixture.init(allocator);
+    var fixture = try test_utils.DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     const result = try fixture.exec("true; echo $?");
@@ -446,7 +446,7 @@ test "E2E: exit code variable" {
 test "E2E: exit code after failure" {
     const allocator = std.testing.allocator;
 
-    var fixture = try test_utils.ShellFixture.init(allocator);
+    var fixture = try test_utils.DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     const result = try fixture.exec("false; echo $?");
@@ -463,7 +463,7 @@ test "E2E: exit code after failure" {
 test "E2E: command substitution with $()" {
     const allocator = std.testing.allocator;
 
-    var fixture = try test_utils.ShellFixture.init(allocator);
+    var fixture = try test_utils.DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     const result = try fixture.exec("echo \"Today is $(date +%A)\"");
@@ -477,7 +477,7 @@ test "E2E: command substitution with $()" {
 test "E2E: nested command substitution" {
     const allocator = std.testing.allocator;
 
-    var fixture = try test_utils.ShellFixture.init(allocator);
+    var fixture = try test_utils.DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     const result = try fixture.exec("echo $(echo $(echo nested))");
@@ -495,7 +495,7 @@ test "E2E: nested command substitution" {
 test "E2E: arithmetic expansion" {
     const allocator = std.testing.allocator;
 
-    var fixture = try test_utils.ShellFixture.init(allocator);
+    var fixture = try test_utils.DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     const result = try fixture.exec("echo $((2 + 3))");
@@ -509,7 +509,7 @@ test "E2E: arithmetic expansion" {
 test "E2E: arithmetic with multiplication" {
     const allocator = std.testing.allocator;
 
-    var fixture = try test_utils.ShellFixture.init(allocator);
+    var fixture = try test_utils.DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     const result = try fixture.exec("echo $((6 * 7))");
@@ -523,7 +523,7 @@ test "E2E: arithmetic with multiplication" {
 test "E2E: arithmetic with variable" {
     const allocator = std.testing.allocator;
 
-    var fixture = try test_utils.ShellFixture.init(allocator);
+    var fixture = try test_utils.DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     const result = try fixture.exec("X=10 && echo $((X + 5))");
@@ -541,7 +541,7 @@ test "E2E: arithmetic with variable" {
 test "E2E: stderr redirection" {
     const allocator = std.testing.allocator;
 
-    var fixture = try test_utils.ShellFixture.init(allocator);
+    var fixture = try test_utils.DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     const err_file = try std.fs.path.join(allocator, &[_][]const u8{ fixture.temp_dir.path, "error.txt" });
@@ -561,7 +561,7 @@ test "E2E: stderr redirection" {
 test "E2E: combined stdout and stderr redirection" {
     const allocator = std.testing.allocator;
 
-    var fixture = try test_utils.ShellFixture.init(allocator);
+    var fixture = try test_utils.DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     const out_file = try std.fs.path.join(allocator, &[_][]const u8{ fixture.temp_dir.path, "combined.txt" });
@@ -580,7 +580,7 @@ test "E2E: combined stdout and stderr redirection" {
 test "E2E: here document" {
     const allocator = std.testing.allocator;
 
-    var fixture = try test_utils.ShellFixture.init(allocator);
+    var fixture = try test_utils.DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     const result = try fixture.exec("cat << EOF\nhello\nworld\nEOF");
@@ -599,7 +599,7 @@ test "E2E: here document" {
 test "E2E: glob star pattern" {
     const allocator = std.testing.allocator;
 
-    var fixture = try test_utils.ShellFixture.init(allocator);
+    var fixture = try test_utils.DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     // Create test files
@@ -624,7 +624,7 @@ test "E2E: glob star pattern" {
 test "E2E: glob question mark pattern" {
     const allocator = std.testing.allocator;
 
-    var fixture = try test_utils.ShellFixture.init(allocator);
+    var fixture = try test_utils.DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     // Create test files
@@ -654,7 +654,7 @@ test "E2E: glob question mark pattern" {
 test "E2E: subshell execution" {
     const allocator = std.testing.allocator;
 
-    var fixture = try test_utils.ShellFixture.init(allocator);
+    var fixture = try test_utils.DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     const result = try fixture.exec("(echo 'in subshell')");
@@ -668,7 +668,7 @@ test "E2E: subshell execution" {
 test "E2E: subshell variable isolation" {
     const allocator = std.testing.allocator;
 
-    var fixture = try test_utils.ShellFixture.init(allocator);
+    var fixture = try test_utils.DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     const result = try fixture.exec("VAR=outer; (VAR=inner; echo $VAR); echo $VAR");
@@ -687,7 +687,7 @@ test "E2E: subshell variable isolation" {
 test "E2E: function definition and call" {
     const allocator = std.testing.allocator;
 
-    var fixture = try test_utils.ShellFixture.init(allocator);
+    var fixture = try test_utils.DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     const result = try fixture.exec("greet() { echo \"Hello, $1!\"; }; greet World");
@@ -701,7 +701,7 @@ test "E2E: function definition and call" {
 test "E2E: function with local variable" {
     const allocator = std.testing.allocator;
 
-    var fixture = try test_utils.ShellFixture.init(allocator);
+    var fixture = try test_utils.DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     const result = try fixture.exec("test_func() { local x=5; echo $x; }; test_func");
@@ -719,7 +719,7 @@ test "E2E: function with local variable" {
 test "E2E: background job" {
     const allocator = std.testing.allocator;
 
-    var fixture = try test_utils.ShellFixture.init(allocator);
+    var fixture = try test_utils.DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     const result = try fixture.exec("sleep 0.1 & wait && echo done");
@@ -737,7 +737,7 @@ test "E2E: background job" {
 test "E2E: string length" {
     const allocator = std.testing.allocator;
 
-    var fixture = try test_utils.ShellFixture.init(allocator);
+    var fixture = try test_utils.DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     const result = try fixture.exec("STR=hello && echo ${#STR}");
@@ -751,7 +751,7 @@ test "E2E: string length" {
 test "E2E: string substitution" {
     const allocator = std.testing.allocator;
 
-    var fixture = try test_utils.ShellFixture.init(allocator);
+    var fixture = try test_utils.DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     const result = try fixture.exec("STR='hello world' && echo ${STR/world/universe}");
@@ -769,7 +769,7 @@ test "E2E: string substitution" {
 test "E2E: empty command" {
     const allocator = std.testing.allocator;
 
-    var fixture = try test_utils.ShellFixture.init(allocator);
+    var fixture = try test_utils.DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     const result = try fixture.exec("echo ''");
@@ -782,7 +782,7 @@ test "E2E: empty command" {
 test "E2E: quoted special characters" {
     const allocator = std.testing.allocator;
 
-    var fixture = try test_utils.ShellFixture.init(allocator);
+    var fixture = try test_utils.DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     const result = try fixture.exec("echo 'hello $world'");
@@ -796,7 +796,7 @@ test "E2E: quoted special characters" {
 test "E2E: escaped characters" {
     const allocator = std.testing.allocator;
 
-    var fixture = try test_utils.ShellFixture.init(allocator);
+    var fixture = try test_utils.DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     const result = try fixture.exec("echo \"hello\\tworld\"");
@@ -809,7 +809,7 @@ test "E2E: escaped characters" {
 test "E2E: multiple commands with semicolons" {
     const allocator = std.testing.allocator;
 
-    var fixture = try test_utils.ShellFixture.init(allocator);
+    var fixture = try test_utils.DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     const result = try fixture.exec("echo a; echo b; echo c");
@@ -824,7 +824,7 @@ test "E2E: multiple commands with semicolons" {
 test "E2E: comment handling" {
     const allocator = std.testing.allocator;
 
-    var fixture = try test_utils.ShellFixture.init(allocator);
+    var fixture = try test_utils.DenShellFixture.init(allocator);
     defer fixture.deinit();
 
     const result = try fixture.exec("echo visible # this is a comment");
