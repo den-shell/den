@@ -12,4 +12,5 @@ test {
     _ = @import("ai/completion.zig"); // AI-assisted completions
     _ = @import("net/session.zig"); // distributed shell sessions
     _ = @import("plugins/wasm.zig"); // WebAssembly plugin host
+    _ = @import("import_zsh.zig"); // zsh startup-file importer
 }

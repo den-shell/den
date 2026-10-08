@@ -4,6 +4,15 @@ const cli = @import("cli");
 // CLI Tests
 // Tests for command-line interface argument parsing and subcommand handling
 
+// Forces the cli module to be analysed under test, so a change that breaks its
+// compilation fails here rather than only in `zig build`. It does not reach the
+// tests of the files cli.zig imports: Zig pulls those in only through a
+// `_ = @import(...)` in a test block within the module being analysed, which is
+// why src/import_zsh.zig is listed in src/test_new_features.zig instead.
+test {
+    _ = cli;
+}
+
 test "CLI: parseArgs with no arguments returns interactive" {
     // NOTE: This test is conceptual because mocking std.process.args is complex
     // The actual logic is tested through integration testing

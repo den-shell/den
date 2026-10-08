@@ -10,6 +10,7 @@ const function_definition = @import("shell/function_definition.zig");
 const net_session = @import("net/session.zig");
 const build_options = @import("build_options");
 const upgrade = @import("upgrade.zig");
+const import_zsh = @import("import_zsh.zig");
 const compound = @import("parser/compound.zig");
 
 /// Den Shell CLI
@@ -27,6 +28,7 @@ pub const Command = enum {
     set_shell, // Set as default shell
     uninstall, // Remove wrapper
     upgrade, // Install the latest GitHub release
+    import_zsh, // Copy a zsh setup into den's startup files
     version, // Show version
     help, // Show help
     script, // Execute script file (implicit)
@@ -273,6 +275,18 @@ pub fn parseArgs(allocator: std.mem.Allocator, process_args: std.process.Args) !
             .want_interactive = want_interactive,
             ._owned_argv = remaining_argv,
         };
+    } else if (std.mem.eql(u8, first_arg, "import-zsh")) {
+        return CliArgs{
+            .command = .import_zsh,
+            .args = sub_args,
+            .allocator = allocator,
+            .config_path = config_path,
+            .norc = norc,
+            .restricted = restricted_from_argv0,
+            .login = login or login_from_argv0,
+            .want_interactive = want_interactive,
+            ._owned_argv = remaining_argv,
+        };
     } else if (std.mem.eql(u8, first_arg, "upgrade")) {
         return CliArgs{
             .command = .upgrade,
@@ -393,6 +407,7 @@ pub fn execute(cli_args: CliArgs) !void {
         .set_shell => try setShell(cli_args.allocator),
         .uninstall => try uninstall(cli_args.allocator),
         .upgrade => try upgrade.run(cli_args.allocator, cli_args.args, VERSION),
+        .import_zsh => try import_zsh.run(cli_args.allocator, cli_args.args),
         .version => try showVersion(),
         .help => try showHelp(),
         .script => try runScript(cli_args.allocator, cli_args.args, effective_config_path, cli_args.norc, cli_args.restricted, .{ .login = cli_args.login, .interactive = cli_args.want_interactive }),
