@@ -204,7 +204,24 @@ pub fn appendAtFields(
         defer self.allocator.free(head);
         try pending.appendSlice(self.allocator, head);
 
-        const fields = expansion_mod.positionalFields(expander, ref.content) orelse &[_][]const u8{};
+        const maybe_fields = expansion_mod.positionalFields(expander, ref.content);
+        if (maybe_fields == null) {
+            // A `@` reference that does not produce fields: `${@:+y}` yields its
+            // own word, `${@:=x}` and `${@:?m}` yield the parameters joined, and
+            // `${@#p}` is a pattern. Expand it as ordinary text and keep
+            // accumulating -- dropping it silently is what made
+            // `"[${@:-x}][${@:=x}]"` lose its second half.
+            //
+            // Declining is not the same as selecting nothing: an empty result
+            // below contributes no field, which is correct for `"$@"` with no
+            // parameters.
+            const literal = try expandAround(self, expander, word[pos + ref.start .. pos + ref.end]);
+            defer self.allocator.free(literal);
+            try pending.appendSlice(self.allocator, literal);
+            pos += ref.end;
+            continue;
+        }
+        const fields = maybe_fields.?;
         if (fields.len > 0) {
             selected_any = true;
             // The first parameter completes the field that was accumulating; the

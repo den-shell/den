@@ -141,27 +141,37 @@ fn resolveSliceBounds(spec: SliceSpec, count: usize) struct { start: usize, end:
 /// one field -- and a joined string cannot be taken apart again once an argument
 /// contains a space.
 pub fn positionalFields(self: *const Expansion, content: []const u8) ?[]const []const u8 {
-    if (std.mem.eql(u8, content, "@")) return self.positional_params;
-    if (content.len >= 2 and content[0] == '@' and content[1] == ':') {
-        // `:-`, `:=`, `:?` and `:+` are the default/alternative operators, not a
-        // slice: `${@:-fallback}` means "fallback when unset", and reading it as
-        // an offset of `-fallback` made it expand to nothing.
-        if (content.len >= 3) {
-            switch (content[2]) {
-                '-', '=', '?', '+' => return null,
-                else => {},
-            }
-        }
-        const spec = parseSliceSpec(content[2..]);
-        // One-based, and 0 behaves as 1, matching ${@:N} above.
-        const adjusted: SliceSpec = .{
-            .offset = if (spec.offset > 0) spec.offset - 1 else spec.offset,
-            .length = spec.length,
-        };
-        const b = resolveSliceBounds(adjusted, self.positional_params.len);
-        return self.positional_params[b.start..b.end];
+    if (content.len == 0 or content[0] != '@') return null;
+    // `$@` and `${@}`: every parameter.
+    if (content.len == 1) return self.positional_params;
+
+    // An optional colon, so `${@:-word}` and `${@-word}` are judged alike.
+    const after: []const u8 = if (content[1] == ':') content[2..] else content[1..];
+    if (after.len == 0) return null;
+
+    switch (after[0]) {
+        // `${@:-word}` is the parameters when there are any, and as separate
+        // fields -- `set -- "a b" c` gives two, not one joined string. With none,
+        // decline so the operator path supplies the word instead.
+        '-' => return if (self.positional_params.len > 0) self.positional_params else null,
+        // `:+` yields its own word rather than the parameters, and bash refuses to
+        // assign to `$@` at all, so neither reaches here.
+        '+', '=', '?' => return null,
+        else => {},
     }
-    return null;
+
+    // Anything else is a slice, and only the colon form can be one: `${@#pat}`
+    // and `${@/a/b}` are pattern operators, not offsets.
+    if (content[1] != ':') return null;
+
+    const spec = parseSliceSpec(after);
+    // One-based, and 0 behaves as 1, because $@ begins at $1 and $0 is not one.
+    const adjusted: SliceSpec = .{
+        .offset = if (spec.offset > 0) spec.offset - 1 else spec.offset,
+        .length = spec.length,
+    };
+    const b = resolveSliceBounds(adjusted, self.positional_params.len);
+    return self.positional_params[b.start..b.end];
 }
 
 fn getRandomValue() u16 {
@@ -428,6 +438,28 @@ pub const Expansion = struct {
     }
 
     /// Get variable value, resolving namerefs if applicable
+    /// Whether `name` is `@` or `*` and there is at least one positional
+    /// parameter -- which is what makes `$@` "set" for the default and
+    /// alternative operators. `getVariableValue` cannot answer this: it looks `@`
+    /// up as an ordinary variable, finds nothing, and every operator concluded the
+    /// parameters were unset however many there were.
+    fn positionalIsSet(self: *const Expansion, name: []const u8) bool {
+        return (std.mem.eql(u8, name, "@") or std.mem.eql(u8, name, "*")) and
+            self.positional_params.len > 0;
+    }
+
+    /// The value `@` or `*` carries where a single string is wanted: the
+    /// parameters joined with a space. Null when `name` is neither, or when there
+    /// are no parameters.
+    ///
+    /// Separate from `positionalFields` because this is the scalar answer. A
+    /// quoted `"${@:-x}"` wants one field per parameter and goes through that;
+    /// `$*`, and anything unquoted, wants them joined and comes here.
+    fn positionalScalar(self: *Expansion, name: []const u8) !?[]u8 {
+        if (!self.positionalIsSet(name)) return null;
+        return try std.mem.join(self.allocator, " ", self.positional_params);
+    }
+
     fn getVariableValue(self: *Expansion, name: []const u8) ?[]const u8 {
         // First check local variables
         if (self.local_vars) |locals| {
@@ -1610,6 +1642,9 @@ pub const Expansion = struct {
             const var_name = content[0..sep_pos];
             const default_value = content[sep_pos + 2 ..];
 
+            if (try self.positionalScalar(var_name)) |joined| {
+                return ExpansionResult{ .value = joined, .consumed = end + 1, .owned = true };
+            }
             if (self.getVariableValue(var_name)) |value| {
                 if (value.len > 0) {
                     const result = try self.allocator.dupe(u8, value);
@@ -1627,6 +1662,11 @@ pub const Expansion = struct {
             const var_name = content[0..sep_pos];
             const default_value = content[sep_pos + 2 ..];
 
+            // bash will not assign to `$@`, but with parameters set it never gets
+            // that far: the existing value is the answer.
+            if (try self.positionalScalar(var_name)) |joined| {
+                return ExpansionResult{ .value = joined, .consumed = end + 1, .owned = true };
+            }
             if (self.getVariableValue(var_name)) |value| {
                 if (value.len > 0) {
                     const result = try self.allocator.dupe(u8, value);
@@ -1653,6 +1693,10 @@ pub const Expansion = struct {
             const var_name = content[0..sep_pos];
             const error_msg = content[sep_pos + 2 ..];
 
+            // Parameters present means `$@` is set, so there is nothing to report.
+            if (try self.positionalScalar(var_name)) |joined| {
+                return ExpansionResult{ .value = joined, .consumed = end + 1, .owned = true };
+            }
             if (self.getVariableValue(var_name)) |value| {
                 if (value.len > 0) {
                     const result = try self.allocator.dupe(u8, value);
@@ -1676,6 +1720,10 @@ pub const Expansion = struct {
             const var_name = content[0..sep_pos];
             const alt_value = content[sep_pos + 2 ..];
 
+            if (self.positionalIsSet(var_name)) {
+                const result = self.expandNested(alt_value);
+                return ExpansionResult{ .value = result, .consumed = end + 1, .owned = true };
+            }
             if (self.getVariableValue(var_name)) |value| {
                 if (value.len > 0) {
                     // Variable is set and non-empty, use alternative value
@@ -1708,6 +1756,12 @@ pub const Expansion = struct {
                 const existing = self.getVariableValue(var_name);
                 switch (content[sep_pos]) {
                     '-' => {
+                        // `${@-word}` / `${*-word}`: the parameters, joined, when
+                        // there are any. The quoted form is intercepted earlier so
+                        // it can yield one field each; this is the scalar path.
+                        if (try self.positionalScalar(var_name)) |joined| {
+                            return ExpansionResult{ .value = joined, .consumed = end + 1, .owned = true };
+                        }
                         if (existing) |value| {
                             const result = try self.allocator.dupe(u8, value);
                             return ExpansionResult{ .value = result, .consumed = end + 1, .owned = true };
@@ -1746,8 +1800,9 @@ pub const Expansion = struct {
                         return error.ParameterNullOrNotSet;
                     },
                     '+' => {
-                        // Use word only if VAR is set (even if empty).
-                        if (existing != null) {
+                        // Use word only if VAR is set (even if empty). `@` and `*`
+                        // count as set whenever there is a parameter.
+                        if (existing != null or self.positionalIsSet(var_name)) {
                             const result = self.expandNested(word);
                             return ExpansionResult{ .value = result, .consumed = end + 1, .owned = true };
                         }

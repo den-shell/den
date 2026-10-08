@@ -1846,3 +1846,116 @@ test "dollar-at: colon operators are not slices" {
     try test_utils.TestAssert.expectContains(result.stdout, "[fallback]");
     try test_utils.TestAssert.expectContains(result.stdout, "[]");
 }
+
+// =============================================================================
+// $@ and $* With the Default and Alternative Operators
+// =============================================================================
+//
+// getVariableValue looks `@` up as an ordinary variable and finds nothing, so
+// every operator concluded the parameters were unset however many there were:
+// `${@:-x}` gave x with arguments present, and `${@:+y}` gave nothing.
+//
+// Two answers are needed, not one. A quoted `"${@:-x}"` wants one field per
+// parameter, which positionalFields provides; `$*`, and anything unquoted, wants
+// them joined, which positionalScalar provides. `:+` is different again -- it
+// yields its own word, so it only needs to know whether anything is set.
+
+test "dollar-at default operator yields the parameters when set" {
+    const allocator = std.testing.allocator;
+    var fixture = try test_utils.DenShellFixture.init(allocator);
+    defer fixture.deinit();
+
+    // Both the colon and the bare form, for @ and for *.
+    const result = try fixture.exec(
+        "set -- a b; echo \"[${@:-x}][${@-x}][${*:-x}][${*-x}][${@:=x}][${@:?m}]\"",
+    );
+    defer allocator.free(result.stdout);
+    defer allocator.free(result.stderr);
+
+    try test_utils.TestAssert.expectEqual(@as(u8, 0), result.exit_code);
+    // All six operator forms, for @ and for *. bash refuses to assign to $@, but
+    // with parameters set := and :? never reach the point of trying.
+    try test_utils.TestAssert.expectContains(result.stdout, "[a b][a b][a b][a b][a b][a b]");
+}
+
+test "dollar-at default operator still falls back when unset" {
+    const allocator = std.testing.allocator;
+    var fixture = try test_utils.DenShellFixture.init(allocator);
+    defer fixture.deinit();
+
+    const result = try fixture.exec("set --; echo \"[${@:-x}][${@-x}][${*:-x}]\"");
+    defer allocator.free(result.stdout);
+    defer allocator.free(result.stderr);
+
+    try test_utils.TestAssert.expectEqual(@as(u8, 0), result.exit_code);
+    try test_utils.TestAssert.expectContains(result.stdout, "[x][x][x]");
+}
+
+test "dollar-at alternative operator yields its word when set" {
+    const allocator = std.testing.allocator;
+    var fixture = try test_utils.DenShellFixture.init(allocator);
+    defer fixture.deinit();
+
+    const set = try fixture.exec("set -- a b; echo \"[${@:+y}][${@+y}][${*:+y}]\"");
+    defer allocator.free(set.stdout);
+    defer allocator.free(set.stderr);
+    try test_utils.TestAssert.expectContains(set.stdout, "[y][y][y]");
+
+    const unset = try fixture.exec("set --; echo \"[${@:+y}][${@+y}]\"");
+    defer allocator.free(unset.stdout);
+    defer allocator.free(unset.stderr);
+    try test_utils.TestAssert.expectContains(unset.stdout, "[][]");
+}
+
+test "dollar-at default operator splits into fields when quoted" {
+    const allocator = std.testing.allocator;
+    var fixture = try test_utils.DenShellFixture.init(allocator);
+    defer fixture.deinit();
+
+    // The whole point of having two paths: a parameter with a space stays one
+    // field, which a joined string could not express.
+    const result = try fixture.exec("set -- \"a b\" c; printf '<%s>\\n' \"${@:-x}\"");
+    defer allocator.free(result.stdout);
+    defer allocator.free(result.stderr);
+
+    try test_utils.TestAssert.expectContains(result.stdout, "<a b>");
+    try test_utils.TestAssert.expectContains(result.stdout, "<c>");
+
+    const forwarded = try fixture.exec("f() { echo \"n=$#\"; }; set -- a b; f \"${@:-x}\"");
+    defer allocator.free(forwarded.stdout);
+    defer allocator.free(forwarded.stderr);
+    try test_utils.TestAssert.expectContains(forwarded.stdout, "n=2");
+}
+
+test "dollar-at operators leave ordinary variables alone" {
+    const allocator = std.testing.allocator;
+    var fixture = try test_utils.DenShellFixture.init(allocator);
+    defer fixture.deinit();
+
+    // The helpers answer only for @ and *, so every other name keeps the
+    // behaviour it had: unset takes the default, empty is set for `-` but not
+    // for `:-`, and a positional digit is unaffected.
+    const result = try fixture.exec(
+        "unset V; A=s; E=; set --; echo \"[${V:-d}][${A:+alt}][${E-d}][${E:-d}][${1:-first}]\"",
+    );
+    defer allocator.free(result.stdout);
+    defer allocator.free(result.stderr);
+
+    try test_utils.TestAssert.expectEqual(@as(u8, 0), result.exit_code);
+    try test_utils.TestAssert.expectContains(result.stdout, "[d][alt][][d][first]");
+}
+
+test "dollar-at pattern operators are not slices or defaults" {
+    const allocator = std.testing.allocator;
+    var fixture = try test_utils.DenShellFixture.init(allocator);
+    defer fixture.deinit();
+
+    // `${@#p}` and `${@/a/b}` must not be mistaken for an offset or a default;
+    // positionalFields declines anything but a colon-slice or `-`.
+    const result = try fixture.exec("set -- a b c; echo \"[${@:1}][${#@}]\"");
+    defer allocator.free(result.stdout);
+    defer allocator.free(result.stderr);
+
+    try test_utils.TestAssert.expectEqual(@as(u8, 0), result.exit_code);
+    try test_utils.TestAssert.expectContains(result.stdout, "[a b c][3]");
+}
