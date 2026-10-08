@@ -220,7 +220,11 @@ PROMPT='%n@%m:%~%# '
 }
 ```
 
-You can also use shell scripts with Den - it sources `~/.denrc` if it exists.
+You can also use shell scripts with Den. It reads three, matching zsh's:
+`~/.denenv` for every shell, `~/.denprofile` for login shells, and `~/.denrc`
+for interactive ones. `$PATH` and exported variables belong in `~/.denenv` --
+in `~/.denrc` they would not reach `den -c`, scripts, or anything running
+`$SHELL -c`, exactly as `.zshrc` would not in zsh.
 
 ### 2. Prompt Customization
 
@@ -350,25 +354,31 @@ Convert your Zsh theme to Den prompt format:
 
 ## Migration Checklist
 
-### 1. Copy Your Aliases
-
-Your Zsh aliases work directly in Den:
+### 1. Import Your Zsh Config
 
 ```bash
-# Extract aliases from .zshrc
-grep "^alias" ~/.zshrc > ~/.denrc
+den import-zsh            # show what would be imported, change nothing
+den import-zsh --write    # append it
 ```
 
-### 2. Copy Your Functions
+This reads `~/.zshenv`, `~/.zprofile` and `~/.zshrc` and copies what it can into
+the matching den file, keeping multi-line functions, `case` blocks and aliases
+whose value spans lines intact. It prints every line it skips with the reason --
+oh-my-zsh, zsh's completion system, sourced zsh completion functions -- rather
+than copying lines that cannot run under Den.
 
-Functions work identically:
+It appends inside a marked block, so nothing you have already written is
+overwritten and the whole import can be removed in one edit.
 
-```bash
-# Copy function definitions to ~/.denrc
-grep -A 10 "^[a-z_]_() {" ~/.zshrc >> ~/.denrc
-```
+Two things to check afterwards:
 
-### 3. Update Array Indexing
+- Exports that came from `~/.zshrc` land in `~/.denrc`, so they only apply to
+  interactive shells. The importer counts them and tells you; move any that
+  `den -c` needs -- `$PATH` almost always does -- into `~/.denenv`.
+- oh-my-zsh does not port. Its aliases are the part worth keeping, and they are
+  plain shell: copy the ones you use into `~/.denrc` by hand.
+
+### 2. Update Array Indexing
 
 If you use arrays, update to 0-based indexing:
 

@@ -1,9 +1,32 @@
 # Configuration
 
-Den is configured by two files:
+Den reads a declarative config plus up to three shell scripts:
 
-- **`~/.denrc`** — a shell script sourced at startup (like `.zshrc`). Use it for environment variables, `$PATH`, runtime aliases, and any commands you want to run when a shell starts.
-- **`~/.config/den.jsonc`** — declarative [JSONC](https://www.json.org) (JSON with comments) for the prompt, history, completion, theme, aliases, and keybindings.
+- **`~/.config/den.jsonc`** — declarative [JSONC](https://www.json.org) (JSON with comments) for the prompt, history, completion, theme, aliases, and keybindings. Read by every shell.
+- **`~/.denenv`** — shell script, run by **every** shell: interactive, `den -c`, scripts, and anything invoking `$SHELL -c`. This is where `$PATH` and exported environment variables belong.
+- **`~/.denprofile`** — shell script, run only by **login** shells, after `.denenv`.
+- **`~/.denrc`** — shell script, run only by **interactive** shells, last. Aliases, keybindings, prompt tweaks, anything that only matters when you are typing at a prompt.
+
+The split matters. `$PATH` set only in `~/.denrc` is invisible to `den -c`, to
+scripts, and to every editor, CI job or GUI app that runs `$SHELL -c` — those
+shells are not interactive, so `.denrc` never runs for them. Put it in
+`~/.denenv` and it applies everywhere. This mirrors zsh, where `$PATH`
+conventionally goes in `.zshenv` rather than `.zshrc`, for the same reason.
+
+Coming from zsh, the files line up like this:
+
+| zsh | den | runs for |
+|---|---|---|
+| `.zshenv` | `~/.denenv` | every shell |
+| `.zprofile` | `~/.denprofile` | login shells |
+| `.zshrc` | `~/.denrc` | interactive shells |
+| `.zlogin` | — | den has one login file, not two |
+| `.zlogout` | — | use the `zshexit` hook |
+
+`den import-zsh` copies what it can out of your existing zsh files into these;
+see [Migrating from zsh](#migrating-from-zsh) below.
+
+`--norc` skips all three scripts and `den.jsonc`.
 
 A fully-commented example config ships in the repo root: [`den.jsonc`](https://github.com/stacksjs/den/blob/main/den.jsonc).
 
@@ -18,19 +41,51 @@ A fully-commented example config ships in the repo root: [`den.jsonc`](https://g
 
 This lets a project ship its own shell config that overrides your personal one when you `cd` into it.
 
-## `~/.denrc`
+## The shell scripts
 
-`~/.denrc` is plain shell, sourced top-to-bottom at startup:
+All three are plain shell, sourced top-to-bottom. They run in this order, and
+each is optional -- an absent one is the normal case, not an error.
+
+`~/.denenv`, for anything every shell needs:
 
 ```bash
-# Environment + PATH
 export EDITOR="code --wait"
 export PATH="$HOME/.local/bin:$PATH"
+source "$HOME/.cargo/env"
+```
 
-# Source shared files (works in den and other shells)
-source "$HOME/.dotfiles/env.sh"
+`~/.denprofile`, for login-time setup:
+
+```bash
+source "$HOME/.orbstack/shell/init.zsh"
+```
+
+`~/.denrc`, for the interactive shell only:
+
+```bash
+alias gs="git status"
+bindkey '^T' kill-whole-line
 source "$HOME/.dotfiles/aliases.sh"
 ```
+
+Unsure which file something belongs in? Ask whether it needs to work under
+`den -c`. If yes, it goes in `~/.denenv`.
+
+## Migrating from zsh
+
+`den import-zsh` reads `~/.zshenv`, `~/.zprofile` and `~/.zshrc` and appends
+what it can translate to the matching den file -- aliases, functions, exports
+and `source` lines. It prints what it skipped and why, rather than copying lines
+that cannot work: zsh's own completion system, `oh-my-zsh`, and anything calling
+a zsh builtin den does not implement.
+
+```bash
+den import-zsh            # show what would be imported, change nothing
+den import-zsh --write    # append it
+```
+
+It never overwrites: everything it adds goes at the end of the file, under a
+marked block you can delete in one go.
 
 ## `den.jsonc` reference
 

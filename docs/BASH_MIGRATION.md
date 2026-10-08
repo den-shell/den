@@ -174,7 +174,12 @@ PS1='\u@\h:\w\$ '
 }
 ```
 
-You can also use shell scripts with Den - it sources `~/.denrc` if it exists.
+You can also use shell scripts with Den. It reads three: `~/.denenv` for every
+shell, `~/.denprofile` for login shells, and `~/.denrc` for interactive ones.
+`$PATH` and exported variables belong in `~/.denenv` -- in `~/.denrc` they would
+not reach `den -c`, scripts, or anything running `$SHELL -c`. The split matches
+bash's own `.bash_profile` / `.bashrc` distinction, but unlike bash the
+always-sourced file is a separate one.
 
 ### 2. Prompt Customization
 
@@ -228,10 +233,15 @@ Your Bash aliases work directly in Den:
 
 ```bash
 # Extract aliases from .bashrc
-grep "^alias" ~/.bashrc > ~/.denrc
+grep "^alias" ~/.bashrc >> ~/.denrc
 
 # Or use den.jsonc format
 ```
+
+> `den import-zsh` does this properly for zsh files, keeping multi-line
+> functions and `case` blocks intact and reporting what it cannot translate.
+> There is no bash equivalent yet, so the `grep` above is still the recipe --
+> note that it drops anything spanning more than one line.
 
 ### 2. Copy Your Functions
 
