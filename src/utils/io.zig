@@ -183,6 +183,19 @@ pub const IO = struct {
                 try writer.print(fmt, args);
                 return;
             }
+            // No capture set, so send it to stderr rather than fd 1.
+            //
+            // Under `zig build`, a test binary is launched with `--listen=-` and
+            // its stdout *is* the build-runner protocol pipe. Printing plain text
+            // there corrupts the protocol: the runner stops consuming, the pipe
+            // fills, and the next write blocks forever. test-plugins and
+            // test-interface both hung that way -- all tests passing, the process
+            // then parked on a write with no CPU -- while running the same binary
+            // by hand was instant, because stdout was an ordinary pipe.
+            //
+            // stderr is safe: the build runner captures it and shows it with the
+            // results, so the output is still there when a test fails.
+            return eprint(fmt, args);
         }
 
         const stdout_file = std.Io.File.stdout();
