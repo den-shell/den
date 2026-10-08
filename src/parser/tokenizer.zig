@@ -897,7 +897,13 @@ pub const Tokenizer = struct {
             // not expanded. The backtick was named in this comment but never
             // actually escaped, so `echo '`pwd`'` ran pwd -- command
             // substitution inside single quotes, which must never happen.
-            if (in_single_quote and (char == '$' or char == '`')) {
+            //
+            // Not inside $(), ${} or backticks, for the same reason the glob
+            // escape below skips them: that text is handed on and parsed again,
+            // and the second parse keeps a backslash inside single quotes
+            // literally. Escaping here put the marker beyond anyone's reach --
+            // `x=$(awk '{print $2}' f)` handed awk a literal `\$2`.
+            if (in_single_quote and subst_depth == 0 and brace_depth == 0 and !in_backtick and (char == '$' or char == '`')) {
                 if (word_len + 1 >= word_buffer.len) return error.WordTooLong;
                 word_buffer[word_len] = '\\';
                 word_len += 1;

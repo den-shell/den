@@ -860,3 +860,78 @@ test "regression: deeply nested structure" {
     try TestAssert.expectEqual(@as(u8, 0), result.exit_code);
     try TestAssert.expectContains(result.stdout, "deep");
 }
+
+// =============================================================================
+// Single Quotes Inside Command Substitution
+// =============================================================================
+//
+// The tokenizer escapes `$` and backtick inside single quotes so neither
+// expands. That escape is an artifact of one parse, and the text inside $(),
+// ${} or backticks gets parsed again -- where a backslash inside single quotes
+// is literal. Escaping it there put the marker past anyone's reach and handed
+// it to the command: `awk '{print $2}'` saw `\$2` and failed to parse.
+//
+// The guard belongs in the tokenizer, not in a later strip, because the inner
+// parse applies the same escape at its own level -- which is what keeps the
+// backtick case below from executing anything.
+
+test "regression: single-quoted $ survives command substitution" {
+    const allocator = std.testing.allocator;
+    var fixture = try DenShellFixture.init(allocator);
+    defer fixture.deinit();
+
+    const result = try fixture.exec("x=$(echo '$2'); echo \"$x\"");
+    defer allocator.free(result.stdout);
+    defer allocator.free(result.stderr);
+
+    try TestAssert.expectEqual(@as(u8, 0), result.exit_code);
+    try TestAssert.expectContains(result.stdout, "$2");
+    // The escape must not reach the output.
+    try TestAssert.expectEqual(false, std.mem.containsAtLeast(u8, result.stdout, 1, "\\$"));
+}
+
+test "regression: single-quoted awk program reaches awk intact" {
+    const allocator = std.testing.allocator;
+    var fixture = try DenShellFixture.init(allocator);
+    defer fixture.deinit();
+
+    // awk is the case that found this: a literal backslash before $2 is a
+    // syntax error, so a leaked escape shows up as empty output plus a
+    // complaint on stderr rather than a wrong-looking string.
+    const result = try fixture.exec("printf 'a b\\n' > f.txt; x=$(awk '{print $2}' f.txt); echo \"[$x]\"");
+    defer allocator.free(result.stdout);
+    defer allocator.free(result.stderr);
+
+    try TestAssert.expectEqual(@as(u8, 0), result.exit_code);
+    try TestAssert.expectContains(result.stdout, "[b]");
+}
+
+test "regression: single-quoted backtick inside substitution does not execute" {
+    const allocator = std.testing.allocator;
+    var fixture = try DenShellFixture.init(allocator);
+    defer fixture.deinit();
+
+    // Dropping the escape inside $() is only safe because the inner parse adds
+    // it back at its own level. If that ever stops holding, this runs pwd.
+    const result = try fixture.exec("x=$(echo '`pwd`'); echo \"$x\"");
+    defer allocator.free(result.stdout);
+    defer allocator.free(result.stderr);
+
+    try TestAssert.expectEqual(@as(u8, 0), result.exit_code);
+    try TestAssert.expectContains(result.stdout, "`pwd`");
+    try TestAssert.expectEqual(false, std.mem.containsAtLeast(u8, result.stdout, 1, "/"));
+}
+
+test "regression: single quotes outside substitution still escape" {
+    const allocator = std.testing.allocator;
+    var fixture = try DenShellFixture.init(allocator);
+    defer fixture.deinit();
+
+    const result = try fixture.exec("echo '$HOME' '`pwd`'");
+    defer allocator.free(result.stdout);
+    defer allocator.free(result.stderr);
+
+    try TestAssert.expectEqual(@as(u8, 0), result.exit_code);
+    try TestAssert.expectContains(result.stdout, "$HOME");
+    try TestAssert.expectContains(result.stdout, "`pwd`");
+}
