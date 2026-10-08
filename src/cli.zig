@@ -44,6 +44,8 @@ pub const CliArgs = struct {
     json_output: bool = false, // Output results in JSON format (for -c commands)
     norc: bool = false, // Skip loading configuration files (--norc)
     restricted: bool = false, // Start in restricted mode (invoked as rden)
+    login: bool = false, // -l/--login, or argv[0] beginning with `-`
+    want_interactive: bool = false, // -i/--interactive, forcing the rc even with -c
     // Ownership tracking: the heap-allocated argv slice (args may be a sub-slice of this)
     _owned_argv: ?[]const []const u8 = null,
 
@@ -72,6 +74,17 @@ pub fn parseArgs(allocator: std.mem.Allocator, process_args: std.process.Args) !
         break :blk std.mem.eql(u8, basename, "rden");
     };
 
+    // login(1), Terminal.app and every other login launcher mark a login shell
+    // by prefixing argv[0] with a dash (`-den`, the way zsh sees `-zsh`). There
+    // is no flag in that case, so this is the only signal.
+    const login_from_argv0 = blk: {
+        const basename = if (std.mem.lastIndexOfScalar(u8, prog_name, '/')) |pos|
+            prog_name[pos + 1 ..]
+        else
+            prog_name;
+        break :blk basename.len > 0 and basename[0] == '-';
+    };
+
     // Collect all arguments into a heap-allocated list so they survive this function
     var argv_list = std.ArrayList([]const u8).empty;
     defer argv_list.deinit(allocator);
@@ -86,6 +99,8 @@ pub fn parseArgs(allocator: std.mem.Allocator, process_args: std.process.Args) !
     var config_path: ?[]const u8 = null;
     var json_output: bool = false;
     var norc: bool = false;
+    var login: bool = false;
+    var want_interactive: bool = false;
     var remaining_list = std.ArrayList([]const u8).empty;
     errdefer remaining_list.deinit(allocator);
     var i: usize = 0;
@@ -117,15 +132,21 @@ pub fn parseArgs(allocator: std.mem.Allocator, process_args: std.process.Args) !
             norc = true;
             i += 1;
             continue;
-        } else if (std.mem.eql(u8, arg, "-l") or std.mem.eql(u8, arg, "--login") or
-            std.mem.eql(u8, arg, "-i") or std.mem.eql(u8, arg, "--interactive"))
-        {
-            // Accept the standard login/interactive shell flags. Den is already
-            // interactive when no script/-c is given and sources ~/.denrc unless
-            // --norc, so these are no-ops — but recognizing them is what lets Den
-            // serve as a login shell: tools and GUI apps invoke `$SHELL -l -c ...`
-            // or `$SHELL -i`, and without this they'd be treated as a script path
-            // ("error loading script '-l'") and fail.
+        } else if (std.mem.eql(u8, arg, "-l") or std.mem.eql(u8, arg, "--login")) {
+            // Recognizing these is what lets Den serve as a login shell: tools
+            // and GUI apps invoke `$SHELL -l -c ...`, and without this they'd be
+            // treated as a script path ("error loading script '-l'") and fail.
+            // They used to be accepted and then ignored, so `$SHELL -l -c ...`
+            // ran with none of the user's environment.
+            login = true;
+            i += 1;
+            continue;
+        } else if (std.mem.eql(u8, arg, "-i") or std.mem.eql(u8, arg, "--interactive")) {
+            // -i forces the interactive startup file even when -c supplies the
+            // command, which is what zsh does and what `$SHELL -i -c ...` asks
+            // for. Without a -c it changes nothing: that shell is interactive
+            // already.
+            want_interactive = true;
             i += 1;
             continue;
         }
@@ -145,6 +166,8 @@ pub fn parseArgs(allocator: std.mem.Allocator, process_args: std.process.Args) !
             .config_path = config_path,
             .norc = norc,
             .restricted = restricted_from_argv0,
+            .login = login or login_from_argv0,
+            .want_interactive = want_interactive,
         };
     }
 
@@ -162,6 +185,8 @@ pub fn parseArgs(allocator: std.mem.Allocator, process_args: std.process.Args) !
             .config_path = config_path,
             .norc = norc,
             .restricted = restricted_from_argv0,
+            .login = login or login_from_argv0,
+            .want_interactive = want_interactive,
             ._owned_argv = remaining_argv,
         };
     } else if (std.mem.eql(u8, first_arg, "exec")) {
@@ -172,6 +197,8 @@ pub fn parseArgs(allocator: std.mem.Allocator, process_args: std.process.Args) !
             .config_path = config_path,
             .norc = norc,
             .restricted = restricted_from_argv0,
+            .login = login or login_from_argv0,
+            .want_interactive = want_interactive,
             ._owned_argv = remaining_argv,
         };
     } else if (std.mem.eql(u8, first_arg, "complete")) {
@@ -182,6 +209,8 @@ pub fn parseArgs(allocator: std.mem.Allocator, process_args: std.process.Args) !
             .config_path = config_path,
             .norc = norc,
             .restricted = restricted_from_argv0,
+            .login = login or login_from_argv0,
+            .want_interactive = want_interactive,
             ._owned_argv = remaining_argv,
         };
     } else if (std.mem.eql(u8, first_arg, "completion")) {
@@ -192,6 +221,8 @@ pub fn parseArgs(allocator: std.mem.Allocator, process_args: std.process.Args) !
             .config_path = config_path,
             .norc = norc,
             .restricted = restricted_from_argv0,
+            .login = login or login_from_argv0,
+            .want_interactive = want_interactive,
             ._owned_argv = remaining_argv,
         };
     } else if (std.mem.eql(u8, first_arg, "dev-setup")) {
@@ -202,6 +233,8 @@ pub fn parseArgs(allocator: std.mem.Allocator, process_args: std.process.Args) !
             .config_path = config_path,
             .norc = norc,
             .restricted = restricted_from_argv0,
+            .login = login or login_from_argv0,
+            .want_interactive = want_interactive,
             ._owned_argv = remaining_argv,
         };
     } else if (std.mem.eql(u8, first_arg, "setup")) {
@@ -212,6 +245,8 @@ pub fn parseArgs(allocator: std.mem.Allocator, process_args: std.process.Args) !
             .config_path = config_path,
             .norc = norc,
             .restricted = restricted_from_argv0,
+            .login = login or login_from_argv0,
+            .want_interactive = want_interactive,
             ._owned_argv = remaining_argv,
         };
     } else if (std.mem.eql(u8, first_arg, "set-shell")) {
@@ -222,6 +257,8 @@ pub fn parseArgs(allocator: std.mem.Allocator, process_args: std.process.Args) !
             .config_path = config_path,
             .norc = norc,
             .restricted = restricted_from_argv0,
+            .login = login or login_from_argv0,
+            .want_interactive = want_interactive,
             ._owned_argv = remaining_argv,
         };
     } else if (std.mem.eql(u8, first_arg, "uninstall")) {
@@ -232,6 +269,8 @@ pub fn parseArgs(allocator: std.mem.Allocator, process_args: std.process.Args) !
             .config_path = config_path,
             .norc = norc,
             .restricted = restricted_from_argv0,
+            .login = login or login_from_argv0,
+            .want_interactive = want_interactive,
             ._owned_argv = remaining_argv,
         };
     } else if (std.mem.eql(u8, first_arg, "upgrade")) {
@@ -242,6 +281,8 @@ pub fn parseArgs(allocator: std.mem.Allocator, process_args: std.process.Args) !
             .config_path = config_path,
             .norc = norc,
             .restricted = restricted_from_argv0,
+            .login = login or login_from_argv0,
+            .want_interactive = want_interactive,
             ._owned_argv = remaining_argv,
         };
     } else if (std.mem.eql(u8, first_arg, "version") or std.mem.eql(u8, first_arg, "--version") or std.mem.eql(u8, first_arg, "-v")) {
@@ -252,6 +293,8 @@ pub fn parseArgs(allocator: std.mem.Allocator, process_args: std.process.Args) !
             .config_path = config_path,
             .norc = norc,
             .restricted = restricted_from_argv0,
+            .login = login or login_from_argv0,
+            .want_interactive = want_interactive,
             ._owned_argv = remaining_argv,
         };
     } else if (std.mem.eql(u8, first_arg, "help") or std.mem.eql(u8, first_arg, "--help") or std.mem.eql(u8, first_arg, "-h")) {
@@ -262,6 +305,8 @@ pub fn parseArgs(allocator: std.mem.Allocator, process_args: std.process.Args) !
             .config_path = config_path,
             .norc = norc,
             .restricted = restricted_from_argv0,
+            .login = login or login_from_argv0,
+            .want_interactive = want_interactive,
             ._owned_argv = remaining_argv,
         };
     } else if (std.mem.eql(u8, first_arg, "--lsp")) {
@@ -272,6 +317,8 @@ pub fn parseArgs(allocator: std.mem.Allocator, process_args: std.process.Args) !
             .config_path = config_path,
             .norc = norc,
             .restricted = restricted_from_argv0,
+            .login = login or login_from_argv0,
+            .want_interactive = want_interactive,
             ._owned_argv = remaining_argv,
         };
     } else if (std.mem.eql(u8, first_arg, "--serve")) {
@@ -282,6 +329,8 @@ pub fn parseArgs(allocator: std.mem.Allocator, process_args: std.process.Args) !
             .config_path = config_path,
             .norc = norc,
             .restricted = restricted_from_argv0,
+            .login = login or login_from_argv0,
+            .want_interactive = want_interactive,
             ._owned_argv = remaining_argv,
         };
     } else if (std.mem.eql(u8, first_arg, "--connect")) {
@@ -292,6 +341,8 @@ pub fn parseArgs(allocator: std.mem.Allocator, process_args: std.process.Args) !
             .config_path = config_path,
             .norc = norc,
             .restricted = restricted_from_argv0,
+            .login = login or login_from_argv0,
+            .want_interactive = want_interactive,
             ._owned_argv = remaining_argv,
         };
     } else if (std.mem.eql(u8, first_arg, "-c")) {
@@ -302,7 +353,13 @@ pub fn parseArgs(allocator: std.mem.Allocator, process_args: std.process.Args) !
             .allocator = allocator,
             .config_path = config_path,
             .json_output = json_output,
+            // This was the one site that left `norc` out, so `--norc -c ...`
+            // silently kept loading den.jsonc -- the most-used flag combination
+            // of the seventeen.
+            .norc = norc,
             .restricted = restricted_from_argv0,
+            .login = login or login_from_argv0,
+            .want_interactive = want_interactive,
             ._owned_argv = remaining_argv,
         };
     } else {
@@ -314,6 +371,8 @@ pub fn parseArgs(allocator: std.mem.Allocator, process_args: std.process.Args) !
             .config_path = config_path,
             .norc = norc,
             .restricted = restricted_from_argv0,
+            .login = login or login_from_argv0,
+            .want_interactive = want_interactive,
             ._owned_argv = remaining_argv,
         };
     }
@@ -325,8 +384,8 @@ pub fn execute(cli_args: CliArgs) !void {
     // and signaling the shell to use defaults only
     const effective_config_path = if (cli_args.norc) null else cli_args.config_path;
     switch (cli_args.command) {
-        .interactive, .shell => try runInteractiveShell(cli_args.allocator, effective_config_path, cli_args.norc, cli_args.restricted),
-        .exec => try execCommand(cli_args.allocator, cli_args.args, effective_config_path, cli_args.norc, cli_args.restricted),
+        .interactive, .shell => try runInteractiveShell(cli_args.allocator, effective_config_path, cli_args.norc, cli_args.restricted, .{ .login = cli_args.login, .interactive = true }),
+        .exec => try execCommand(cli_args.allocator, cli_args.args, effective_config_path, cli_args.norc, cli_args.restricted, .{ .login = cli_args.login, .interactive = cli_args.want_interactive }),
         .complete => try getCompletions(cli_args.allocator, cli_args.args),
         .completion => try generateCompletion(cli_args.allocator, cli_args.args),
         .dev_setup => try devSetup(cli_args.allocator),
@@ -336,8 +395,8 @@ pub fn execute(cli_args: CliArgs) !void {
         .upgrade => try upgrade.run(cli_args.allocator, cli_args.args, VERSION),
         .version => try showVersion(),
         .help => try showHelp(),
-        .script => try runScript(cli_args.allocator, cli_args.args, effective_config_path, cli_args.norc, cli_args.restricted),
-        .command_string => try runCommandString(cli_args.allocator, cli_args.args, effective_config_path, cli_args.json_output, cli_args.norc, cli_args.restricted),
+        .script => try runScript(cli_args.allocator, cli_args.args, effective_config_path, cli_args.norc, cli_args.restricted, .{ .login = cli_args.login, .interactive = cli_args.want_interactive }),
+        .command_string => try runCommandString(cli_args.allocator, cli_args.args, effective_config_path, cli_args.json_output, cli_args.norc, cli_args.restricted, .{ .login = cli_args.login, .interactive = cli_args.want_interactive }),
         .lsp => try runLspServer(cli_args.allocator),
         .serve => try runSessionServer(cli_args.allocator, cli_args.args, effective_config_path, cli_args.norc),
         .connect => try runSessionClient(cli_args.args),
@@ -385,7 +444,7 @@ fn runSessionServer(allocator: std.mem.Allocator, args: []const []const u8, conf
             _ = std.c.dup2(conn, 1);
             _ = std.c.dup2(conn, 2);
             _ = std.c.close(conn);
-            runInteractiveShell(allocator, config_path, norc, false) catch {};
+            runInteractiveShell(allocator, config_path, norc, false, .{ .interactive = true }) catch {};
             std.c._exit(0);
         } else {
             // Parent: hand the connection to the child and keep accepting.
@@ -414,7 +473,7 @@ fn runLspServer(allocator: std.mem.Allocator) !void {
 }
 
 /// Start interactive shell
-fn runInteractiveShell(allocator: std.mem.Allocator, config_path: ?[]const u8, norc: bool, restricted: bool) !void {
+fn runInteractiveShell(allocator: std.mem.Allocator, config_path: ?[]const u8, norc: bool, restricted: bool, mode: shell.StartupMode) !void {
     var den_shell = if (norc)
         try shell.Shell.initNoConfig(allocator)
     else
@@ -422,16 +481,14 @@ fn runInteractiveShell(allocator: std.mem.Allocator, config_path: ?[]const u8, n
     defer den_shell.deinit();
     if (restricted) den_shell.option_restricted = true;
 
-    // Source ~/.denrc if it exists (like .zshrc)
-    if (!norc) {
-        den_shell.sourceRcFile() catch {};
-    }
+    // ~/.denenv, then ~/.denprofile for a login shell, then ~/.denrc.
+    if (!norc) den_shell.sourceStartupFiles(mode);
 
     try den_shell.run();
 }
 
 /// Execute a single command
-fn execCommand(allocator: std.mem.Allocator, args: []const []const u8, config_path: ?[]const u8, norc: bool, restricted: bool) !void {
+fn execCommand(allocator: std.mem.Allocator, args: []const []const u8, config_path: ?[]const u8, norc: bool, restricted: bool, mode: shell.StartupMode) !void {
     if (args.len == 0) {
         std.debug.print("Error: 'exec' requires a command argument\n", .{});
         std.debug.print("Usage: den exec <command>\n", .{});
@@ -462,6 +519,10 @@ fn execCommand(allocator: std.mem.Allocator, args: []const []const u8, config_pa
         try shell.Shell.initWithConfig(allocator, config_path);
     defer den_shell.deinit();
     if (restricted) den_shell.option_restricted = true;
+
+    // Startup files, before the command runs: ~/.denenv always, ~/.denprofile
+    // for a login shell, ~/.denrc only when -i asked for an interactive shell.
+    if (!norc) den_shell.sourceStartupFiles(mode);
 
     // Execute the command
     den_shell.executeCommand(command) catch |err| {
@@ -746,7 +807,7 @@ fn showHelp() !void {
 }
 
 /// Run script file
-fn runScript(allocator: std.mem.Allocator, args: []const []const u8, config_path: ?[]const u8, norc: bool, restricted: bool) !void {
+fn runScript(allocator: std.mem.Allocator, args: []const []const u8, config_path: ?[]const u8, norc: bool, restricted: bool, mode: shell.StartupMode) !void {
     if (args.len == 0) {
         std.debug.print("Error: script file required\n", .{});
         return error.MissingScriptFile;
@@ -762,6 +823,10 @@ fn runScript(allocator: std.mem.Allocator, args: []const []const u8, config_path
     defer den_shell.deinit();
     if (restricted) den_shell.option_restricted = true;
 
+    // Startup files, before the command runs: ~/.denenv always, ~/.denprofile
+    // for a login shell, ~/.denrc only when -i asked for an interactive shell.
+    if (!norc) den_shell.sourceStartupFiles(mode);
+
     try den_shell.runScript(script_path, "den", script_args);
     den_shell.executeExitTrap();
 
@@ -772,7 +837,7 @@ fn runScript(allocator: std.mem.Allocator, args: []const []const u8, config_path
 }
 
 /// Run command string (-c "command")
-fn runCommandString(allocator: std.mem.Allocator, args: []const []const u8, config_path: ?[]const u8, json_output: bool, norc: bool, restricted: bool) !void {
+fn runCommandString(allocator: std.mem.Allocator, args: []const []const u8, config_path: ?[]const u8, json_output: bool, norc: bool, restricted: bool, mode: shell.StartupMode) !void {
     if (args.len == 0) {
         if (json_output) {
             try IO.print("{{\"error\":\"missing command string\",\"exit_code\":1}}\n", .{});
@@ -809,6 +874,10 @@ fn runCommandString(allocator: std.mem.Allocator, args: []const []const u8, conf
         try shell.Shell.initWithConfig(allocator, config_path);
     defer den_shell.deinit();
     if (restricted) den_shell.option_restricted = true;
+
+    // Startup files, before the command runs: ~/.denenv always, ~/.denprofile
+    // for a login shell, ~/.denrc only when -i asked for an interactive shell.
+    if (!norc) den_shell.sourceStartupFiles(mode);
 
     // If multi-line, process line-by-line using script-style execution
     if (std.mem.indexOfScalar(u8, command, '\n') != null) {

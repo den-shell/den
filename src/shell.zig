@@ -263,6 +263,19 @@ pub fn execCommandCallback(shell_opaque: *anyopaque, command: []const u8) void {
     self.executeCommand(command) catch {};
 }
 
+/// How the shell was invoked, which is what decides which startup files run.
+///
+/// Both are needed, and neither implies the other: `den -l -c cmd` is a login
+/// shell that is not interactive, and `den -i -c cmd` is interactive without
+/// being a login shell.
+pub const StartupMode = struct {
+    /// Invoked with -l/--login, or as a login shell (argv[0] starting with `-`,
+    /// which is how login(1) and Terminal.app mark one).
+    login: bool = false,
+    /// Reading commands from a terminal, or forced with -i/--interactive.
+    interactive: bool = false,
+};
+
 pub const Shell = struct {
     allocator: std.mem.Allocator,
     running: bool,
@@ -3218,7 +3231,7 @@ pub const Shell = struct {
         );
     }
 
-    /// Source ~/.denrc at startup (like .zshrc)
+    /// Source one `~/.<name>` startup file, if it exists.
     ///
     /// Delegates to the `source` builtin rather than reading the file here.
     /// This used to execute the rc line by line, which meant every multi-line
@@ -3228,25 +3241,46 @@ pub const Shell = struct {
     /// quote-aware and hands multi-line blocks to the control-flow parser, and
     /// there is no reason for the rc to be parsed by different rules than the
     /// file the user sources by hand.
-    pub fn sourceRcFile(self: *Shell) !void {
+    pub fn sourceDotFile(self: *Shell, name: []const u8) void {
         const home = std.c.getenv("HOME") orelse return;
         const home_str = std.mem.span(@as([*:0]const u8, @ptrCast(home)));
 
         var path_buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
-        const rc_path = std.fmt.bufPrint(&path_buf, "{s}/.denrc", .{home_str}) catch return;
+        const rc_path = std.fmt.bufPrint(&path_buf, "{s}/{s}", .{ home_str, name }) catch return;
 
-        // Silently return when there is no rc file: an absent one is the
+        // Silently return when there is no such file: an absent one is the
         // default, not an error.
         std.Io.Dir.cwd().access(std.Options.debug_io, rc_path, .{}) catch return;
 
         // A single quote in the path would break out of the quoting below. No
-        // real HOME contains one, and mis-executing the rc is worse than
+        // real HOME contains one, and mis-executing the file is worse than
         // skipping it.
         if (std.mem.indexOfScalar(u8, rc_path, '\'') != null) return;
 
         var cmd_buf: [std.Io.Dir.max_path_bytes + 16]u8 = undefined;
         const command = std.fmt.bufPrint(&cmd_buf, "source '{s}'", .{rc_path}) catch return;
         self.executeCommand(command) catch return;
+    }
+
+    /// Run the startup files for how this shell was invoked, in zsh's order.
+    ///
+    /// `~/.denenv` runs for every shell, which is the whole point of it: `$PATH`
+    /// and environment variables set only in `~/.denrc` are invisible to
+    /// `den -c`, to scripts, and to every tool that calls `$SHELL -c` -- which
+    /// is why zsh puts them in `.zshenv` rather than `.zshrc`.
+    ///
+    /// Unlike zsh there is no second login file (`.zlogin`, which runs *after*
+    /// the rc). One login file is enough to say "do this when I log in", and the
+    /// two-file split is zsh history rather than something a user wants.
+    pub fn sourceStartupFiles(self: *Shell, mode: StartupMode) void {
+        self.sourceDotFile(".denenv");
+        if (mode.login) self.sourceDotFile(".denprofile");
+        if (mode.interactive) self.sourceDotFile(".denrc");
+    }
+
+    /// Kept so `sourceRcFile()` still means what it did: the interactive file.
+    pub fn sourceRcFile(self: *Shell) !void {
+        self.sourceDotFile(".denrc");
     }
 
     /// Load aliases from configuration
