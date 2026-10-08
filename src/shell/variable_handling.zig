@@ -14,24 +14,47 @@ const BraceExpander = @import("../utils/brace.zig").BraceExpander;
 
 /// End of the word beginning at `start`, one past its last character.
 ///
-/// Quote-aware, and aware that `name=(` opens a parenthesised value: without
-/// that, `a=(x y) && echo ok` scanned as the word `a=(x`, which looked like a
-/// temporary variable assignment, leaving `y) && echo ok` to be run as the
-/// command. An unterminated quote or paren runs to the end, as the callers'
+/// A space only ends the word when it is not inside something that groups:
+/// quotes, backticks, `$(...)`, `${...}`, or the parenthesised value of
+/// `name=(`. Each of those was learned from a bug:
+///
+///   - `a=(x y) && echo ok` scanned as the word `a=(x`, which looked like a
+///     temporary variable assignment, leaving `y) && echo ok` to run as a
+///     command.
+///   - `x=`echo hi`` scanned as `x=`echo`, so `hi`` ran as a command and
+///     reported "command not found" -- while `x=$(echo hi)` worked, because the
+///     caller in shell.zig had its own scanner that knew about `$(` but not
+///     about backticks. That asymmetry is why the two are one function now:
+///     shell.zig asked the same question with a second copy of these rules, and
+///     the copy that answered first was missing a case.
+///
+/// An unterminated quote, backtick or paren runs to the end, as the callers'
 /// own loops did.
 pub fn wordEnd(text: []const u8, start: usize) usize {
     var i = start;
     var sq = false;
     var dq = false;
+    var bt = false;
+    var subst: u32 = 0;
+    var brace: u32 = 0;
     while (i < text.len) {
         const c = text[i];
-        if (c == '\'' and !dq) {
+        const prev: u8 = if (i > start) text[i - 1] else 0;
+        if (c == '\'' and !dq and !bt) {
             sq = !sq;
         } else if (c == '"' and !sq) {
             dq = !dq;
-        } else if (c == ' ' and !sq and !dq) {
-            break;
-        } else if (c == '(' and !sq and !dq and
+        } else if (c == '`' and !sq) {
+            bt = !bt;
+        } else if (c == '(' and prev == '$' and !sq) {
+            subst += 1;
+        } else if (c == '{' and prev == '$' and !sq) {
+            brace += 1;
+        } else if (c == ')' and subst > 0) {
+            subst -= 1;
+        } else if (c == '}' and brace > 0) {
+            brace -= 1;
+        } else if (c == '(' and !sq and !dq and subst == 0 and
             tokenizer.isArrayAssignPrefix(text[start..i]))
         {
             if (matchingParen(text, i)) |close| {
@@ -39,6 +62,12 @@ pub fn wordEnd(text: []const u8, start: usize) usize {
                 continue;
             }
             return text.len;
+        } else if (c == '(' and subst > 0) {
+            // A plain paren inside an open $(...), e.g. the inner one of
+            // $(( (1+2)*3 )) -- counted so its ')' does not close the span early.
+            subst += 1;
+        } else if (c == ' ' and !sq and !dq and !bt and subst == 0 and brace == 0) {
+            break;
         }
         i += 1;
     }

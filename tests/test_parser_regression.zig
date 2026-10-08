@@ -935,3 +935,94 @@ test "regression: single quotes outside substitution still escape" {
     try TestAssert.expectContains(result.stdout, "$HOME");
     try TestAssert.expectContains(result.stdout, "`pwd`");
 }
+
+// =============================================================================
+// Backtick Command Substitution in an Assignment
+// =============================================================================
+//
+// `x=`echo hi`` reported "hi`: command not found" while `x=$(echo hi)` worked.
+// The deciding scan -- is there a space after the value, meaning a command
+// follows the assignment? -- was written twice: once in shell.zig and once as
+// `wordEnd`. The shell.zig copy knew about quotes, `$(...)` and `${...}` but not
+// backticks, so the space inside them ended the word and the remainder ran as a
+// command. They are one function now, which is the actual fix; these tests cover
+// both the case that was broken and the cases the duplicate existed to handle.
+
+test "regression: backtick substitution in a bare assignment" {
+    const allocator = std.testing.allocator;
+    var fixture = try DenShellFixture.init(allocator);
+    defer fixture.deinit();
+
+    const result = try fixture.exec("x=`echo hi`; echo \"[$x]\"");
+    defer allocator.free(result.stdout);
+    defer allocator.free(result.stderr);
+
+    try TestAssert.expectEqual(@as(u8, 0), result.exit_code);
+    try TestAssert.expectContains(result.stdout, "[hi]");
+}
+
+test "regression: backtick value holding several words" {
+    const allocator = std.testing.allocator;
+    var fixture = try DenShellFixture.init(allocator);
+    defer fixture.deinit();
+
+    const result = try fixture.exec("x=`printf '%s-%s' a b`; echo \"[$x]\"");
+    defer allocator.free(result.stdout);
+    defer allocator.free(result.stderr);
+
+    try TestAssert.expectEqual(@as(u8, 0), result.exit_code);
+    try TestAssert.expectContains(result.stdout, "[a-b]");
+}
+
+test "regression: backtick assignment inside a function" {
+    const allocator = std.testing.allocator;
+    var fixture = try DenShellFixture.init(allocator);
+    defer fixture.deinit();
+
+    const result = try fixture.exec("f() { y=`echo in`; echo \"[$y]\"; }; f");
+    defer allocator.free(result.stdout);
+    defer allocator.free(result.stderr);
+
+    try TestAssert.expectEqual(@as(u8, 0), result.exit_code);
+    try TestAssert.expectContains(result.stdout, "[in]");
+}
+
+test "regression: the grouping forms wordEnd must keep honouring" {
+    const allocator = std.testing.allocator;
+    var fixture = try DenShellFixture.init(allocator);
+    defer fixture.deinit();
+
+    // Each of these would split at a space if its grouping were dropped from
+    // wordEnd, and the tail would run as a command.
+    const cases = [_]struct { script: []const u8, want: []const u8 }{
+        .{ .script = "a=(x y) && echo ok", .want = "ok" },
+        .{ .script = "x=hi; y=\"$x world\"; echo \"$y\"", .want = "hi world" },
+        .{ .script = "x=$(( (1+2)*3 )); echo \"$x\"", .want = "9" },
+        .{ .script = "x=$(echo a b); echo \"$x\"", .want = "a b" },
+        .{ .script = "x=${UNSET_HERE:-a b}; echo \"$x\"", .want = "a b" },
+        .{ .script = "x='a b'; echo \"$x\"", .want = "a b" },
+        .{ .script = "x=\"`echo a b`\"; echo \"$x\"", .want = "a b" },
+    };
+    for (cases) |c| {
+        const result = try fixture.exec(c.script);
+        defer allocator.free(result.stdout);
+        defer allocator.free(result.stderr);
+        try TestAssert.expectEqual(@as(u8, 0), result.exit_code);
+        try TestAssert.expectContains(result.stdout, c.want);
+    }
+}
+
+test "regression: VAR=value cmd still runs the command" {
+    const allocator = std.testing.allocator;
+    var fixture = try DenShellFixture.init(allocator);
+    defer fixture.deinit();
+
+    // The whole reason the scan exists: a space after the value means a command
+    // follows, and the assignment is only for its environment.
+    const result = try fixture.exec("FOO=bar env | grep '^FOO='");
+    defer allocator.free(result.stdout);
+    defer allocator.free(result.stderr);
+
+    try TestAssert.expectEqual(@as(u8, 0), result.exit_code);
+    try TestAssert.expectContains(result.stdout, "FOO=bar");
+}

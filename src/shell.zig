@@ -1611,38 +1611,13 @@ pub const Shell = struct {
                 // e.g., "VAR=value cmd" should not be handled here
                 if (is_valid_var and eq_pos + 1 <= trimmed_input.len) {
                     const rest = trimmed_input[eq_pos + 1 ..];
-                    // Check if there are any spaces after the value that indicate more commands
-                    // Handle quoted strings, $() nesting, and ${} nesting
-                    var in_single_quote = false;
-                    var in_double_quote = false;
-                    var subst_depth_check: u32 = 0;
-                    var brace_depth_check: u32 = 0;
-                    var found_space_outside_quotes = false;
-                    var prev_c: u8 = 0;
-                    for (rest) |c| {
-                        if (c == '\'' and !in_double_quote and subst_depth_check == 0) {
-                            in_single_quote = !in_single_quote;
-                        } else if (c == '"' and !in_single_quote and subst_depth_check == 0) {
-                            in_double_quote = !in_double_quote;
-                        } else if (c == '(' and prev_c == '$' and !in_single_quote) {
-                            subst_depth_check += 1;
-                        } else if (c == '(' and subst_depth_check > 0) {
-                            // Nested paren inside an active $(...)/$((...)) span, e.g.
-                            // the inner '(' of $(( (1+2)*3 )) — keep it balanced so
-                            // spaces inside the substitution don't split the word.
-                            subst_depth_check += 1;
-                        } else if (c == '{' and prev_c == '$' and !in_single_quote) {
-                            brace_depth_check += 1;
-                        } else if (c == ')' and subst_depth_check > 0) {
-                            subst_depth_check -= 1;
-                        } else if (c == '}' and brace_depth_check > 0) {
-                            brace_depth_check -= 1;
-                        } else if (c == ' ' and !in_single_quote and !in_double_quote and subst_depth_check == 0 and brace_depth_check == 0) {
-                            found_space_outside_quotes = true;
-                            break;
-                        }
-                        prev_c = c;
-                    }
+                    // Does a space follow the value, meaning there is a command
+                    // after the assignment? `wordEnd` owns these rules -- this
+                    // used to be a second copy of them that knew about $(...) and
+                    // ${...} but not backticks, so `x=`echo hi`` split at the
+                    // space and ran `hi`` as a command while `x=$(echo hi)` was
+                    // fine.
+                    const found_space_outside_quotes = shell_mod.wordEnd(rest, 0) < rest.len;
                     if (found_space_outside_quotes) {
                         // Check if ALL quote-aware tokens are assignments (a=1 b=2 c=3)
                         // Use quote-aware scanning so that e.g. y="$x world" is one token
