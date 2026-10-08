@@ -1438,3 +1438,93 @@ test "scripting: a one-line body keeps a whole control-flow construct together" 
     try test_utils.TestAssert.expectContains(result.stdout, "n=1");
     try test_utils.TestAssert.expectContains(result.stdout, "n=2");
 }
+
+// =============================================================================
+// Parameter Operators Whose Word Contains a Colon
+// =============================================================================
+//
+// `${VAR<op>word}` was decided by looking for a colon and assuming substring
+// extraction unless the character after it was one of `- = ? +`. The text before
+// the colon was only checked for `#` and `%`, so every other operator became part
+// of a variable name that does not exist, and the whole expansion came out empty.
+//
+// The case that matters is `eval "$(brew shellenv)"`, which emits
+// `export PATH="/opt/homebrew/bin:...${PATH+:$PATH}"`. den read that as a
+// variable named `PATH+` with an offset of `$PATH`, so PATH ended up holding
+// only the Homebrew directories and every command in /bin stopped resolving.
+
+test "expansion: plus operator with a colon in the word" {
+    const allocator = std.testing.allocator;
+    var fixture = try test_utils.DenShellFixture.init(allocator);
+    defer fixture.deinit();
+
+    const result = try fixture.exec("X=abc; echo \"pre${X+:$X}post\"");
+    defer allocator.free(result.stdout);
+    defer allocator.free(result.stderr);
+
+    try test_utils.TestAssert.expectEqual(@as(u8, 0), result.exit_code);
+    try test_utils.TestAssert.expectContains(result.stdout, "pre:abcpost");
+}
+
+test "expansion: brew shellenv keeps the rest of PATH" {
+    const allocator = std.testing.allocator;
+    var fixture = try test_utils.DenShellFixture.init(allocator);
+    defer fixture.deinit();
+
+    // The exact shape `brew shellenv` emits. Without the fix PATH came out as
+    // just "/opt/homebrew/bin", dropping everything it was meant to prepend to.
+    const result = try fixture.exec(
+        "P=/usr/bin:/bin; export PATH=\"/opt/homebrew/bin${P+:$P}\"; echo \"$PATH\"",
+    );
+    defer allocator.free(result.stdout);
+    defer allocator.free(result.stderr);
+
+    try test_utils.TestAssert.expectEqual(@as(u8, 0), result.exit_code);
+    try test_utils.TestAssert.expectContains(result.stdout, "/opt/homebrew/bin:/usr/bin:/bin");
+}
+
+test "expansion: dash and equals operators with a colon in the word" {
+    const allocator = std.testing.allocator;
+    var fixture = try test_utils.DenShellFixture.init(allocator);
+    defer fixture.deinit();
+
+    const dash = try fixture.exec("echo \"${UNSET_ONE-:lit}\"");
+    defer allocator.free(dash.stdout);
+    defer allocator.free(dash.stderr);
+    try test_utils.TestAssert.expectContains(dash.stdout, ":lit");
+
+    const eq = try fixture.exec("echo \"${UNSET_TWO=:v}\"");
+    defer allocator.free(eq.stdout);
+    defer allocator.free(eq.stderr);
+    try test_utils.TestAssert.expectContains(eq.stdout, ":v");
+}
+
+test "expansion: pattern replacement with a colon in the replacement" {
+    const allocator = std.testing.allocator;
+    var fixture = try test_utils.DenShellFixture.init(allocator);
+    defer fixture.deinit();
+
+    const result = try fixture.exec("X=abc; echo \"${X/a/:b}\"");
+    defer allocator.free(result.stdout);
+    defer allocator.free(result.stderr);
+
+    try test_utils.TestAssert.expectEqual(@as(u8, 0), result.exit_code);
+    try test_utils.TestAssert.expectContains(result.stdout, ":bbc");
+}
+
+test "expansion: substring extraction still works" {
+    const allocator = std.testing.allocator;
+    var fixture = try test_utils.DenShellFixture.init(allocator);
+    defer fixture.deinit();
+
+    // The forms the narrowed guard must keep claiming.
+    const result = try fixture.exec(
+        "X=abcdef; echo \"${X:1}|${X:1:2}|${X: -2}\"; arr=(a b c); echo \"${arr[@]:1}\"",
+    );
+    defer allocator.free(result.stdout);
+    defer allocator.free(result.stderr);
+
+    try test_utils.TestAssert.expectEqual(@as(u8, 0), result.exit_code);
+    try test_utils.TestAssert.expectContains(result.stdout, "bcdef|bc|ef");
+    try test_utils.TestAssert.expectContains(result.stdout, "b c");
+}

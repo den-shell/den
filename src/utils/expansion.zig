@@ -59,6 +59,22 @@ test "expandManyDots" {
 /// Persistent PRNG state for $RANDOM, shared across all accesses
 var global_random_state: ?std.Random.DefaultPrng = null;
 
+/// Whether `text` could be the parameter name part of `${name:...}`.
+///
+/// Permits what actually appears there: a plain name, a positional digit, the
+/// `@` and `*` specials, an array subscript, and the `!` of indirect expansion.
+/// Every parameter operator character is therefore excluded, which is the point
+/// -- `PATH+` is not a name, so `${PATH+:$PATH}` is not substring extraction.
+fn looksLikeParameterName(text: []const u8) bool {
+    if (text.len == 0) return false;
+    for (text) |c| {
+        if (std.ascii.isAlphanumeric(c) or c == '_' or
+            c == '[' or c == ']' or c == '@' or c == '*' or c == '!') continue;
+        return false;
+    }
+    return true;
+}
+
 fn getRandomValue() u16 {
     if (global_random_state == null) {
         const seed: u64 = if (compat.Instant.now()) |inst|
@@ -1201,12 +1217,22 @@ pub const Expansion = struct {
             // Make sure this isn't :- := :? :+ operators
             if (colon_pos + 1 < content.len) {
                 const after_colon = content[colon_pos + 1];
-                // Also make sure this isn't a pattern operator (# ## % %%) with : in the pattern.
-                // If the part before the colon contains #, %, those are pattern operators, not var names.
+                // The text before the colon has to be a parameter name for this to
+                // be substring extraction. Checking that it *is* a name, rather
+                // than listing the operators it must not contain, is what makes
+                // this correct: the old test looked only for # and %, so every
+                // other operator whose word happened to contain a colon was read
+                // as a variable named after the operator and expanded to nothing.
+                //
+                // `eval "$(brew shellenv)"` is the case that matters -- it emits
+                // `export PATH="/opt/homebrew/bin:...${PATH+:$PATH}"`, which
+                // became `${` + a variable called `PATH+` + an offset of `$PATH`,
+                // so PATH came out holding only the two Homebrew directories and
+                // every command in /bin and /usr/bin stopped resolving.
                 const before_colon = content[0..colon_pos];
-                const has_pattern_op = std.mem.indexOfScalar(u8, before_colon, '#') != null or
-                    std.mem.indexOfScalar(u8, before_colon, '%') != null;
-                if (after_colon != '-' and after_colon != '=' and after_colon != '?' and after_colon != '+' and !has_pattern_op) {
+                if (looksLikeParameterName(before_colon) and
+                    after_colon != '-' and after_colon != '=' and after_colon != '?' and after_colon != '+')
+                {
                     // This is substring extraction
                     const var_name = content[0..colon_pos];
                     const params = content[colon_pos + 1 ..];
@@ -3511,4 +3537,29 @@ test "expandVarRefs: a bare dollar is left as written" {
     const out = (try exp.expandVarRefs("cost$")).?;
     defer std.testing.allocator.free(out);
     try std.testing.expectEqualStrings("cost$", out);
+}
+
+test "looksLikeParameterName accepts the forms substring extraction can target" {
+    // Plain names, positionals, the @/* specials, array subscripts, indirection.
+    try std.testing.expect(looksLikeParameterName("X"));
+    try std.testing.expect(looksLikeParameterName("X_Y2"));
+    try std.testing.expect(looksLikeParameterName("1"));
+    try std.testing.expect(looksLikeParameterName("@"));
+    try std.testing.expect(looksLikeParameterName("*"));
+    try std.testing.expect(looksLikeParameterName("arr[@]"));
+    try std.testing.expect(looksLikeParameterName("!ref"));
+}
+
+test "looksLikeParameterName rejects every operator form" {
+    // Each of these once read as a variable named after the operator, so
+    // `${VAR<op>...}` with a colon in the word expanded to nothing. The brew
+    // shellenv case is `PATH+`.
+    try std.testing.expect(!looksLikeParameterName("PATH+"));
+    try std.testing.expect(!looksLikeParameterName("X-"));
+    try std.testing.expect(!looksLikeParameterName("X="));
+    try std.testing.expect(!looksLikeParameterName("X?"));
+    try std.testing.expect(!looksLikeParameterName("X/a/"));
+    try std.testing.expect(!looksLikeParameterName("X#p"));
+    try std.testing.expect(!looksLikeParameterName("X%p"));
+    try std.testing.expect(!looksLikeParameterName(""));
 }
