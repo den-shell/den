@@ -1528,3 +1528,136 @@ test "expansion: substring extraction still works" {
     try test_utils.TestAssert.expectContains(result.stdout, "bcdef|bc|ef");
     try test_utils.TestAssert.expectContains(result.stdout, "b c");
 }
+
+// =============================================================================
+// Positional Parameter Slicing
+// =============================================================================
+//
+// ${@:2} and every related form expanded to nothing. The substring branch was
+// reached -- `@` does look like a parameter name -- but it then asked
+// getVariableValue("@"), which knows nothing about positional parameters, so the
+// whole expansion came out empty. Offsets here are one-based, since $@ begins at
+// $1, and bash treats an offset of 0 the same as 1 because $0 is not among them.
+//
+// Known gap, deliberately not asserted below: inside double quotes these produce
+// one word rather than one per parameter, so `for w in "${@:2}"` iterates once.
+// That needs expansion to return multiple fields, which it cannot yet -- `for`
+// only manages `"$@"` by matching the literal text. The same gap is why
+// `f "$@"` passes a single argument.
+
+test "expansion: positional slicing from an offset" {
+    const allocator = std.testing.allocator;
+    var fixture = try test_utils.DenShellFixture.init(allocator);
+    defer fixture.deinit();
+
+    const result = try fixture.exec("set -- a b c d; echo \"[${@:2}]\"; echo \"[${*:3}]\"");
+    defer allocator.free(result.stdout);
+    defer allocator.free(result.stderr);
+
+    try test_utils.TestAssert.expectEqual(@as(u8, 0), result.exit_code);
+    try test_utils.TestAssert.expectContains(result.stdout, "[b c d]");
+    try test_utils.TestAssert.expectContains(result.stdout, "[c d]");
+}
+
+test "expansion: positional slicing with a length" {
+    const allocator = std.testing.allocator;
+    var fixture = try test_utils.DenShellFixture.init(allocator);
+    defer fixture.deinit();
+
+    const result = try fixture.exec("set -- a b c d; echo \"[${@:2:2}]\"; echo \"[${@:2:0}]\"");
+    defer allocator.free(result.stdout);
+    defer allocator.free(result.stderr);
+
+    try test_utils.TestAssert.expectEqual(@as(u8, 0), result.exit_code);
+    try test_utils.TestAssert.expectContains(result.stdout, "[b c]");
+    try test_utils.TestAssert.expectContains(result.stdout, "[]");
+}
+
+test "expansion: positional slicing offsets 0 and 1 agree" {
+    const allocator = std.testing.allocator;
+    var fixture = try test_utils.DenShellFixture.init(allocator);
+    defer fixture.deinit();
+
+    // $0 is not a positional parameter, so bash starts both at $1.
+    const result = try fixture.exec("set -- a b c; echo \"[${@:0}]\"; echo \"[${@:1}]\"");
+    defer allocator.free(result.stdout);
+    defer allocator.free(result.stderr);
+
+    try test_utils.TestAssert.expectEqual(@as(u8, 0), result.exit_code);
+    try test_utils.TestAssert.expectContains(result.stdout, "[a b c]");
+}
+
+test "expansion: positional slicing from the end" {
+    const allocator = std.testing.allocator;
+    var fixture = try test_utils.DenShellFixture.init(allocator);
+    defer fixture.deinit();
+
+    const result = try fixture.exec("set -- a b c d; echo \"[${@: -2}]\"; echo \"[${@:(-3)}]\"");
+    defer allocator.free(result.stdout);
+    defer allocator.free(result.stderr);
+
+    try test_utils.TestAssert.expectEqual(@as(u8, 0), result.exit_code);
+    try test_utils.TestAssert.expectContains(result.stdout, "[c d]");
+    try test_utils.TestAssert.expectContains(result.stdout, "[b c d]");
+}
+
+test "expansion: positional slicing out of range is empty" {
+    const allocator = std.testing.allocator;
+    var fixture = try test_utils.DenShellFixture.init(allocator);
+    defer fixture.deinit();
+
+    const result = try fixture.exec("set -- a b c; echo \"[${@:9}]\"; echo \"[${@:1}]\" ; set --; echo \"[${@:1}]\"");
+    defer allocator.free(result.stdout);
+    defer allocator.free(result.stderr);
+
+    try test_utils.TestAssert.expectEqual(@as(u8, 0), result.exit_code);
+    try test_utils.TestAssert.expectContains(result.stdout, "[]");
+    try test_utils.TestAssert.expectContains(result.stdout, "[a b c]");
+}
+
+test "expansion: positional slicing inside a function and after shift" {
+    const allocator = std.testing.allocator;
+    var fixture = try test_utils.DenShellFixture.init(allocator);
+    defer fixture.deinit();
+
+    const in_fn = try fixture.exec("f() { echo \"[${@:2}]\"; }; f x y z");
+    defer allocator.free(in_fn.stdout);
+    defer allocator.free(in_fn.stderr);
+    try test_utils.TestAssert.expectContains(in_fn.stdout, "[y z]");
+
+    const shifted = try fixture.exec("set -- a b c d; shift; echo \"[${@:2}]\"");
+    defer allocator.free(shifted.stdout);
+    defer allocator.free(shifted.stderr);
+    try test_utils.TestAssert.expectContains(shifted.stdout, "[c d]");
+}
+
+test "expansion: positional count via hash" {
+    const allocator = std.testing.allocator;
+    var fixture = try test_utils.DenShellFixture.init(allocator);
+    defer fixture.deinit();
+
+    // ${#@} and ${#*} both mean $#. They used to look up variables named `@` and
+    // `*`, find nothing, and report 0.
+    const result = try fixture.exec("set -- a b c; echo \"[$#][${#@}][${#*}]\"");
+    defer allocator.free(result.stdout);
+    defer allocator.free(result.stderr);
+
+    try test_utils.TestAssert.expectEqual(@as(u8, 0), result.exit_code);
+    try test_utils.TestAssert.expectContains(result.stdout, "[3][3][3]");
+}
+
+test "expansion: string substring extraction is unaffected" {
+    const allocator = std.testing.allocator;
+    var fixture = try test_utils.DenShellFixture.init(allocator);
+    defer fixture.deinit();
+
+    // The slice arithmetic is shared with positional slicing now, so these pin it.
+    const result = try fixture.exec(
+        "x=abcdef; echo \"[${x:1}][${x:1:2}][${x: -2}][${x:(-3)}][${x:9}]\"",
+    );
+    defer allocator.free(result.stdout);
+    defer allocator.free(result.stderr);
+
+    try test_utils.TestAssert.expectEqual(@as(u8, 0), result.exit_code);
+    try test_utils.TestAssert.expectContains(result.stdout, "[bcdef][bc][ef][def][]");
+}

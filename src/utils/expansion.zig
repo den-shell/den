@@ -75,6 +75,60 @@ fn looksLikeParameterName(text: []const u8) bool {
     return true;
 }
 
+/// An `offset` or `offset:length` slice specification, as written.
+const SliceSpec = struct { offset: i64, length: ?i64 };
+
+/// Parse `offset` or `offset:length`. Either may be parenthesised -- `${x:(-2)}`
+/// is how you write a negative offset without the space bash would otherwise
+/// need to tell it from `:-`.
+fn parseSliceSpec(params: []const u8) SliceSpec {
+    const bound = struct {
+        fn parse(text: []const u8) ?i64 {
+            const stripped = if (text.len >= 2 and text[0] == '(' and text[text.len - 1] == ')')
+                text[1 .. text.len - 1]
+            else
+                text;
+            return std.fmt.parseInt(i64, std.mem.trim(u8, stripped, &std.ascii.whitespace), 10) catch null;
+        }
+    }.parse;
+
+    if (std.mem.indexOfScalar(u8, params, ':')) |second| {
+        return .{
+            .offset = bound(params[0..second]) orelse 0,
+            .length = bound(params[second + 1 ..]),
+        };
+    }
+    return .{ .offset = bound(params) orelse 0, .length = null };
+}
+
+/// Where a slice spec lands in a collection of `count` elements.
+///
+/// bash's rules: a negative offset counts back from the end, and a negative
+/// length names a position relative to the end rather than a count, so
+/// `${x:0:-1}` drops the last element. `@abs` rather than negation because
+/// negating i64's minimum would overflow.
+///
+/// Shared by substring extraction and positional-parameter slicing. Keeping one
+/// copy is the point: this file has already shipped bugs where the same rule was
+/// written twice and only one copy learned a case.
+fn resolveSliceBounds(spec: SliceSpec, count: usize) struct { start: usize, end: usize } {
+    var start: usize = 0;
+    if (spec.offset < 0) {
+        const back: usize = @intCast(@abs(spec.offset));
+        if (back <= count) start = count - back;
+    } else {
+        start = @min(@as(usize, @intCast(spec.offset)), count);
+    }
+
+    const stop = if (spec.length) |len| blk: {
+        if (len >= 0) break :blk @min(start + @as(usize, @intCast(len)), count);
+        const back: usize = @intCast(@abs(len));
+        break :blk if (count >= back) count - back else 0;
+    } else count;
+
+    return .{ .start = start, .end = if (stop < start) start else stop };
+}
+
 fn getRandomValue() u16 {
     if (global_random_state == null) {
         const seed: u64 = if (compat.Instant.now()) |inst|
@@ -1010,9 +1064,11 @@ pub const Expansion = struct {
         // Check for string/array length: ${#VAR} or ${#arr[@]} or ${#arr[index]}
         if (content.len > 0 and content[0] == '#') {
             const raw_name = content[1..];
-            // ${#} on its own is the positional-parameter count (same as $#),
-            // not the length of an empty variable name.
-            if (raw_name.len == 0) {
+            // ${#}, ${#@} and ${#*} are all the positional-parameter count, the
+            // same as $#. Without the latter two, `@` and `*` were looked up as
+            // variable names, found nothing, and reported a length of 0 however
+            // many arguments there were.
+            if (raw_name.len == 0 or std.mem.eql(u8, raw_name, "@") or std.mem.eql(u8, raw_name, "*")) {
                 const value = try std.fmt.allocPrint(self.allocator, "{d}", .{self.positional_params.len});
                 return ExpansionResult{ .value = value, .consumed = end + 1, .owned = true };
             }
@@ -1236,59 +1292,34 @@ pub const Expansion = struct {
                     // This is substring extraction
                     const var_name = content[0..colon_pos];
                     const params = content[colon_pos + 1 ..];
+                    const spec = parseSliceSpec(params);
+
+                    // ${@:offset[:length]} and ${*:offset[:length]} slice the
+                    // positional parameters rather than a string. Offsets here are
+                    // one-based, because $@ starts at $1 -- and bash treats an
+                    // offset of 0 the same as 1, since $0 is not one of them.
+                    if (std.mem.eql(u8, var_name, "@") or std.mem.eql(u8, var_name, "*")) {
+                        const adjusted: SliceSpec = .{
+                            .offset = if (spec.offset > 0) spec.offset - 1 else spec.offset,
+                            .length = spec.length,
+                        };
+                        const b = resolveSliceBounds(adjusted, self.positional_params.len);
+                        const chosen = self.positional_params[b.start..b.end];
+
+                        var joined: std.ArrayList(u8) = .empty;
+                        errdefer joined.deinit(self.allocator);
+                        for (chosen, 0..) |param, idx| {
+                            if (idx > 0) try joined.append(self.allocator, ' ');
+                            try joined.appendSlice(self.allocator, param);
+                        }
+                        const result = try joined.toOwnedSlice(self.allocator);
+                        return ExpansionResult{ .value = result, .consumed = end + 1, .owned = true };
+                    }
 
                     if (self.getVariableValue(var_name)) |value| {
-                        // Parse offset and optional length
-                        var offset: i64 = 0;
-                        var length: ?i64 = null;
-
-                        if (std.mem.indexOf(u8, params, ":")) |second_colon| {
-                            // ${VAR:offset:length}
-                            const offset_str = params[0..second_colon];
-                            // Strip parens: ${x:(-2)} -> -2
-                            const clean_offset = if (offset_str.len >= 2 and offset_str[0] == '(' and offset_str[offset_str.len - 1] == ')')
-                                offset_str[1 .. offset_str.len - 1]
-                            else
-                                offset_str;
-                            offset = std.fmt.parseInt(i64, std.mem.trim(u8, clean_offset, &std.ascii.whitespace), 10) catch 0;
-                            length = std.fmt.parseInt(i64, std.mem.trim(u8, params[second_colon + 1 ..], &std.ascii.whitespace), 10) catch null;
-                        } else {
-                            // ${VAR:offset}
-                            // Strip parens: ${x:(-2)} -> -2
-                            const clean_params = if (params.len >= 2 and params[0] == '(' and params[params.len - 1] == ')')
-                                params[1 .. params.len - 1]
-                            else
-                                params;
-                            offset = std.fmt.parseInt(i64, std.mem.trim(u8, clean_params, &std.ascii.whitespace), 10) catch 0;
-                        }
-
-                        // Handle negative offset (from end of string).
-                        // Use @abs() to avoid overflow on i64::MIN (negating -2^63
-                        // as a signed i64 would overflow).
-                        var start: usize = 0;
-                        if (offset < 0) {
-                            const abs_offset: usize = @intCast(@abs(offset));
-                            if (abs_offset <= value.len) {
-                                start = value.len - abs_offset;
-                            }
-                        } else {
-                            start = @min(@as(usize, @intCast(offset)), value.len);
-                        }
-
-                        // Calculate end position. A negative length is an offset
-                        // from the end of the string (bash): ${x:0:-1} drops the
-                        // last char. end_pos < start yields an empty result.
-                        const end_pos = if (length) |len| blk: {
-                            if (len >= 0) break :blk @min(start + @as(usize, @intCast(len)), value.len);
-                            const back: usize = @intCast(@abs(len));
-                            break :blk if (value.len >= back) value.len - back else 0;
-                        } else value.len;
-
-                        if (start <= end_pos and start <= value.len) {
-                            const result = try self.allocator.dupe(u8, value[start..end_pos]);
-                            return ExpansionResult{ .value = result, .consumed = end + 1, .owned = true };
-                        }
-                        return ExpansionResult{ .value = "", .consumed = end + 1, .owned = false };
+                        const b = resolveSliceBounds(spec, value.len);
+                        const result = try self.allocator.dupe(u8, value[b.start..b.end]);
+                        return ExpansionResult{ .value = result, .consumed = end + 1, .owned = true };
                     }
                     return ExpansionResult{ .value = "", .consumed = end + 1, .owned = false };
                 }
