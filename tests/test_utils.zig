@@ -712,3 +712,73 @@ pub const DenShellFixture = struct {
         };
     }
 };
+
+// ============================================================================
+// Every DenShellFixture suite must be bound to the den binary in build.zig
+// ============================================================================
+
+test "build.zig binds every DenShellFixture suite to the den binary" {
+    // DenShellFixture runs ./zig-out/bin/den, a path the build graph cannot see.
+    // Without `bindDenBinary`, the run step is cached against its own sources, so
+    // `zig build test-e2e` reports success against whatever binary happens to be
+    // in zig-out -- demonstrated during this fix: a shell with backtick
+    // assignments broken, three tests that catch it, and "3/3 steps succeeded,
+    // run test cached".
+    //
+    // Checking it here rather than counting call sites means adding a suite and
+    // forgetting the binding fails with the file's name in the message.
+    const allocator = std.testing.allocator;
+
+    const build_zig = std.Io.Dir.cwd().readFileAlloc(io, "build.zig", allocator, .limited(4 * 1024 * 1024)) catch {
+        // Not run from the repo root (a packaged run, say) -- nothing to check.
+        return;
+    };
+    defer allocator.free(build_zig);
+
+    var dir = std.Io.Dir.cwd().openDir(io, "tests", .{ .iterate = true }) catch return;
+    defer dir.close(io);
+
+    var iter = dir.iterate();
+    while (try iter.next(io)) |entry| {
+        if (entry.kind != .file) continue;
+        if (!std.mem.endsWith(u8, entry.name, ".zig")) continue;
+        // This file defines the fixture; it is not itself a suite.
+        if (std.mem.eql(u8, entry.name, "test_utils.zig")) continue;
+
+        var path_buf: [256]u8 = undefined;
+        const rel = try std.fmt.bufPrint(&path_buf, "tests/{s}", .{entry.name});
+
+        const body = std.Io.Dir.cwd().readFileAlloc(io, rel, allocator, .limited(8 * 1024 * 1024)) catch continue;
+        defer allocator.free(body);
+        if (std.mem.indexOf(u8, body, "DenShellFixture") == null) continue;
+
+        // Find where build.zig declares this suite's module, and require a
+        // bindDenBinary call before the next suite's module begins.
+        var needle_buf: [288]u8 = undefined;
+        const needle = try std.fmt.bufPrint(&needle_buf, "b.path(\"tests/{s}\")", .{entry.name});
+        const at = std.mem.indexOf(u8, build_zig, needle) orelse {
+            std.debug.print(
+                "\ntests/{s} uses DenShellFixture but build.zig never references it.\n",
+                .{entry.name},
+            );
+            return error.SuiteNotInBuild;
+        };
+
+        const rest = build_zig[at + needle.len ..];
+        const region_end = std.mem.indexOf(u8, rest, "b.path(\"tests/") orelse rest.len;
+        if (std.mem.indexOf(u8, rest[0..region_end], "bindDenBinary(") == null) {
+            std.debug.print(
+                \\
+                \\tests/{s} drives den through DenShellFixture, but its run step in
+                \\build.zig is not passed to bindDenBinary. Without that the step is
+                \\cached against its own sources and will report success without
+                \\running, whatever state ./zig-out/bin/den is in.
+                \\
+                \\Add, just after its b.addRunArtifact line:
+                \\    bindDenBinary(run_<name>_tests, install_den, den_bin);
+                \\
+            , .{entry.name});
+            return error.SuiteNotBoundToDenBinary;
+        }
+    }
+}

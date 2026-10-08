@@ -77,6 +77,24 @@ pub fn build(b: *std.Build) void {
     const install_den = b.addInstallArtifact(exe, .{});
     b.getInstallStep().dependOn(&install_den.step);
 
+    // Suites driven through DenShellFixture run ./zig-out/bin/den, a path Zig's
+    // build graph knows nothing about. So the run step was cached against its own
+    // sources only: change the shell, re-run `zig build test-e2e`, and it would
+    // report success without executing anything -- the tests had not changed, and
+    // the binary they actually exercise was not an input. Every behavioural suite
+    // in this file had that hole.
+    //
+    // Binding each one to the installed binary fixes both halves: dependOn makes
+    // zig-out/bin/den current before the tests run, and addFileInput puts it in
+    // the run's cache key so a rebuilt shell re-runs them.
+    const bindDenBinary = struct {
+        fn f(run: *std.Build.Step.Run, install: *std.Build.Step.InstallArtifact, bin: std.Build.LazyPath) void {
+            run.step.dependOn(&install.step);
+            run.addFileInput(bin);
+        }
+    }.f;
+    const den_bin = exe.getEmittedBin();
+
     // Build only the distributable shell for a single `-Dtarget`. The default
     // install step also includes developer tools, examples, and benchmarks,
     // which are not release artifacts and needlessly break cross-compilation.
@@ -545,6 +563,7 @@ pub fn build(b: *std.Build) void {
     });
 
     const run_integration_e2e_tests = b.addRunArtifact(integration_e2e_tests);
+    bindDenBinary(run_integration_e2e_tests, install_den, den_bin);
     const integration_e2e_test_step = b.step("test-integration-e2e", "Run integration tests");
     integration_e2e_test_step.dependOn(&run_integration_e2e_tests.step);
 
@@ -560,6 +579,7 @@ pub fn build(b: *std.Build) void {
     });
 
     const run_e2e_tests = b.addRunArtifact(e2e_tests);
+    bindDenBinary(run_e2e_tests, install_den, den_bin);
     const e2e_test_step = b.step("test-e2e", "Run end-to-end tests");
     e2e_test_step.dependOn(&run_e2e_tests.step);
 
@@ -575,6 +595,7 @@ pub fn build(b: *std.Build) void {
     });
 
     const run_repl_tests = b.addRunArtifact(repl_tests);
+    bindDenBinary(run_repl_tests, install_den, den_bin);
     const repl_test_step = b.step("test-repl", "Run REPL tests");
     repl_test_step.dependOn(&run_repl_tests.step);
 
@@ -590,6 +611,7 @@ pub fn build(b: *std.Build) void {
     });
 
     const run_shell_integration_tests = b.addRunArtifact(shell_integration_tests);
+    bindDenBinary(run_shell_integration_tests, install_den, den_bin);
     const shell_integration_test_step = b.step("test-shell-integration", "Run shell integration tests");
     shell_integration_test_step.dependOn(&run_shell_integration_tests.step);
 
@@ -605,6 +627,7 @@ pub fn build(b: *std.Build) void {
     });
 
     const run_operators_tests = b.addRunArtifact(operators_tests);
+    bindDenBinary(run_operators_tests, install_den, den_bin);
     const operators_test_step = b.step("test-operators", "Run operator regression tests");
     operators_test_step.dependOn(&run_operators_tests.step);
 
@@ -620,6 +643,7 @@ pub fn build(b: *std.Build) void {
     });
 
     const run_shell_options_tests = b.addRunArtifact(shell_options_tests);
+    bindDenBinary(run_shell_options_tests, install_den, den_bin);
     const shell_options_test_step = b.step("test-shell-options", "Run shell options tests");
     shell_options_test_step.dependOn(&run_shell_options_tests.step);
 
@@ -635,6 +659,7 @@ pub fn build(b: *std.Build) void {
     });
 
     const run_parser_regression_tests = b.addRunArtifact(parser_regression_tests);
+    bindDenBinary(run_parser_regression_tests, install_den, den_bin);
     const parser_regression_test_step = b.step("test-parser-regression", "Run parser regression tests");
     parser_regression_test_step.dependOn(&run_parser_regression_tests.step);
 
@@ -650,6 +675,7 @@ pub fn build(b: *std.Build) void {
     });
 
     const run_fuzzing_tests = b.addRunArtifact(fuzzing_tests);
+    bindDenBinary(run_fuzzing_tests, install_den, den_bin);
     const fuzzing_test_step = b.step("test-fuzzing", "Run comprehensive fuzzing tests");
     fuzzing_test_step.dependOn(&run_fuzzing_tests.step);
 
@@ -771,6 +797,7 @@ pub fn build(b: *std.Build) void {
     });
 
     const run_builtin_tests = b.addRunArtifact(builtin_tests);
+    bindDenBinary(run_builtin_tests, install_den, den_bin);
     const builtin_test_step = b.step("test-builtins", "Run builtin command tests");
     builtin_test_step.dependOn(&run_builtin_tests.step);
 
@@ -786,6 +813,7 @@ pub fn build(b: *std.Build) void {
     });
 
     const run_history_tests = b.addRunArtifact(history_tests);
+    bindDenBinary(run_history_tests, install_den, den_bin);
     const history_test_step = b.step("test-history", "Run history tests");
     history_test_step.dependOn(&run_history_tests.step);
 
@@ -815,6 +843,7 @@ pub fn build(b: *std.Build) void {
     });
 
     const run_alias_tests = b.addRunArtifact(alias_tests);
+    bindDenBinary(run_alias_tests, install_den, den_bin);
     const alias_test_step = b.step("test-alias", "Run alias tests");
     alias_test_step.dependOn(&run_alias_tests.step);
 
@@ -830,6 +859,7 @@ pub fn build(b: *std.Build) void {
     });
 
     const run_suffix_alias_tests = b.addRunArtifact(suffix_alias_tests);
+    bindDenBinary(run_suffix_alias_tests, install_den, den_bin);
     const suffix_alias_test_step = b.step("test-suffix-alias", "Run suffix alias tests");
     suffix_alias_test_step.dependOn(&run_suffix_alias_tests.step);
 
@@ -845,6 +875,7 @@ pub fn build(b: *std.Build) void {
     });
 
     const run_job_control_tests = b.addRunArtifact(job_control_tests);
+    bindDenBinary(run_job_control_tests, install_den, den_bin);
     const job_control_test_step = b.step("test-job-control", "Run job control tests");
     job_control_test_step.dependOn(&run_job_control_tests.step);
 
@@ -875,6 +906,7 @@ pub fn build(b: *std.Build) void {
     });
 
     const run_pipeline_tests = b.addRunArtifact(pipeline_tests);
+    bindDenBinary(run_pipeline_tests, install_den, den_bin);
     const pipeline_test_step = b.step("test-pipeline", "Run pipeline integration tests");
     pipeline_test_step.dependOn(&run_pipeline_tests.step);
 
@@ -890,6 +922,7 @@ pub fn build(b: *std.Build) void {
     });
 
     const run_chaining_tests = b.addRunArtifact(chaining_tests);
+    bindDenBinary(run_chaining_tests, install_den, den_bin);
     const chaining_test_step = b.step("test-chaining", "Run chaining integration tests");
     chaining_test_step.dependOn(&run_chaining_tests.step);
 
@@ -906,6 +939,7 @@ pub fn build(b: *std.Build) void {
     });
 
     const run_compound_tests = b.addRunArtifact(compound_tests);
+    bindDenBinary(run_compound_tests, install_den, den_bin);
     run_compound_tests.step.dependOn(b.getInstallStep());
     const compound_test_step = b.step("test-compound", "Run compound command integration tests (den -c)");
     compound_test_step.dependOn(&run_compound_tests.step);
@@ -922,6 +956,7 @@ pub fn build(b: *std.Build) void {
     });
 
     const run_scripting_tests = b.addRunArtifact(scripting_tests);
+    bindDenBinary(run_scripting_tests, install_den, den_bin);
     const scripting_test_step = b.step("test-scripting", "Run scripting integration tests");
     scripting_test_step.dependOn(&run_scripting_tests.step);
 
