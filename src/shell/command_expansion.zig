@@ -4,7 +4,8 @@
 const std = @import("std");
 const types = @import("../types/mod.zig");
 const IO = @import("../utils/io.zig").IO;
-const Expansion = @import("../utils/expansion.zig").Expansion;
+const expansion_mod = @import("../utils/expansion.zig");
+const Expansion = expansion_mod.Expansion;
 const Glob = @import("../utils/glob.zig").Glob;
 const BraceExpander = @import("../utils/brace.zig").BraceExpander;
 const Shell = @import("../shell.zig").Shell;
@@ -106,6 +107,143 @@ pub const Quoting = enum {
     single,
 };
 
+/// A `$@`-style reference inside a word: where it sits, and what it selects.
+pub const AtReference = struct {
+    /// Index of the `$`.
+    start: usize,
+    /// One past the end of the reference.
+    end: usize,
+    /// What goes to `positionalFields`: `@`, `@:2`, `@:2:2`.
+    content: []const u8,
+};
+
+/// Find the first `$@`-style reference in `word`.
+///
+/// Only the `@` forms qualify. `$*` and `${*}` join their parameters into a
+/// single field, which the ordinary path already does correctly, and `${#@}` is a
+/// count rather than a list -- it begins with `#`, so it is not matched here.
+///
+/// A `$` behind a backslash is escaped, and a `$` inside single quotes within the
+/// word is literal; both are skipped.
+pub fn findAtReference(word: []const u8) ?AtReference {
+    var i: usize = 0;
+    var in_single = false;
+    while (i < word.len) : (i += 1) {
+        const c = word[i];
+        if (c == '\\') {
+            i += 1;
+            continue;
+        }
+        if (c == '\'') {
+            in_single = !in_single;
+            continue;
+        }
+        if (in_single or c != '$' or i + 1 >= word.len) continue;
+
+        if (word[i + 1] == '@') {
+            return .{ .start = i, .end = i + 2, .content = word[i + 1 .. i + 2] };
+        }
+        if (word[i + 1] != '{') continue;
+
+        var depth: u32 = 1;
+        var j = i + 2;
+        while (j < word.len) : (j += 1) {
+            if (word[j] == '{') {
+                depth += 1;
+            } else if (word[j] == '}') {
+                depth -= 1;
+                if (depth == 0) break;
+            }
+        }
+        if (j >= word.len) continue;
+        const content = word[i + 2 .. j];
+        if (content.len > 0 and content[0] == '@') {
+            return .{ .start = i, .end = j + 1, .content = content };
+        }
+    }
+    return null;
+}
+
+/// Append one field per positional parameter, joining the surrounding text onto
+/// the first and last.
+///
+/// `"pre$@post"` with parameters a b c is three fields: `prea`, `b`, `cpost`. A
+/// word may hold more than one reference -- `"$@-$@"` with a b is `a`, `b-a`, `b`
+/// -- so this walks the word rather than handling only the first, and carries a
+/// partial field across each one.
+///
+/// Only the surrounding text gets `stripGlobEscapes`, because that came from the
+/// word and carries the tokenizer's escapes. The parameters are already literal
+/// values; stripping them would eat a backslash the caller actually passed.
+pub fn appendAtFields(
+    self: *Shell,
+    expander: *Expansion,
+    word: []const u8,
+    out: *std.ArrayListUnmanaged([]const u8),
+) !void {
+    // The field currently being built: text before a reference, then its first
+    // parameter, and after the last reference whatever text follows.
+    var pending: std.ArrayListUnmanaged(u8) = .empty;
+    defer pending.deinit(self.allocator);
+
+    var emitted = false;
+    var selected_any = false;
+    var pos: usize = 0;
+
+    while (true) {
+        const rel = findAtReference(word[pos..]);
+        if (rel == null) {
+            const tail = try expandAround(self, expander, word[pos..]);
+            defer self.allocator.free(tail);
+            try pending.appendSlice(self.allocator, tail);
+            break;
+        }
+        const ref = rel.?;
+
+        const head = try expandAround(self, expander, word[pos .. pos + ref.start]);
+        defer self.allocator.free(head);
+        try pending.appendSlice(self.allocator, head);
+
+        const fields = expansion_mod.positionalFields(expander, ref.content) orelse &[_][]const u8{};
+        if (fields.len > 0) {
+            selected_any = true;
+            // The first parameter completes the field that was accumulating; the
+            // last one starts the next. Anything between is a field of its own.
+            try pending.appendSlice(self.allocator, fields[0]);
+            if (fields.len > 1) {
+                try out.append(self.allocator, try pending.toOwnedSlice(self.allocator));
+                emitted = true;
+                for (fields[1 .. fields.len - 1]) |mid| {
+                    const copy = try self.allocator.dupe(u8, mid);
+                    errdefer self.allocator.free(copy);
+                    try out.append(self.allocator, copy);
+                }
+                try pending.appendSlice(self.allocator, fields[fields.len - 1]);
+            }
+        }
+        pos += ref.end;
+    }
+
+    // Nothing emitted, nothing pending and no parameter selected means the word
+    // was only an empty `"$@"`: it contributes no field at all, which is what
+    // lets `f "$@"` with nothing set call f with no arguments. One empty
+    // parameter is different -- `set -- ""` must still yield one empty field --
+    // hence `selected_any` rather than testing the length alone.
+    if (pending.items.len > 0 or emitted or selected_any) {
+        try out.append(self.allocator, try pending.toOwnedSlice(self.allocator));
+    }
+}
+
+/// Expand the text on one side of a `$@`, and take the tokenizer's glob escapes
+/// off it. Returns an owned empty string for empty input rather than calling the
+/// expander with nothing.
+fn expandAround(self: *Shell, expander: *Expansion, text: []const u8) ![]u8 {
+    if (text.len == 0) return try self.allocator.alloc(u8, 0);
+    const expanded = try expander.expand(text);
+    defer self.allocator.free(expanded);
+    return try stripGlobEscapes(self.allocator, expanded);
+}
+
 /// Run one word through the expansion pipeline, appending the results to `out`.
 ///
 /// The order is the shell's: parameter, command and arithmetic expansion (with
@@ -133,6 +271,20 @@ pub fn expandWordInto(
         errdefer self.allocator.free(literal);
         try out.append(self.allocator, literal);
         return;
+    }
+
+    // `"$@"` is the one expansion that yields several fields from a quoted word:
+    // one per positional parameter. Without this, `f "$@"` passed a single joined
+    // argument -- $# read 1 where it should read 3 -- and any parameter containing
+    // a space lost its boundary for good. `for` used to paper over the same gap by
+    // matching the literal text `"$@"`.
+    if (quoting != .none) {
+        if (findAtReference(word)) |ref| {
+            if (expansion_mod.positionalFields(expander, ref.content) != null) {
+                try appendAtFields(self, expander, word, out);
+                return;
+            }
+        }
     }
 
     expander.skip_tilde = quoting != .none;

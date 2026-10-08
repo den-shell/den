@@ -129,6 +129,41 @@ fn resolveSliceBounds(spec: SliceSpec, count: usize) struct { start: usize, end:
     return .{ .start = start, .end = if (stop < start) start else stop };
 }
 
+/// The positional parameters a `@`-reference selects, as a subslice of the
+/// shell's own array -- no copy, because every selection is contiguous.
+///
+/// `content` is what sits between `${` and `}`, or just `@` for a bare `$@`:
+/// `@`, `@:2`, `@:2:2`. Returns null when it is not a `@`-reference.
+///
+/// This exists because a caller sometimes needs the parameters *separately*
+/// rather than joined. Inside double quotes `"$@"` must become one field per
+/// parameter -- the single case in the shell where a quoted word yields more than
+/// one field -- and a joined string cannot be taken apart again once an argument
+/// contains a space.
+pub fn positionalFields(self: *const Expansion, content: []const u8) ?[]const []const u8 {
+    if (std.mem.eql(u8, content, "@")) return self.positional_params;
+    if (content.len >= 2 and content[0] == '@' and content[1] == ':') {
+        // `:-`, `:=`, `:?` and `:+` are the default/alternative operators, not a
+        // slice: `${@:-fallback}` means "fallback when unset", and reading it as
+        // an offset of `-fallback` made it expand to nothing.
+        if (content.len >= 3) {
+            switch (content[2]) {
+                '-', '=', '?', '+' => return null,
+                else => {},
+            }
+        }
+        const spec = parseSliceSpec(content[2..]);
+        // One-based, and 0 behaves as 1, matching ${@:N} above.
+        const adjusted: SliceSpec = .{
+            .offset = if (spec.offset > 0) spec.offset - 1 else spec.offset,
+            .length = spec.length,
+        };
+        const b = resolveSliceBounds(adjusted, self.positional_params.len);
+        return self.positional_params[b.start..b.end];
+    }
+    return null;
+}
+
 fn getRandomValue() u16 {
     if (global_random_state == null) {
         const seed: u64 = if (compat.Instant.now()) |inst|
