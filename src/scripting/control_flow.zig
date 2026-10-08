@@ -335,12 +335,23 @@ pub const ControlFlowExecutor = struct {
         var expander = cmd_exp.makeExpander(self.shell, &storage);
 
         for (loop.items) |item| {
-            // Special case: "$@" in for loops - each positional param becomes a separate item
-            if (std.mem.eql(u8, item, "\"$@\"") or std.mem.eql(u8, item, "$@")) {
-                for (pp_slice[0..pp_count]) |param| {
-                    try expanded_items.append(self.allocator, try self.allocator.dupe(u8, param));
+            // A *quoted* `$@` reference yields one item per positional parameter,
+            // whatever text surrounds it. This used to match the literal string
+            // `"$@"`, so `"${@}"`, `"${@:2}"` and `"pre$@"` each collapsed into a
+            // single item; it shares the command-argument implementation now, so
+            // the two cannot disagree about what a field is.
+            //
+            // Only quoted. An unquoted `$@` is subject to IFS splitting, which the
+            // regular path below does -- routing it here instead kept `"a b"` as
+            // one item where the shell must break it into two.
+            if (item.len >= 2 and item[0] == '"' and item[item.len - 1] == '"') {
+                const at_body = item[1 .. item.len - 1];
+                if (cmd_exp.findAtReference(at_body)) |ref| {
+                    if (expansion_mod.positionalFields(&expander, ref.content) != null) {
+                        try cmd_exp.appendAtFields(self.shell, &expander, at_body, &expanded_items);
+                        continue;
+                    }
                 }
-                continue;
             }
             // Special case: "$*" or $* - all params as one string
             if (std.mem.eql(u8, item, "\"$*\"") or std.mem.eql(u8, item, "$*")) {

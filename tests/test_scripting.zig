@@ -1661,3 +1661,188 @@ test "expansion: string substring extraction is unaffected" {
     try test_utils.TestAssert.expectEqual(@as(u8, 0), result.exit_code);
     try test_utils.TestAssert.expectContains(result.stdout, "[bcdef][bc][ef][def][]");
 }
+
+// =============================================================================
+// "$@" Produces One Field Per Positional Parameter
+// =============================================================================
+//
+// `"$@"` is the only expansion that yields several fields from a *quoted* word.
+// den joined them into one string, so `f "$@"` passed a single argument -- $# read
+// 1 where it should read 3 -- and any parameter containing a space lost its
+// boundary irrecoverably. `for` papered over its own case by matching the literal
+// text `"$@"`, which is why `for w in "$@"` looked fine while everything else did
+// not.
+//
+// The surrounding text joins onto the first and last field, a word may hold more
+// than one reference, and an empty `"$@"` contributes no field at all -- which is
+// what lets `f "$@"` with nothing set call f with no arguments.
+
+test "dollar-at: quoted forwarding passes separate arguments" {
+    const allocator = std.testing.allocator;
+    var fixture = try test_utils.DenShellFixture.init(allocator);
+    defer fixture.deinit();
+
+    const result = try fixture.exec(
+        "f() { echo \"n=$# 1=$1 2=$2 3=$3\"; }; set -- p q r; f \"$@\"",
+    );
+    defer allocator.free(result.stdout);
+    defer allocator.free(result.stderr);
+
+    try test_utils.TestAssert.expectEqual(@as(u8, 0), result.exit_code);
+    try test_utils.TestAssert.expectContains(result.stdout, "n=3 1=p 2=q 3=r");
+}
+
+test "dollar-at: a parameter containing a space keeps its boundary" {
+    const allocator = std.testing.allocator;
+    var fixture = try test_utils.DenShellFixture.init(allocator);
+    defer fixture.deinit();
+
+    // The reason you quote "$@" in the first place. Joining produced <a b c>.
+    const result = try fixture.exec("set -- \"a b\" c; printf '<%s>\\n' \"$@\"");
+    defer allocator.free(result.stdout);
+    defer allocator.free(result.stderr);
+
+    try test_utils.TestAssert.expectEqual(@as(u8, 0), result.exit_code);
+    try test_utils.TestAssert.expectContains(result.stdout, "<a b>");
+    try test_utils.TestAssert.expectContains(result.stdout, "<c>");
+}
+
+test "dollar-at: surrounding text joins the first and last field" {
+    const allocator = std.testing.allocator;
+    var fixture = try test_utils.DenShellFixture.init(allocator);
+    defer fixture.deinit();
+
+    const result = try fixture.exec("set -- a b c; printf '<%s>\\n' \"pre$@post\"");
+    defer allocator.free(result.stdout);
+    defer allocator.free(result.stderr);
+
+    try test_utils.TestAssert.expectContains(result.stdout, "<prea>");
+    try test_utils.TestAssert.expectContains(result.stdout, "<b>");
+    try test_utils.TestAssert.expectContains(result.stdout, "<cpost>");
+}
+
+test "dollar-at: more than one reference in a word" {
+    const allocator = std.testing.allocator;
+    var fixture = try test_utils.DenShellFixture.init(allocator);
+    defer fixture.deinit();
+
+    // a, then b joined to the second reference's a, then its b.
+    const result = try fixture.exec("set -- a b; printf '<%s>\\n' \"$@-$@\"");
+    defer allocator.free(result.stdout);
+    defer allocator.free(result.stderr);
+
+    try test_utils.TestAssert.expectContains(result.stdout, "<a>");
+    try test_utils.TestAssert.expectContains(result.stdout, "<b-a>");
+}
+
+test "dollar-at: no parameters means no argument at all" {
+    const allocator = std.testing.allocator;
+    var fixture = try test_utils.DenShellFixture.init(allocator);
+    defer fixture.deinit();
+
+    const bare = try fixture.exec("f() { echo \"n=$#\"; }; set --; f \"$@\"");
+    defer allocator.free(bare.stdout);
+    defer allocator.free(bare.stderr);
+    try test_utils.TestAssert.expectContains(bare.stdout, "n=0");
+
+    // With text around it the word survives as one field, so it is still an
+    // argument -- `selected_any` in appendAtFields is what separates these.
+    const padded = try fixture.exec("f() { echo \"n=$# 1=[$1]\"; }; set --; f \"pre$@post\"");
+    defer allocator.free(padded.stdout);
+    defer allocator.free(padded.stderr);
+    try test_utils.TestAssert.expectContains(padded.stdout, "n=1 1=[prepost]");
+}
+
+test "dollar-at: an empty parameter is still a field" {
+    const allocator = std.testing.allocator;
+    var fixture = try test_utils.DenShellFixture.init(allocator);
+    defer fixture.deinit();
+
+    const result = try fixture.exec("f() { echo \"n=$#\"; }; set -- a \"\" c; f \"$@\"");
+    defer allocator.free(result.stdout);
+    defer allocator.free(result.stderr);
+
+    try test_utils.TestAssert.expectContains(result.stdout, "n=3");
+}
+
+test "dollar-at: braced and sliced forms split too" {
+    const allocator = std.testing.allocator;
+    var fixture = try test_utils.DenShellFixture.init(allocator);
+    defer fixture.deinit();
+
+    const braced = try fixture.exec("f() { echo \"n=$#\"; }; set -- a b c; f \"${@}\"");
+    defer allocator.free(braced.stdout);
+    defer allocator.free(braced.stderr);
+    try test_utils.TestAssert.expectContains(braced.stdout, "n=3");
+
+    const sliced = try fixture.exec("f() { echo \"n=$# 1=$1\"; }; set -- a b c d; f \"${@:2}\"");
+    defer allocator.free(sliced.stdout);
+    defer allocator.free(sliced.stderr);
+    try test_utils.TestAssert.expectContains(sliced.stdout, "n=3 1=b");
+}
+
+test "dollar-at: star stays a single field" {
+    const allocator = std.testing.allocator;
+    var fixture = try test_utils.DenShellFixture.init(allocator);
+    defer fixture.deinit();
+
+    // "$*" joins; only @ splits. Getting this wrong would make the two identical.
+    const result = try fixture.exec("f() { echo \"n=$# 1=[$1]\"; }; set -- a b c; f \"$*\"");
+    defer allocator.free(result.stdout);
+    defer allocator.free(result.stderr);
+
+    try test_utils.TestAssert.expectContains(result.stdout, "n=1 1=[a b c]");
+}
+
+test "dollar-at: for loops see one item per parameter" {
+    const allocator = std.testing.allocator;
+    var fixture = try test_utils.DenShellFixture.init(allocator);
+    defer fixture.deinit();
+
+    // All four used to collapse to one item except the literal "$@".
+    const scripts = [_][]const u8{
+        "set -- a b c; for w in \"$@\"; do echo \"<$w>\"; done",
+        "set -- a b c; for w in \"${@}\"; do echo \"<$w>\"; done",
+        "set -- a b c d; shift; for w in \"${@:2}\"; do echo \"<$w>\"; done",
+        "set -- b c; for w in \"pre$@\"; do echo \"<$w>\"; done",
+    };
+    for (scripts) |script| {
+        const result = try fixture.exec(script);
+        defer allocator.free(result.stdout);
+        defer allocator.free(result.stderr);
+        try test_utils.TestAssert.expectEqual(@as(u8, 0), result.exit_code);
+        try test_utils.TestAssert.expectContains(result.stdout, "<c>");
+    }
+}
+
+test "dollar-at: unquoted still splits on IFS" {
+    const allocator = std.testing.allocator;
+    var fixture = try test_utils.DenShellFixture.init(allocator);
+    defer fixture.deinit();
+
+    // Unquoted $@ is subject to field splitting, so "a b" becomes two words. I
+    // broke this once by routing unquoted items through the quoted path.
+    const result = try fixture.exec("set -- \"a b\" c; for w in $@; do echo \"<$w>\"; done");
+    defer allocator.free(result.stdout);
+    defer allocator.free(result.stderr);
+
+    try test_utils.TestAssert.expectContains(result.stdout, "<a>");
+    try test_utils.TestAssert.expectContains(result.stdout, "<b>");
+    try test_utils.TestAssert.expectContains(result.stdout, "<c>");
+}
+
+test "dollar-at: colon operators are not slices" {
+    const allocator = std.testing.allocator;
+    var fixture = try test_utils.DenShellFixture.init(allocator);
+    defer fixture.deinit();
+
+    // ${@:-word} is a default, not an offset of `-word`. Reading it as a slice
+    // made it expand to nothing, which I did briefly.
+    const result = try fixture.exec("set --; echo \"[${@:-fallback}]\"; echo \"[${@:+alt}]\"");
+    defer allocator.free(result.stdout);
+    defer allocator.free(result.stderr);
+
+    try test_utils.TestAssert.expectEqual(@as(u8, 0), result.exit_code);
+    try test_utils.TestAssert.expectContains(result.stdout, "[fallback]");
+    try test_utils.TestAssert.expectContains(result.stdout, "[]");
+}
