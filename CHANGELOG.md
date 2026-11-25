@@ -1,5 +1,142 @@
 # Changelog
 
+[Compare changes](https://github.com/den-shell/den/compare/v0.2.3...v0.2.4)
+
+## 💥 Breaking Changes
+
+- refactor(editor)!: dispatch every key through the keymap ([d839d84](https://github.com/den-shell/den/commit/d839d84)) _(by glennmichael123)_
+
+## 🚀 Features
+
+- **shell**: report prompt and command activity to terminals ([983e31d](https://github.com/den-shell/den/commit/983e31d)) _(by Chris)_
+- **cli**: den import-zsh, to carry a zsh setup across ([2a4f89c](https://github.com/den-shell/den/commit/2a4f89c)) _(by glennmichael123)_
+- **shell**: run startup files for every kind of shell, not just interactive ([e87997a](https://github.com/den-shell/den/commit/e87997a)) _(by glennmichael123)_
+- **builtins**: one canonical list of builtin names ([5bbef05](https://github.com/den-shell/den/commit/5bbef05)) _(by glennmichael123)_
+- **shell**: autoload, resolved from fpath on first use ([2ace02d](https://github.com/den-shell/den/commit/2ace02d)) _(by glennmichael123)_
+- **shell**: compinit, zmodload, emulate and friends ([e5f42ec](https://github.com/den-shell/den/commit/e5f42ec)) _(by glennmichael123)_
+- **compat**: version comparison for is-at-least ([85e5d83](https://github.com/den-shell/den/commit/85e5d83)) _(by glennmichael123)_
+- **shell**: add-zsh-hook ([6af4832](https://github.com/den-shell/den/commit/6af4832)) _(by glennmichael123)_
+- **shell**: preexec and zshexit hooks ([2f71e9a](https://github.com/den-shell/den/commit/2f71e9a)) _(by glennmichael123)_
+- **shell**: the zstyle builtin ([4ac2af9](https://github.com/den-shell/den/commit/4ac2af9)) _(by glennmichael123)_
+- **compat**: add the zstyle database ([c82380e](https://github.com/den-shell/den/commit/c82380e)) _(by glennmichael123)_
+- **shell**: zle -N, shell functions as widgets ([7b380da](https://github.com/den-shell/den/commit/7b380da)) _(by glennmichael123)_
+- **editor**: numeric arguments, in both modes ([7893ed3](https://github.com/den-shell/den/commit/7893ed3)) _(by glennmichael123)_
+- **editor**: yank-pop and redo ([f755cff](https://github.com/den-shell/den/commit/f755cff)) _(by glennmichael123)_
+- **editor**: vi marks and the . repeat ([83c997c](https://github.com/den-shell/den/commit/83c997c)) _(by glennmichael123)_
+- **editor**: vi character searches and text objects ([03b6f9f](https://github.com/den-shell/den/commit/03b6f9f)) _(by glennmichael123)_
+- **editor**: vi operator-motion pairs ([017ba02](https://github.com/den-shell/den/commit/017ba02)) _(by glennmichael123)_
+- **editor**: honour vi numeric counts through the keymap ([74957af](https://github.com/den-shell/den/commit/74957af)) _(by glennmichael123)_
+- **config**: apply keybindings.custom ([2f0860d](https://github.com/den-shell/den/commit/2f0860d)) _(by glennmichael123)_
+- **shell**: add the bindkey builtin ([042f1d2](https://github.com/den-shell/den/commit/042f1d2)) _(by glennmichael123)_
+- **editor**: support macro key bindings ([09b320f](https://github.com/den-shell/den/commit/09b320f)) _(by glennmichael123)_
+- **editor**: probe the keymap ahead of the built-in key handling ([839380c](https://github.com/den-shell/den/commit/839380c)) _(by glennmichael123)_
+- **editor**: add invokeWidget dispatch, and fix a Ctrl+U hang it exposed ([d69e785](https://github.com/den-shell/den/commit/d69e785)) _(by glennmichael123)_
+- **editor**: add keymap storage and comptime default keybindings ([0f81c6e](https://github.com/den-shell/den/commit/0f81c6e)) _(by glennmichael123)_
+- **compat**: add zsh bindkey key-spec parser ([262e70e](https://github.com/den-shell/den/commit/262e70e)) _(by glennmichael123)_
+- **editor**: honour config.keybindings.mode ([20079e1](https://github.com/den-shell/den/commit/20079e1)) _(by glennmichael123)_
+- **parser**: know where lists, pipelines and compound commands end ([9ab85da](https://github.com/den-shell/den/commit/9ab85da)) _(by Chris)_
+
+## 🐛 Bug Fixes
+
+- **release**: restore Windows shell builds ([528b964](https://github.com/den-shell/den/commit/528b964)) _(by Chris)_
+- **expansion**: $@ and $* with the default and alternative operators ([ca862f0](https://github.com/den-shell/den/commit/ca862f0)) _(by glennmichael123)_
+- **expansion**: "$@" expands to one field per parameter ([8f2f2c5](https://github.com/den-shell/den/commit/8f2f2c5)) _(by glennmichael123)_
+- **expansion**: slice the positional parameters ([c8f2ac3](https://github.com/den-shell/den/commit/c8f2ac3)) _(by glennmichael123)_
+- **io**: don't write to stdout from a test binary ([5ebe0d6](https://github.com/den-shell/den/commit/5ebe0d6)) _(by glennmichael123)_
+- **shell**: backtick substitution in a bare assignment ([65b4caf](https://github.com/den-shell/den/commit/65b4caf)) _(by glennmichael123)_
+- **expansion**: parameter operators whose word contains a colon ([d492d1b](https://github.com/den-shell/den/commit/d492d1b)) _(by glennmichael123)_
+- **tokenizer**: don't escape single-quoted $ inside a substitution ([4739ea6](https://github.com/den-shell/den/commit/4739ea6)) _(by glennmichael123)_
+- **build**: compile the plugin API test suite ([4a0f3a2](https://github.com/den-shell/den/commit/4a0f3a2)) _(by glennmichael123)_
+- **build**: make test-modules and test-prompt compile again ([eb434ae](https://github.com/den-shell/den/commit/eb434ae)) _(by glennmichael123)_
+- **help**: one listing, and per-topic help is reachable ([7507289](https://github.com/den-shell/den/commit/7507289)) _(by glennmichael123)_
+- **scripting**: for and case run their substitutions in den ([90d46d9](https://github.com/den-shell/den/commit/90d46d9)) _(by glennmichael123)_
+- **completion**: Tab offers builtins, not only what is on PATH ([8d3cb2b](https://github.com/den-shell/den/commit/8d3cb2b)) _(by glennmichael123)_
+- **builtins**: kill signal names, alias status, grep colour ([61cfcc5](https://github.com/den-shell/den/commit/61cfcc5)) _(by glennmichael123)_
+- **parser**: single quotes suppress backticks, stray parens are an error ([7f6b46b](https://github.com/den-shell/den/commit/7f6b46b)) _(by glennmichael123)_
+- **exec**: negation anywhere, and 126 for what cannot be executed ([ebb4e20](https://github.com/den-shell/den/commit/ebb4e20)) _(by glennmichael123)_
+- **shell**: set -f disables globbing, and set -euo pipefail works ([0acefea](https://github.com/den-shell/den/commit/0acefea)) _(by glennmichael123)_
+- **shell**: malformed function definitions no longer crash ([6712e63](https://github.com/den-shell/den/commit/6712e63)) _(by glennmichael123)_
+- **expansion**: an invalid brace range no longer recurses forever ([6f7d967](https://github.com/den-shell/den/commit/6f7d967)) _(by glennmichael123)_
+- **scripting**: run the command sharing a function's line ([b5d5f5a](https://github.com/den-shell/den/commit/b5d5f5a)) _(by glennmichael123)_
+- **shell**: array assignment anywhere a command can appear ([c46aca6](https://github.com/den-shell/den/commit/c46aca6)) _(by glennmichael123)_
+- **parser**: scan name=(...) as a single word ([aece8bf](https://github.com/den-shell/den/commit/aece8bf)) _(by glennmichael123)_
+- **shell**: expand array assignment elements ([4255f6c](https://github.com/den-shell/den/commit/4255f6c)) _(by glennmichael123)_
+- **exec**: a failed redirection must not exit the shell ([e7dc3fa](https://github.com/den-shell/den/commit/e7dc3fa)) _(by glennmichael123)_
+- **parser**: 2>> appends stderr instead of failing to parse ([05b88f5](https://github.com/den-shell/den/commit/05b88f5)) _(by glennmichael123)_
+- **shell**: redirect shell builtins through the shared code ([324ec1e](https://github.com/den-shell/den/commit/324ec1e)) _(by glennmichael123)_
+- **editor**: recover a key sequence that matches nothing ([0b94a9c](https://github.com/den-shell/den/commit/0b94a9c)) _(by glennmichael123)_
+- **jobs**: a backgrounded list reports the status of what it ran ([078f5b6](https://github.com/den-shell/den/commit/078f5b6)) _(by glennmichael123)_
+- **jobs**: make background jobs and wait behave like zsh ([1fc0905](https://github.com/den-shell/den/commit/1fc0905)) _(by glennmichael123)_
+- **shell**: expand a chained alias all the way ([ef00127](https://github.com/den-shell/den/commit/ef00127)) _(by glennmichael123)_
+- **executor**: recognise every shell-level builtin, not a stale copy ([127e274](https://github.com/den-shell/den/commit/127e274)) _(by glennmichael123)_
+- **editor**: record and replay real editing commands in macros ([4322993](https://github.com/den-shell/den/commit/4322993)) _(by glennmichael123)_
+- **editor**: give an unbound key its own widget ([10f9e42](https://github.com/den-shell/den/commit/10f9e42)) _(by glennmichael123)_
+- **ci**: the Tests workflow passes again ([5907d1d](https://github.com/den-shell/den/commit/5907d1d)) _(by Chris)_
+- **line-editor**: paste is literal input, and typed-ahead input is kept ([bd8a955](https://github.com/den-shell/den/commit/bd8a955)) _(by Chris)_
+- **line-editor**: highlight the line without changing it ([53be872](https://github.com/den-shell/den/commit/53be872)) _(by Chris)_
+- **executor**: no "did you mean" for reserved words, and each name once ([63cefdb](https://github.com/den-shell/den/commit/63cefdb)) _(by Chris)_
+- **shell**: run compound commands anywhere in a list or pipeline ([e51c848](https://github.com/den-shell/den/commit/e51c848)) _(by Chris)_
+- **docs**: point the config at the package that exists, and at the right key ([376f7d7](https://github.com/den-shell/den/commit/376f7d7)) _(by Chris)_
+
+## ♻️ Code Refactoring
+
+- **scripting**: for loops share the "$@" field logic ([7972e63](https://github.com/den-shell/den/commit/7972e63)) _(by glennmichael123)_
+- **builtins**: every inventory reads the canonical list ([c227a71](https://github.com/den-shell/den/commit/c227a71)) _(by glennmichael123)_
+- **shell**: share the word-expansion pipeline ([71c4284](https://github.com/den-shell/den/commit/71c4284)) _(by glennmichael123)_
+- **editor**: route all input through nextByte ([989ea92](https://github.com/den-shell/den/commit/989ea92)) _(by glennmichael123)_
+- **editor**: extract acceptLine and add test seams ([07c11fb](https://github.com/den-shell/den/commit/07c11fb)) _(by glennmichael123)_
+- **scripting**: read multi-line input one complete command at a time ([855d89a](https://github.com/den-shell/den/commit/855d89a)) _(by Chris)_
+
+## 📚 Documentation
+
+- which startup file a setting belongs in ([797454c](https://github.com/den-shell/den/commit/797454c)) _(by glennmichael123)_
+- point contributors at where builtins actually live ([dd8c7d3](https://github.com/den-shell/den/commit/dd8c7d3)) _(by glennmichael123)_
+- **help**: a line for every builtin, and honest about the stubs ([64018cc](https://github.com/den-shell/den/commit/64018cc)) _(by glennmichael123)_
+- document the zsh startup preamble ([da830c8](https://github.com/den-shell/den/commit/da830c8)) _(by glennmichael123)_
+- document zstyle, and what it does not do ([c4ae1ce](https://github.com/den-shell/den/commit/c4ae1ce)) _(by glennmichael123)_
+- zle -N is implemented ([4c1aa20](https://github.com/den-shell/den/commit/4c1aa20)) _(by glennmichael123)_
+- correct the menu and numeric-count behaviour ([bdbb8af](https://github.com/den-shell/den/commit/bdbb8af)) _(by glennmichael123)_
+- document bindkey ([eb0fea6](https://github.com/den-shell/den/commit/eb0fea6)) _(by glennmichael123)_
+
+## 🧪 Tests
+
+- **build**: bind behavioural suites to the den binary they exercise ([c58d48a](https://github.com/den-shell/den/commit/c58d48a)) _(by glennmichael123)_
+- **build**: reach the five orphaned suites from test-all ([17f170d](https://github.com/den-shell/den/commit/17f170d)) _(by glennmichael123)_
+- **builtins**: keep help and the builtin list in agreement ([469ca8d](https://github.com/den-shell/den/commit/469ca8d)) _(by glennmichael123)_
+- **builtins**: cover builtin completion and the listings ([712f09c](https://github.com/den-shell/den/commit/712f09c)) _(by glennmichael123)_
+- the remaining 317 tests now run den, not /bin/sh ([844344b](https://github.com/den-shell/den/commit/844344b)) _(by glennmichael123)_
+- **utils**: give the den fixture the surface the sh one had ([d807667](https://github.com/den-shell/den/commit/d807667)) _(by glennmichael123)_
+- **fuzzing**: generate inputs instead of listing them ([8750871](https://github.com/den-shell/den/commit/8750871)) _(by glennmichael123)_
+- **utils**: a hung den fails the suite instead of blocking it ([96b969f](https://github.com/den-shell/den/commit/96b969f)) _(by glennmichael123)_
+- **fuzzing**: run den, and fail on a crash ([3d9f61d](https://github.com/den-shell/den/commit/3d9f61d)) _(by glennmichael123)_
+- **utils**: den fixtures share one spawn, and report a crash ([88714cc](https://github.com/den-shell/den/commit/88714cc)) _(by glennmichael123)_
+- **builtins**: cover function definitions in a script file ([bf762e2](https://github.com/den-shell/den/commit/bf762e2)) _(by glennmichael123)_
+- **builtins**: cover array assignment as a chain segment ([6deb300](https://github.com/den-shell/den/commit/6deb300)) _(by glennmichael123)_
+- **builtins**: cover array element expansion ([ef1bd30](https://github.com/den-shell/den/commit/ef1bd30)) _(by glennmichael123)_
+- **builtins**: cover redirection on the shell-builtin path ([346df5e](https://github.com/den-shell/den/commit/346df5e)) _(by glennmichael123)_
+- **builtins**: cover autoload ([5308850](https://github.com/den-shell/den/commit/5308850)) _(by glennmichael123)_
+- **history**: drive den, hermetically ([72dd082](https://github.com/den-shell/den/commit/72dd082)) _(by glennmichael123)_
+
+## 🧹 Chores
+
+- remove 21 files unreachable from every build root ([32b6677](https://github.com/den-shell/den/commit/32b6677)) _(by glennmichael123)_
+- **prompt**: drop the dead prompt coordinator ([b96e32b](https://github.com/den-shell/den/commit/b96e32b)) _(by glennmichael123)_
+- **shell**: list the zsh preamble builtins ([41795b7](https://github.com/den-shell/den/commit/41795b7)) _(by glennmichael123)_
+- **shell**: list zstyle among the builtins ([669cf4a](https://github.com/den-shell/den/commit/669cf4a)) _(by glennmichael123)_
+- remove the dead repl module ([28180d1](https://github.com/den-shell/den/commit/28180d1)) _(by glennmichael123)_
+- **shell**: list bindkey and zle in the builtin inventories ([284536c](https://github.com/den-shell/den/commit/284536c)) _(by glennmichael123)_
+- **zig**: build on zig 0.17.0-dev.2313 ([461d690](https://github.com/den-shell/den/commit/461d690)) _(by Chris)_
+- **deps**: move to TypeScript 7 ([e754c15](https://github.com/den-shell/den/commit/e754c15)) _(by Chris)_
+
+## 📄 Miscellaneous
+
+- Merge origin/main into the bindkey work ([c3ca456](https://github.com/den-shell/den/commit/c3ca456)) _(by glennmichael123)_
+
+## Contributors
+
+- _Chris_
+- _glennmichael123_
+
 [Compare changes](https://github.com/den-shell/den/compare/v0.2.2...v0.2.3)
 
 ## 🚀 Features
