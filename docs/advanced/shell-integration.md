@@ -19,6 +19,8 @@ Keep environment, `$PATH`, and aliases in POSIX-compatible files and `source` th
 
 Set your terminal's "shell to run" to Den's path (e.g. `~/.local/bin/den`), or rely on the login shell set via `chsh`. Den emits a two-line prompt with a `❯` symbol by default; customize it in [Themes](../THEMES.md).
 
+Set `DEN_SHELL_INTEGRATION=1` in the terminal's environment to enable [OSC 133 prompt and command markers](https://learn.microsoft.com/en-us/windows/terminal/tutorials/shell-integration). Interactive terminal sessions report when the prompt is ready, when a command starts, and its exit status. Scripts, redirected output, and `TERM=dumb` are unaffected.
+
 ## Editor / LSP integration
 
 Den ships a Language Server for shell scripts:

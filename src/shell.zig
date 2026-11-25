@@ -1013,6 +1013,10 @@ pub const Shell = struct {
 
     pub fn run(self: *Shell) !void {
         self.running = true;
+        const shell_integration = self.is_interactive and
+            std.mem.eql(u8, getenv("DEN_SHELL_INTEGRATION") orelse "", "1") and
+            !std.mem.eql(u8, getenv("TERM") orelse "", "dumb") and
+            ansi.isTerminal();
 
         // Onboarding banner is opt-in (DEN_BANNER=1). A daily-driver login shell
         // shouldn't greet you on every new terminal, and printing it
@@ -1072,6 +1076,7 @@ pub const Shell = struct {
                     if (self.line_editor == null) {
                         const prompt_str = try self.getPromptString();
                         var editor = LineEditor.init(self.allocator, prompt_str);
+                        editor.shell_integration = shell_integration;
                         editor.syntax_highlighting = self.config.line_editor.syntax_highlighting;
                         editor.autosuggestions = self.config.line_editor.autosuggestions;
                         editor.suggestion_min_chars = @max(1, self.config.line_editor.suggestion_min_chars);
@@ -1127,6 +1132,7 @@ pub const Shell = struct {
 
                     // Use line editor for interactive input
                     break :blk self.line_editor.?.readLine() catch |err| {
+                        self.line_editor.?.markCommandEnd(null);
                         if (err == error.Interrupted) {
                             try IO.print("\n", .{});
                             continue;
@@ -1153,6 +1159,7 @@ pub const Shell = struct {
             };
 
             if (line == null) {
+                if (self.line_editor) |*editor| editor.markCommandEnd(null);
                 // EOF (Ctrl+D) - graceful shutdown
                 if (std.c.getenv("DEN_BANNER") != null) try IO.print("\nGoodbye from Den!\n", .{});
                 self.running = false;
@@ -1169,17 +1176,22 @@ pub const Shell = struct {
 
             const trimmed = std.mem.trim(u8, line.?, &std.ascii.whitespace);
 
-            if (trimmed.len == 0) continue;
+            if (trimmed.len == 0) {
+                if (self.line_editor) |*editor| editor.markCommandEnd(null);
+                continue;
+            }
 
             // Handle multiline input (function definitions)
             if (self.multiline_mode != .none) {
                 // Continue collecting lines for multiline construct
                 try self.handleMultilineContinuation(trimmed);
+                if (self.line_editor) |*editor| editor.markCommandEnd(null);
                 continue;
             }
 
             // Check if this line starts a function definition
             if (try self.checkFunctionDefinitionStart(trimmed)) {
+                if (self.line_editor) |*editor| editor.markCommandEnd(null);
                 // handleMultilineStart was called and either:
                 // - Function was defined (single-line) and we continue
                 // - We're now in multiline mode and will continue on next iteration
@@ -1195,7 +1207,7 @@ pub const Shell = struct {
                 IO.eprint("History expansion error: {}\n", .{err}) catch {};
                 // On error, continue with original command
                 if (!keep_private) try self.addToHistory(trimmed);
-                try self.executeCommand(trimmed);
+                try self.executePromptCommand(trimmed);
                 continue;
             };
             defer self.allocator.free(maybe_expanded.text);
@@ -1213,6 +1225,10 @@ pub const Shell = struct {
 
             // Handle exit command
             if (std.mem.eql(u8, command, "exit")) {
+                if (self.line_editor) |*editor| {
+                    editor.markCommandStart();
+                    editor.markCommandEnd(0);
+                }
                 if (std.c.getenv("DEN_BANNER") != null) try IO.print("Goodbye from Den!\n", .{});
                 self.running = false;
                 break; // Exit loop and let deinit() handle cleanup
@@ -1225,7 +1241,7 @@ pub const Shell = struct {
             if (self.is_interactive) dir_hooks.runPreexecHooks(self, command);
 
             // Execute command
-            try self.executeCommand(command);
+            try self.executePromptCommand(command);
 
             // Clear any pending SIGINT from child process termination
             _ = signals.checkSignal();
@@ -1248,6 +1264,15 @@ pub const Shell = struct {
 
         // Fire EXIT trap before leaving
         self.executeExitTrap();
+    }
+
+    fn executePromptCommand(self: *Shell, command: []const u8) !void {
+        if (self.line_editor) |*editor| editor.markCommandStart();
+        self.executeCommand(command) catch |err| {
+            if (self.line_editor) |*editor| editor.markCommandEnd(1);
+            return err;
+        };
+        if (self.line_editor) |*editor| editor.markCommandEnd(self.last_exit_code);
     }
 
     /// Run a script file with positional parameters (using ScriptManager)

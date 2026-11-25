@@ -322,6 +322,8 @@ pub const LineEditor = struct {
     macro_stored_len: usize = 0,
     // Transient prompt support
     transient_prompt: ?[]const u8 = null, // Minimal prompt to replace full prompt after Enter
+    /// Emit OSC 133 prompt and command boundaries for an enclosing terminal.
+    shell_integration: bool = false,
     // Set when the line being returned contains bracketed-paste text. Pasted
     // text is literal input: the shell skips history expansion (`!`) for it.
     pasted: bool = false,
@@ -1951,7 +1953,23 @@ pub const LineEditor = struct {
         return .{ .accepted = try self.allocator.dupe(u8, self.buffer[0..self.length]) };
     }
 
+    pub fn markCommandStart(self: *LineEditor) void {
+        if (self.shell_integration) self.writeBytes("\x1b]133;C\x1b\\") catch {};
+    }
+
+    pub fn markCommandEnd(self: *LineEditor, status: ?i32) void {
+        if (!self.shell_integration) return;
+        if (status) |code| {
+            var buffer: [40]u8 = undefined;
+            const marker = std.fmt.bufPrint(&buffer, "\x1b]133;D;{d}\x1b\\", .{code}) catch return;
+            self.writeBytes(marker) catch {};
+        } else {
+            self.writeBytes("\x1b]133;D\x1b\\") catch {};
+        }
+    }
+
     pub fn readLine(self: *LineEditor) !?[]u8 {
+        if (self.shell_integration) self.writeBytes("\x1b]133;A\x1b\\") catch {};
 
         // Display prompt BEFORE entering raw mode so ANSI codes work
         try self.displayPrompt();
@@ -1966,6 +1984,7 @@ pub const LineEditor = struct {
         // Den hands control back. See handlePaste for how the text is consumed.
         self.writeBytes("\x1B[?2004h") catch {};
         defer self.writeBytes("\x1B[?2004l") catch {};
+        if (self.shell_integration) self.writeBytes("\x1b]133;B\x1b\\") catch {};
 
         // Reset state
         self.cursor = 0;
@@ -5550,6 +5569,23 @@ test "a multi-line paste becomes one multi-line command, submitted by Enter" {
     const line = try s.submit();
     defer std.testing.allocator.free(line);
     try std.testing.expectEqualStrings("for i in 1 2\ndo\n  echo $i\ndone", line);
+}
+
+test "shell integration reports readiness after bracketed paste is active" {
+    var s: Session = undefined;
+    s.init("false\r");
+    defer s.deinit();
+    s.editor.shell_integration = true;
+    const line = try s.submit();
+    defer std.testing.allocator.free(line);
+    s.editor.markCommandStart();
+    s.editor.markCommandEnd(1);
+
+    var after: usize = 0;
+    for ([_][]const u8{ "\x1b]133;A\x1b\\", "\x1b[?2004h", "\x1b]133;B\x1b\\", "\x1b[?2004l", "\x1b]133;C\x1b\\", "\x1b]133;D;1\x1b\\" }) |marker| {
+        const index = std.mem.indexOfPos(u8, s.screen.items, after, marker) orelse return error.MissingMarker;
+        after = index + marker.len;
+    }
 }
 
 test "pasting in the middle keeps the text after the cursor" {
