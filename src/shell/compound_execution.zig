@@ -211,9 +211,7 @@ const Timer = struct {
     }
 
     fn nowNs() i128 {
-        var ts: std.c.timespec = undefined;
-        _ = std.c.clock_gettime(.MONOTONIC, &ts);
-        return @as(i128, ts.sec) * 1_000_000_000 + ts.nsec;
+        return std.Io.Clock.awake.now(std.Options.debug_io).nanoseconds;
     }
 
     fn start() Timer {
@@ -241,6 +239,7 @@ const Timer = struct {
 fn runCompound(self: *Shell, arena: std.mem.Allocator, src: []const u8, cmd: compound.Command) anyerror!void {
     const redirs = std.mem.trim(u8, cmd.redirections.text(src), " \t\r\n");
     if (redirs.len == 0) return runCompoundCore(self, arena, src, cmd);
+    if (comptime builtin.os.tag == .windows) return runCompoundCore(self, arena, src, cmd);
 
     var saved = SavedFds{};
     defer saved.restore();
@@ -574,7 +573,6 @@ const SavedFds = struct {
 /// Parse and expand `redirs` with the ordinary command parser (as the
 /// redirections of a no-op command), then apply them to this process.
 fn applyRedirections(self: *Shell, arena: std.mem.Allocator, redirs: []const u8, saved: *SavedFds) !void {
-    if (comptime builtin.os.tag == .windows) return;
     const text = try std.fmt.allocPrint(arena, ": {s}", .{redirs});
 
     var tokenizer = parser_mod.Tokenizer.init(self.allocator, text);

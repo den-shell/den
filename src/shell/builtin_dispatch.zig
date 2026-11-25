@@ -21,57 +21,57 @@ pub const DispatchResult = enum {
 /// bottom can check it against the canonical name list.
 const shell_builtins = [_][]const u8{
     // Job control
-    "jobs",      "fg",       "bg",       "wait",     "disown",
+    "jobs",         "fg",       "bg",       "wait",         "disown",
     // History and completion
-    "history",   "complete", "compgen",
+    "history",      "complete", "compgen",
     // Alias management
-     "alias",    "unalias",
+     "alias",        "unalias",
     // Command type inspection
-    "type",      "which",
+    "type",         "which",
     // Source/eval/command
-       "source",   ".",        "eval",
-    "command",   "builtin",
+       "source",   ".",            "eval",
+    "command",      "builtin",
     // I/O builtins
-     "read",     "printf",   "mapfile",
+     "read",     "printf",       "mapfile",
     "readarray",
     // Test/conditionals
-    "test",     "[",        "[[",
+       "test",     "[",        "[[",
     // Directory stack
-          "pushd",
-    "popd",      "dirs",
+              "pushd",
+    "popd",         "dirs",
     // Trivial builtins
-        "true",     "false",    ":",
+        "true",     "false",        ":",
     // Utility builtins
-    "sleep",     "help",     "clear",
+    "sleep",        "help",     "clear",
     // Path utilities
-       "basename", "dirname",
+       "basename",     "dirname",
     "realpath",
     // System info
-     "uname",    "whoami",
+        "uname",    "whoami",
     // Control flow
-      "return",   "break",
-    "continue",  "shift",
+      "return",       "break",
+    "continue",     "shift",
     // Variable declaration
-       "local",    "declare",  "readonly",
-    "typeset",   "let",
+       "local",    "declare",      "readonly",
+    "typeset",      "let",
     // Process control
          "exec",     "kill",
     // Misc
-        "times",
-    "time",      "umask",    "hash",     "shopt",    "caller",
-    "enable",    "setopt",   "unsetopt", "ai",       "wasm",
+            "times",
+    "time",         "umask",    "hash",     "shopt",        "caller",
+    "enable",       "setopt",   "unsetopt", "ai",           "wasm",
     // Line editing
-    "bindkey",   "zle",      "zstyle",
+    "bindkey",      "zle",      "zstyle",
     // Hooks
-    "add-zsh-hook",
+      "add-zsh-hook",
     // zsh startup preamble
-    "compinit",   "bashcompinit", "compdef",
-    "zmodload",   "emulate",      "is-at-least",  "autoload",
+    "compinit",
+    "bashcompinit", "compdef",  "zmodload", "emulate",      "is-at-least",
+    "autoload",
 };
 
 /// Check if a command name is a shell-level builtin (handled by dispatchBuiltin)
 pub fn isShellBuiltin(name: []const u8) bool {
-
     for (shell_builtins) |b| {
         if (std.mem.eql(u8, name, b)) return true;
     }

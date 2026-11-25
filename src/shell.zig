@@ -553,8 +553,11 @@ pub const Shell = struct {
                 name_buf[name.len] = 0;
                 @memcpy(value_buf[0..version_val.len], version_val);
                 value_buf[version_val.len] = 0;
-                const c_env = @import("executor/mod.zig").libc_env;
-                _ = c_env.setenv(name_buf[0..name.len :0], value_buf[0..version_val.len :0], 1);
+                if (builtin.os.tag == .windows) {
+                    _ = @import("windows_compat").SetEnvironmentVariableA(name_buf[0..name.len :0], value_buf[0..version_val.len :0]);
+                } else {
+                    _ = executor_mod.libc_env.setenv(name_buf[0..name.len :0], value_buf[0..version_val.len :0], 1);
+                }
             }
         }
 

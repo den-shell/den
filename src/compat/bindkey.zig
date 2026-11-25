@@ -430,10 +430,10 @@ test "formatKeySeq round-trips every single byte" {
 test "formatKeySeq round-trips a notation corpus" {
     // The specs a real .zshrc actually contains.
     const corpus = [_][]const u8{
-        "^A",     "^E",        "^K",     "^U",     "^W",      "^R",      "^Y",
-        "^T",     "^?",        "^X^E",   "^X(",    "^[[A",    "^[[B",    "^[[C",
-        "^[[D",   "^[[3~",     "^[[H",   "^[[F",   "^[[Z",    "^[[1;5C", "^[[1;5D",
-        "^[[200~", "^[b",      "^[f",    "^[d",    "^[^?",    "jj",      "\\^",
+        "^A",      "^E",    "^K",   "^U",   "^W",   "^R",      "^Y",
+        "^T",      "^?",    "^X^E", "^X(",  "^[[A", "^[[B",    "^[[C",
+        "^[[D",    "^[[3~", "^[[H", "^[[F", "^[[Z", "^[[1;5C", "^[[1;5D",
+        "^[[200~", "^[b",   "^[f",  "^[d",  "^[^?", "jj",      "\\^",
     };
     for (corpus) |spec| {
         const seq = try parseKeySpec(spec);

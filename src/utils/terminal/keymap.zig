@@ -963,7 +963,7 @@ pub const KeymapSet = struct {
     pub fn init() KeymapSet {
         var maps: [keymap_count]Keymap = undefined;
         inline for (all_keymaps) |id| {
-            maps[@intFromEnum(id)] = .{ .id = id };
+            maps[@backingInt(id)] = .{ .id = id };
         }
         return .{ .maps = maps };
     }
@@ -989,11 +989,11 @@ pub const KeymapSet = struct {
     }
 
     pub fn get(self: *KeymapSet, id: KeymapId) *Keymap {
-        return &self.maps[@intFromEnum(id)];
+        return &self.maps[@backingInt(id)];
     }
 
     pub fn getConst(self: *const KeymapSet, id: KeymapId) *const Keymap {
-        return &self.maps[@intFromEnum(id)];
+        return &self.maps[@backingInt(id)];
     }
 
     /// Resolve a keymap name as `bindkey -M` accepts it. `main` follows the
@@ -1048,10 +1048,10 @@ test "widgetName round-trips through resolveWidget" {
     // reserved and sentinel members, which have no bindable name.
     // `unknown` is declared last, so its tag value gives the member count
     // without any version-sensitive @typeInfo reflection.
-    const widget_count = @intFromEnum(Widget.unknown) + 1;
+    const widget_count = @backingInt(Widget.unknown) + 1;
     var i: usize = 0;
     while (i < widget_count) : (i += 1) {
-        const w: Widget = @enumFromInt(i);
+        const w: Widget = @fromBackingInt(@intCast(i));
         if (w == .unknown or w == .user_widget) continue;
         try testing.expectEqual(w, resolveWidget(widgetName(w)));
     }

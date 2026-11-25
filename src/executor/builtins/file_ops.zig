@@ -1,5 +1,5 @@
 const std = @import("std");
-const platform = @import("../../utils/platform.zig");
+const ansi = @import("../../utils/ansi.zig");
 const builtin = @import("builtin");
 const types = @import("../../types/mod.zig");
 const IO = @import("../../utils/io.zig").IO;
@@ -94,7 +94,7 @@ pub fn grep(allocator: std.mem.Allocator, command: *types.ParsedCommand) !i32 {
     // everywhere else. It was on unconditionally, so escape sequences went into
     // pipes and files: `grep x f | wc -c` counted them and `grep x f > out` wrote
     // them into out. An explicit --color still forces it on.
-    var use_color = platform.isTty(std.posix.STDOUT_FILENO);
+    var use_color = ansi.isTerminal();
     var show_filename = false;
     var pattern_idx: usize = 0;
 

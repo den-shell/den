@@ -1,6 +1,11 @@
 const std = @import("std");
 const windows = std.os.windows;
 
+pub extern "kernel32" fn SetEnvironmentVariableA(
+    name: [*:0]const u8,
+    value: [*:0]const u8,
+) callconv(std.builtin.CallingConvention.winapi) windows.BOOL;
+
 pub const STD_INPUT_HANDLE: windows.DWORD = @bitCast(@as(i32, -10));
 pub const STD_OUTPUT_HANDLE: windows.DWORD = @bitCast(@as(i32, -11));
 pub const STD_ERROR_HANDLE: windows.DWORD = @bitCast(@as(i32, -12));
