@@ -108,6 +108,17 @@ test "compound: a writer loop stops when its reader goes away" {
     try expectRun("while true; do echo y; done | head -2", "y\ny\n", 0);
 }
 
+test "compound: bracket negation in a condition strips the delimiter once" {
+    const allocator = std.testing.allocator;
+    var fixture = try test_utils.DenShellFixture.init(allocator);
+    defer fixture.deinit();
+    const r = try den(&fixture, "if [ ! ready = ready ]; then exit 42; fi; while [ ! -n ready ]; do exit 43; done; echo done");
+    defer r.deinit(allocator);
+    try std.testing.expectEqual(@as(u8, 0), r.exit_code);
+    try std.testing.expectEqualStrings("done\n", r.stdout);
+    try std.testing.expectEqualStrings("", r.stderr);
+}
+
 test "compound: exit status of a pipeline and of !" {
     try expectRun("for i in 1; do false; done | cat; echo rc=$?", "rc=0\n", 0);
     try expectRun("! for i in 1; do false; done; echo rc=$?", "rc=0\n", 0);
