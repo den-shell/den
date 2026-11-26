@@ -59,6 +59,26 @@ pub const CliArgs = struct {
 };
 
 /// Parse command line arguments
+const GroupedShellFlags = struct {
+    interactive: bool = false,
+    login: bool = false,
+    command: bool = false,
+};
+
+fn groupedShellFlags(arg: []const u8) ?GroupedShellFlags {
+    if (arg.len < 3 or arg[0] != '-') return null;
+    var flags: GroupedShellFlags = .{};
+    for (arg[1..]) |flag| {
+        switch (flag) {
+            'i' => flags.interactive = true,
+            'l' => flags.login = true,
+            'c' => flags.command = true,
+            else => return null,
+        }
+    }
+    return flags;
+}
+
 pub fn parseArgs(allocator: std.mem.Allocator, process_args: std.process.Args) !CliArgs {
     var args = try process_args.iterateAllocator(allocator);
     // NOTE: Do NOT defer args.deinit() here — the allocated strings are
@@ -151,6 +171,19 @@ pub fn parseArgs(allocator: std.mem.Allocator, process_args: std.process.Args) !
             want_interactive = true;
             i += 1;
             continue;
+        }
+        // Desktop launchers group these options when reading the login
+        // environment. Preserve the command and its arguments verbatim after -c.
+        if (remaining_list.items.len == 0) {
+            if (groupedShellFlags(arg)) |flags| {
+                login = login or flags.login;
+                want_interactive = want_interactive or flags.interactive;
+                i += 1;
+                if (!flags.command) continue;
+                try remaining_list.append(allocator, "-c");
+                try remaining_list.appendSlice(allocator, argv[i..]);
+                break;
+            }
         }
         try remaining_list.append(allocator, arg);
         i += 1;
@@ -1020,4 +1053,15 @@ test "parseArgs: version flag" {
 
 test "parseArgs: help flag" {
     // Conceptual test
+}
+
+test "recognize grouped login and interactive shell flags" {
+    const testing = std.testing;
+    const with_command: GroupedShellFlags = .{ .login = true, .interactive = true, .command = true };
+    try testing.expectEqual(with_command, groupedShellFlags("-ilc").?);
+    try testing.expectEqual(with_command, groupedShellFlags("-cli").?);
+    try testing.expectEqual(GroupedShellFlags{ .login = true }, groupedShellFlags("-ll").?);
+    try testing.expect(groupedShellFlags("--install") == null);
+    try testing.expect(groupedShellFlags("-iother") == null);
+    try testing.expect(groupedShellFlags("-c") == null);
 }

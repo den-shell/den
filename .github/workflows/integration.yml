@@ -56,6 +56,7 @@ jobs:
         run: |
           echo "Testing shell startup..."
           ./zig-out/bin/den -c "echo 'Hello from Den'"
+          test "$(./zig-out/bin/den --norc -ilc 'printf den-grouped-flags')" = den-grouped-flags
 
       - name: Test builtin commands
         run: |
