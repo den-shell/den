@@ -58,6 +58,15 @@ jobs:
           ./zig-out/bin/den -c "echo 'Hello from Den'"
           test "$(./zig-out/bin/den --norc -ilc 'printf den-grouped-flags')" = den-grouped-flags
 
+      - name: Test arguments to shell commands
+        run: |
+          expected="$(printf '<%s>\n' harness-probe 6 -l --json -i 'two words' '' -c)"
+          for option in -c -ilc; do
+            actual="$(./zig-out/bin/den --norc "$option" 'printf "<%s>\n" "$0" "$#" "$@"' harness-probe -l --json -i 'two words' '' -c)"
+            test "$actual" = "$expected"
+          done
+          test "$(./zig-out/bin/den --norc -c 'printf "%s" "$0"')" = den
+
       - name: Test builtin commands
         run: |
           echo "Testing builtin commands..."

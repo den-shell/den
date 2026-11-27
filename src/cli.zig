@@ -59,15 +59,15 @@ pub const CliArgs = struct {
 };
 
 /// Parse command line arguments
-const GroupedShellFlags = struct {
+const ShortShellFlags = struct {
     interactive: bool = false,
     login: bool = false,
     command: bool = false,
 };
 
-fn groupedShellFlags(arg: []const u8) ?GroupedShellFlags {
-    if (arg.len < 3 or arg[0] != '-') return null;
-    var flags: GroupedShellFlags = .{};
+fn shortShellFlags(arg: []const u8) ?ShortShellFlags {
+    if (arg.len < 2 or arg[0] != '-') return null;
+    var flags: ShortShellFlags = .{};
     for (arg[1..]) |flag| {
         switch (flag) {
             'i' => flags.interactive = true,
@@ -175,7 +175,7 @@ pub fn parseArgs(allocator: std.mem.Allocator, process_args: std.process.Args) !
         // Desktop launchers group these options when reading the login
         // environment. Preserve the command and its arguments verbatim after -c.
         if (remaining_list.items.len == 0) {
-            if (groupedShellFlags(arg)) |flags| {
+            if (shortShellFlags(arg)) |flags| {
                 login = login or flags.login;
                 want_interactive = want_interactive or flags.interactive;
                 i += 1;
@@ -923,6 +923,8 @@ fn runCommandString(allocator: std.mem.Allocator, args: []const []const u8, conf
     defer den_shell.deinit();
     if (restricted) den_shell.option_restricted = true;
 
+    if (args.len > 1) try den_shell.setPositionalArguments(args[1], args[2..]);
+
     // Startup files, before the command runs: ~/.denenv always, ~/.denprofile
     // for a login shell, ~/.denrc only when -i asked for an interactive shell.
     if (!norc) den_shell.sourceStartupFiles(mode);
@@ -1055,13 +1057,13 @@ test "parseArgs: help flag" {
     // Conceptual test
 }
 
-test "recognize grouped login and interactive shell flags" {
+test "recognize single and grouped short shell flags" {
     const testing = std.testing;
-    const with_command: GroupedShellFlags = .{ .login = true, .interactive = true, .command = true };
-    try testing.expectEqual(with_command, groupedShellFlags("-ilc").?);
-    try testing.expectEqual(with_command, groupedShellFlags("-cli").?);
-    try testing.expectEqual(GroupedShellFlags{ .login = true }, groupedShellFlags("-ll").?);
-    try testing.expect(groupedShellFlags("--install") == null);
-    try testing.expect(groupedShellFlags("-iother") == null);
-    try testing.expect(groupedShellFlags("-c") == null);
+    const with_command: ShortShellFlags = .{ .login = true, .interactive = true, .command = true };
+    try testing.expectEqual(with_command, shortShellFlags("-ilc").?);
+    try testing.expectEqual(with_command, shortShellFlags("-cli").?);
+    try testing.expectEqual(ShortShellFlags{ .login = true }, shortShellFlags("-ll").?);
+    try testing.expectEqual(ShortShellFlags{ .command = true }, shortShellFlags("-c").?);
+    try testing.expect(shortShellFlags("--install") == null);
+    try testing.expect(shortShellFlags("-iother") == null);
 }

@@ -381,19 +381,7 @@ pub const ScriptManager = struct {
             };
         }
 
-        // Setup positional parameters
-        var param_count: usize = 0;
-        for (args) |arg| {
-            if (param_count >= 64) break;
-            const param_copy = try self.allocator.dupe(u8, arg);
-            shell.positional_params[param_count] = param_copy;
-            param_count += 1;
-        }
-        shell.positional_params_count = param_count;
-
-        // Set shell name
-        const shell_name_copy = try self.allocator.dupe(u8, path);
-        shell.shell_name = shell_name_copy;
+        try shell.setPositionalArguments(path, args);
 
         // Convert lines to array for control flow processing.
         //

@@ -913,17 +913,7 @@ pub const Shell = struct {
             }
         }
 
-        // Clean up positional parameters
-        for (self.positional_params) |maybe_param| {
-            if (maybe_param) |param| {
-                self.allocator.free(param);
-            }
-        }
-
-        // Clean up shell_name if it was dynamically allocated
-        if (!std.mem.eql(u8, self.shell_name, "den")) {
-            self.allocator.free(self.shell_name);
-        }
+        self.freePositionalArguments();
 
         // Clean up environment variables (keys and values were allocated)
         var env_iter = self.environment.iterator();
@@ -1276,6 +1266,34 @@ pub const Shell = struct {
             return err;
         };
         if (self.line_editor) |*editor| editor.markCommandEnd(self.last_exit_code);
+    }
+
+    /// Replace the shell's owned $0 and positional parameters.
+    pub fn setPositionalArguments(self: *Shell, name: []const u8, args: []const []const u8) !void {
+        const default_name = std.mem.eql(u8, name, "den");
+        const new_name: []const u8 = if (default_name) "den" else try self.allocator.dupe(u8, name);
+        errdefer if (!default_name) self.allocator.free(new_name);
+
+        var parameters: @TypeOf(self.positional_params) = @splat(null);
+        const count = @min(args.len, parameters.len);
+        errdefer for (parameters) |parameter| {
+            if (parameter) |value| self.allocator.free(value);
+        };
+        for (args[0..count], 0..) |arg, index| {
+            parameters[index] = try self.allocator.dupe(u8, arg);
+        }
+
+        self.freePositionalArguments();
+        self.shell_name = new_name;
+        self.positional_params = parameters;
+        self.positional_params_count = count;
+    }
+
+    fn freePositionalArguments(self: *Shell) void {
+        for (self.positional_params) |parameter| {
+            if (parameter) |value| self.allocator.free(value);
+        }
+        if (!std.mem.eql(u8, self.shell_name, "den")) self.allocator.free(self.shell_name);
     }
 
     /// Run a script file with positional parameters (using ScriptManager)
