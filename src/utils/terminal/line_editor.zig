@@ -1968,8 +1968,45 @@ pub const LineEditor = struct {
         }
     }
 
+    fn writeWorkingDirectory(self: *LineEditor, cwd: []const u8) void {
+        const prefix = "\x1b]7;file://";
+        const suffix = "\x1b\\";
+        const hex = "0123456789ABCDEF";
+        var marker: [4096]u8 = undefined;
+        @memcpy(marker[0..prefix.len], prefix);
+        var end: usize = prefix.len;
+        const unc = builtin.os.tag == .windows and std.mem.startsWith(u8, cwd, "\\\\");
+        if (builtin.os.tag == .windows and !unc) {
+            marker[end] = '/';
+            end += 1;
+        }
+        for (cwd, 0..) |byte, index| {
+            const slash = byte == '/' or (builtin.os.tag == .windows and byte == '\\');
+            // In a Windows UNC path the leading pair introduces the authority.
+            if (unc and index < 2) continue;
+            const drive_separator = builtin.os.tag == .windows and index == 1 and byte == ':';
+            if (std.ascii.isAlphanumeric(byte) or slash or drive_separator or
+                byte == '-' or byte == '.' or byte == '_' or byte == '~')
+            {
+                if (end + 1 + suffix.len > marker.len) return;
+                marker[end] = if (slash) '/' else byte;
+                end += 1;
+            } else {
+                if (end + 3 + suffix.len > marker.len) return;
+                marker[end..][0..3].* = .{ '%', hex[byte >> 4], hex[byte & 15] };
+                end += 3;
+            }
+        }
+        @memcpy(marker[end..][0..suffix.len], suffix);
+        self.writeBytes(marker[0 .. end + suffix.len]) catch {};
+    }
+
     pub fn readLine(self: *LineEditor) !?[]u8 {
-        if (self.shell_integration) self.writeBytes("\x1b]133;A\x1b\\") catch {};
+        if (self.shell_integration) {
+            var cwd: [4096]u8 = undefined;
+            if (std.c.getcwd(&cwd, cwd.len) != null) self.writeWorkingDirectory(std.mem.sliceTo(&cwd, 0));
+            self.writeBytes("\x1b]133;A\x1b\\") catch {};
+        }
 
         // Display prompt BEFORE entering raw mode so ANSI codes work
         try self.displayPrompt();
@@ -5582,10 +5619,20 @@ test "shell integration reports readiness after bracketed paste is active" {
     s.editor.markCommandEnd(1);
 
     var after: usize = 0;
-    for ([_][]const u8{ "\x1b]133;A\x1b\\", "\x1b[?2004h", "\x1b]133;B\x1b\\", "\x1b[?2004l", "\x1b]133;C\x1b\\", "\x1b]133;D;1\x1b\\" }) |marker| {
+    for ([_][]const u8{ "\x1b]7;file://", "\x1b]133;A\x1b\\", "\x1b[?2004h", "\x1b]133;B\x1b\\", "\x1b[?2004l", "\x1b]133;C\x1b\\", "\x1b]133;D;1\x1b\\" }) |marker| {
         const index = std.mem.indexOfPos(u8, s.screen.items, after, marker) orelse return error.MissingMarker;
         after = index + marker.len;
     }
+}
+
+test "shell integration escapes directory bytes before emitting the OSC 7 marker" {
+    var s: Session = undefined;
+    s.init("");
+    defer s.deinit();
+    const path = if (builtin.os.tag == .windows) "C:\\a b\\%#é" else "/a b/%#é/\x07\\";
+    const uri = if (builtin.os.tag == .windows) "file:///C:/a%20b/%25%23%C3%A9" else "file:///a%20b/%25%23%C3%A9/%07%5C";
+    s.editor.writeWorkingDirectory(path);
+    try std.testing.expectEqualStrings("\x1b]7;" ++ uri ++ "\x1b\\", s.screen.items);
 }
 
 test "pasting in the middle keeps the text after the cursor" {
