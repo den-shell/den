@@ -174,6 +174,61 @@ jobs:
 
           echo "=== All E2E tests passed! ==="
 
+      - name: Verify directory markers with a real terminal
+        run: |
+          python3 - <<'PY'
+          import os
+          import pathlib
+          import pty
+          import select
+          import signal
+          import tempfile
+          import time
+          import urllib.parse
+
+          den = pathlib.Path('zig-out/bin/den').resolve()
+          with tempfile.TemporaryDirectory() as name:
+              root = pathlib.Path(name).resolve()
+              folders = (root / 'source A', root / 'source B')
+              for folder in folders:
+                  folder.mkdir()
+              env = dict(os.environ, HOME=str(root), TERM='xterm-256color', DEN_SHELL_INTEGRATION='1')
+              pid, terminal = pty.fork()
+              if pid == 0:
+                  os.chdir(root)
+                  os.execve(den, [den, '--norc', '-i'], env)
+
+              def read_until(marker):
+                  data = bytearray()
+                  deadline = time.monotonic() + 8
+                  while marker not in data and time.monotonic() < deadline:
+                      if select.select([terminal], [], [], 0.1)[0]:
+                          data.extend(os.read(terminal, 4096))
+                  if marker not in data:
+                      raise AssertionError(repr(data))
+                  return data
+
+              try:
+                  read_until(b'\x1b]133;B\x1b\\')
+                  os.write(terminal, b"cd 'source A' && printf '%s\\n' FIRST && cd '../source B' && printf '%s\\n' SECOND | cat\r")
+                  data = read_until(b'\x1b]133;D')
+                  start = data.index(b'\x1b]133;C\x1b\\')
+                  output = data[start:data.index(b'\x1b]133;D', start)]
+                  offset = 0
+                  for folder, line in zip(folders, (b'FIRST\r\n', b'SECOND\r\n')):
+                      uri = b'\x1b]7;file://' + urllib.parse.quote(str(folder)).encode() + b'\x1b\\'
+                      offset = output.index(uri, offset) + len(uri)
+                      offset = output.index(line, offset) + len(line)
+              finally:
+                  os.close(terminal)
+                  if os.waitpid(pid, os.WNOHANG)[0] == 0:
+                      try:
+                          os.kill(pid, signal.SIGTERM)
+                      except ProcessLookupError:
+                          pass
+                      os.waitpid(pid, 0)
+          PY
+
   performance-benchmark:
     name: Performance Benchmarks
     runs-on: ubuntu-latest
