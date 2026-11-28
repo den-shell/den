@@ -19,7 +19,7 @@ Keep environment, `$PATH`, and aliases in POSIX-compatible files and `source` th
 
 Set your terminal's "shell to run" to Den's path (e.g. `~/.local/bin/den`), or rely on the login shell set via `chsh`. Den emits a two-line prompt with a `❯` symbol by default; customize it in [Themes](../THEMES.md).
 
-Set `DEN_SHELL_INTEGRATION=1` in the terminal's environment to enable [OSC 133 prompt and command markers](https://learn.microsoft.com/en-us/windows/terminal/tutorials/shell-integration). Interactive terminal sessions report when the prompt is ready, when a command starts, and its exit status. Den also sends the current directory as an OSC 7 file URI before each prompt. Scripts, redirected output, and `TERM=dumb` are unaffected.
+Set `DEN_SHELL_INTEGRATION=1` in the terminal's environment to enable [OSC 133 prompt and command markers](https://learn.microsoft.com/en-us/windows/terminal/tutorials/shell-integration). Interactive terminal sessions report when the prompt is ready, when a command starts, and its exit status. Den sends the current directory as an OSC 7 file URI before each prompt and before a command if the interactive shell has changed directories since the last report. For example, in `cd project && make`, the terminal receives the project directory before the build output. The directory marker stays on the terminal and is also disabled for scripts and `TERM=dumb`.
 
 ## Editor / LSP integration
 

@@ -291,6 +291,9 @@ pub const Executor = struct {
     /// Connects stdout of each command to stdin of the next.
     fn executePipeline(self: *Executor, commands: []types.ParsedCommand) !i32 {
         if (commands.len == 0) return 0;
+        if (self.shell) |shell| {
+            if (shell.line_editor) |*editor| editor.reportWorkingDirectory(false);
+        }
         // Expand every stage up-front (in the parent, before any fork) so each
         // segment sees variables set by earlier segments of the chain.
         for (commands) |*cmd| try self.ensureExpanded(cmd);
@@ -699,6 +702,10 @@ pub const Executor = struct {
     }
 
     pub fn executeCommand(self: *Executor, command: *types.ParsedCommand) !i32 {
+        if (self.shell) |shell| {
+            if (shell.line_editor) |*editor| editor.reportWorkingDirectory(false);
+        }
+
         // Expand this segment now (deferred from the shell for chains) so it
         // sees the environment mutated by earlier segments.
         try self.ensureExpanded(command);

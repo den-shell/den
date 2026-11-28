@@ -19,6 +19,7 @@ const builtin = @import("builtin");
 // Import from sibling modules
 const Terminal = @import("terminal.zig").Terminal;
 const windows = @import("terminal.zig").windows;
+const ansi = @import("../ansi.zig");
 const EscapeSequence = @import("escape.zig").EscapeSequence;
 const types = @import("types.zig");
 const CompletionFn = types.CompletionFn;
@@ -322,8 +323,10 @@ pub const LineEditor = struct {
     macro_stored_len: usize = 0,
     // Transient prompt support
     transient_prompt: ?[]const u8 = null, // Minimal prompt to replace full prompt after Enter
-    /// Emit OSC 133 prompt and command boundaries for an enclosing terminal.
+    /// Emit prompt, command and working-directory markers for the terminal.
     shell_integration: bool = false,
+    shell_integration_pid: i32,
+    reported_working_directory: ?[]const u8 = null,
     // Set when the line being returned contains bracketed-paste text. Pasted
     // text is literal input: the shell skips history expansion (`!`) for it.
     pasted: bool = false,
@@ -433,6 +436,7 @@ pub const LineEditor = struct {
         return .{
             .allocator = allocator,
             .prompt = prompt,
+            .shell_integration_pid = if (builtin.os.tag == .windows) 0 else std.c.getpid(),
         };
     }
 
@@ -1968,7 +1972,7 @@ pub const LineEditor = struct {
         }
     }
 
-    fn writeWorkingDirectory(self: *LineEditor, cwd: []const u8) void {
+    fn writeWorkingDirectory(self: *LineEditor, cwd: []const u8) bool {
         const prefix = "\x1b]7;file://";
         const suffix = "\x1b\\";
         const hex = "0123456789ABCDEF";
@@ -1988,23 +1992,52 @@ pub const LineEditor = struct {
             if (std.ascii.isAlphanumeric(byte) or slash or drive_separator or
                 byte == '-' or byte == '.' or byte == '_' or byte == '~')
             {
-                if (end + 1 + suffix.len > marker.len) return;
+                if (end + 1 + suffix.len > marker.len) return false;
                 marker[end] = if (slash) '/' else byte;
                 end += 1;
             } else {
-                if (end + 3 + suffix.len > marker.len) return;
+                if (end + 3 + suffix.len > marker.len) return false;
                 marker[end..][0..3].* = .{ '%', hex[byte >> 4], hex[byte & 15] };
                 end += 3;
             }
         }
         @memcpy(marker[end..][0..suffix.len], suffix);
-        self.writeBytes(marker[0 .. end + suffix.len]) catch {};
+        self.writeBytes(marker[0 .. end + suffix.len]) catch return false;
+        return true;
+    }
+
+    pub fn reportWorkingDirectory(self: *LineEditor, force: bool) void {
+        if (!self.shell_integration) return;
+        // Forked subshells keep a copy of the editor. They do not own the
+        // terminal's working directory, and their output can interleave.
+        if (builtin.os.tag != .windows and std.c.getpid() != self.shell_integration_pid) return;
+        var buffer: [4096]u8 = undefined;
+        if (std.c.getcwd(&buffer, buffer.len) == null) return;
+        const cwd = std.mem.sliceTo(&buffer, 0);
+        const previous = self.reported_working_directory;
+        if (previous) |last| {
+            if (std.mem.eql(u8, last, cwd)) {
+                if (force and self.workingDirectoryOutputIsTerminal()) _ = self.writeWorkingDirectory(cwd);
+                return;
+            }
+        }
+        if (!self.workingDirectoryOutputIsTerminal() or !self.writeWorkingDirectory(cwd)) return;
+        if (previous) |last| self.allocator.free(last);
+        self.reported_working_directory = self.allocator.dupe(u8, cwd) catch null;
+    }
+
+    fn workingDirectoryOutputIsTerminal(self: *const LineEditor) bool {
+        if (self.output != null) return true;
+        if (builtin.os.tag == .windows) return ansi.isTerminal();
+        // The line editor writes to stderr on Unix, including inside a
+        // function or group whose descriptors were already redirected.
+        const output = std.Io.File{ .handle = posix.STDERR_FILENO, .flags = .{ .nonblocking = false } };
+        return output.isTty(std.Options.debug_io) catch false;
     }
 
     pub fn readLine(self: *LineEditor) !?[]u8 {
         if (self.shell_integration) {
-            var cwd: [4096]u8 = undefined;
-            if (std.c.getcwd(&cwd, cwd.len) != null) self.writeWorkingDirectory(std.mem.sliceTo(&cwd, 0));
+            self.reportWorkingDirectory(true);
             self.writeBytes("\x1b]133;A\x1b\\") catch {};
         }
 
@@ -4355,6 +4388,8 @@ pub const LineEditor = struct {
 
     pub fn deinit(self: *LineEditor) void {
         self.terminal.disableRawMode() catch {};
+        if (self.reported_working_directory) |cwd| self.allocator.free(cwd);
+        self.reported_working_directory = null;
         if (self.saved_line) |saved| {
             self.allocator.free(saved);
             self.saved_line = null;
@@ -5631,8 +5666,22 @@ test "shell integration escapes directory bytes before emitting the OSC 7 marker
     defer s.deinit();
     const path = if (builtin.os.tag == .windows) "C:\\a b\\%#é" else "/a b/%#é/\x07\\";
     const uri = if (builtin.os.tag == .windows) "file:///C:/a%20b/%25%23%C3%A9" else "file:///a%20b/%25%23%C3%A9/%07%5C";
-    s.editor.writeWorkingDirectory(path);
+    try std.testing.expect(s.editor.writeWorkingDirectory(path));
     try std.testing.expectEqualStrings("\x1b]7;" ++ uri ++ "\x1b\\", s.screen.items);
+}
+
+test "shell integration keeps unchanged command directories quiet" {
+    var s: Session = undefined;
+    s.init("");
+    defer s.deinit();
+    s.editor.shell_integration = true;
+    s.editor.reportWorkingDirectory(true);
+    const first_marker_length = s.screen.items.len;
+    try std.testing.expect(first_marker_length > 0);
+    s.editor.reportWorkingDirectory(false);
+    try std.testing.expectEqual(first_marker_length, s.screen.items.len);
+    s.editor.reportWorkingDirectory(true);
+    try std.testing.expectEqual(2 * first_marker_length, s.screen.items.len);
 }
 
 test "pasting in the middle keeps the text after the cursor" {

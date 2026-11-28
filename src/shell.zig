@@ -1341,6 +1341,8 @@ pub const Shell = struct {
     }
 
     pub fn executeCommand(self: *Shell, input: []const u8) !void {
+        if (self.line_editor) |*editor| editor.reportWorkingDirectory(false);
+
         // Preprocess heredocs: convert <<DELIM\ncontent\nDELIM to herestring
         if (std.mem.indexOf(u8, input, "<<") != null and std.mem.indexOfScalar(u8, input, '\n') != null) {
             if (self.preprocessHeredoc(input)) |rewritten| {
