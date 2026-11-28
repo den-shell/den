@@ -1,4 +1,5 @@
 const std = @import("std");
+const terminal_mode = @import("utils/terminal/mode.zig");
 const types = @import("types/mod.zig");
 const parser_mod = @import("parser/mod.zig");
 const executor_mod = @import("executor/mod.zig");
@@ -228,7 +229,7 @@ fn resetTerminalAfterChild() void {
     const stdin_fd: std.posix.fd_t = std.posix.STDIN_FILENO;
 
     // Restore sane terminal settings (child may have left raw mode, etc.)
-    var termios = std.posix.tcgetattr(stdin_fd) catch return;
+    var termios = terminal_mode.get(stdin_fd) catch return;
     termios.lflag = .{
         .ECHO = true,
         .ICANON = true,
@@ -242,7 +243,7 @@ fn resetTerminalAfterChild() void {
     termios.iflag.ICRNL = true;
     termios.oflag.OPOST = true;
     termios.oflag.ONLCR = true;
-    std.posix.tcsetattr(stdin_fd, .NOW, termios) catch {};
+    terminal_mode.set(stdin_fd, .NOW, termios) catch {};
 
     // Move to a new line and clear it — ensures prompt appears
     // below any child output, not on top of it

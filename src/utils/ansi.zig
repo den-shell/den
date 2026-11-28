@@ -1,4 +1,5 @@
 const std = @import("std");
+const terminal_mode = @import("terminal/mode.zig");
 const builtin = @import("builtin");
 
 /// ANSI escape sequence codes
@@ -592,7 +593,7 @@ pub const RawMode = struct {
         const stdin_fd = std.posix.STDIN_FILENO;
 
         // Get current terminal settings
-        var termios = try std.posix.tcgetattr(stdin_fd);
+        var termios = try terminal_mode.get(stdin_fd);
         self.original_termios = termios;
 
         // Modify for raw mode
@@ -615,14 +616,14 @@ pub const RawMode = struct {
         termios.cc[@backingInt(std.posix.V.MIN)] = 0;
         termios.cc[@backingInt(std.posix.V.TIME)] = 1;
 
-        try std.posix.tcsetattr(stdin_fd, .FLUSH, termios);
+        try terminal_mode.set(stdin_fd, .FLUSH, termios);
     }
 
     fn disableUnix(self: *RawMode) !void {
         const stdin_fd = std.posix.STDIN_FILENO;
 
         if (self.original_termios) |termios| {
-            try std.posix.tcsetattr(stdin_fd, .FLUSH, termios);
+            try terminal_mode.set(stdin_fd, .FLUSH, termios);
         }
     }
 };

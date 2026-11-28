@@ -1,4 +1,5 @@
 const std = @import("std");
+const terminal_mode = @import("mode.zig");
 const posix = std.posix;
 const builtin = @import("builtin");
 
@@ -46,7 +47,7 @@ pub const Terminal = struct {
 
         // Get current terminal settings
         const stdin_fd = posix.STDIN_FILENO;
-        const original = try std.posix.tcgetattr(stdin_fd);
+        const original = try terminal_mode.get(stdin_fd);
         self.original_termios = original;
 
         var raw = original;
@@ -82,7 +83,7 @@ pub const Terminal = struct {
         // that was already queued - the rest of a multi-line paste from a
         // terminal without bracketed paste, or keys typed ahead while the last
         // command ran - so it never reached the editor.
-        try std.posix.tcsetattr(stdin_fd, .NOW, raw);
+        try terminal_mode.set(stdin_fd, .NOW, raw);
         self.is_raw = true;
     }
 
@@ -155,7 +156,7 @@ pub const Terminal = struct {
 
         const stdin_fd = posix.STDIN_FILENO;
         // TCSANOW keeps queued input for the next prompt (see enableRawMode).
-        try std.posix.tcsetattr(stdin_fd, .NOW, self.original_termios.?);
+        try terminal_mode.set(stdin_fd, .NOW, self.original_termios.?);
         self.is_raw = false;
     }
 

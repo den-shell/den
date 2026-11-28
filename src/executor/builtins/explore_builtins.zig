@@ -1,4 +1,5 @@
 const std = @import("std");
+const terminal_mode = @import("../../utils/terminal/mode.zig");
 const builtin = @import("builtin");
 const posix = std.posix;
 const types = @import("../../types/mod.zig");
@@ -1041,7 +1042,7 @@ const RawTerminal = struct {
         if (builtin.os.tag == .windows) return;
 
         const fd = posix.STDIN_FILENO;
-        var termios = try std.posix.tcgetattr(fd);
+        var termios = try terminal_mode.get(fd);
         self.original = termios;
 
         termios.lflag.ECHO = false;
@@ -1062,13 +1063,13 @@ const RawTerminal = struct {
         termios.cc[@backingInt(std.posix.V.MIN)] = 0;
         termios.cc[@backingInt(std.posix.V.TIME)] = 1; // 100ms timeout
 
-        try std.posix.tcsetattr(fd, .FLUSH, termios);
+        try terminal_mode.set(fd, .FLUSH, termios);
     }
 
     fn disable(self: *RawTerminal) void {
         if (builtin.os.tag == .windows) return;
         if (self.original) |orig| {
-            std.posix.tcsetattr(posix.STDIN_FILENO, .FLUSH, orig) catch {};
+            terminal_mode.set(posix.STDIN_FILENO, .FLUSH, orig) catch {};
         }
     }
 };

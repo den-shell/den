@@ -177,6 +177,7 @@ jobs:
       - name: Verify directory markers with a real terminal
         run: |
           python3 - <<'PY'
+          import errno
           import os
           import pathlib
           import pty
@@ -203,7 +204,16 @@ jobs:
                   deadline = time.monotonic() + 8
                   while marker not in data and time.monotonic() < deadline:
                       if select.select([terminal], [], [], 0.1)[0]:
-                          data.extend(os.read(terminal, 4096))
+                          try:
+                              chunk = os.read(terminal, 4096)
+                          except OSError as error:
+                              # Linux PTYs report EIO when the slave closes.
+                              if error.errno != errno.EIO:
+                                  raise
+                              break
+                          if not chunk:
+                              break
+                          data.extend(chunk)
                   if marker not in data:
                       raise AssertionError(repr(data))
                   return data
