@@ -21,6 +21,8 @@ Set your terminal's "shell to run" to Den's path (e.g. `~/.local/bin/den`), or r
 
 Set `DEN_SHELL_INTEGRATION=1` in the terminal's environment to enable [OSC 133 prompt and command markers](https://learn.microsoft.com/en-us/windows/terminal/tutorials/shell-integration). Interactive terminal sessions report when the prompt is ready, when a command starts, and its exit status. Den sends the current directory as an OSC 7 file URI before each prompt and before a command if the interactive shell has changed directories since the last report. For example, in `cd project && make`, the terminal receives the project directory before the build output. The directory marker stays on the terminal and is also disabled for scripts and `TERM=dumb`.
 
+Terminal hosts that implement Den's prompt markers can set `DEN_TERMINAL_PROMPT_ANCHOR=1` along with shell integration. Den uses `OSC 6973;S ST` to mark the beginning of the active editing area and `OSC 6973;R ST` to clear from that position and return the cursor there. Track the marked position through resize and scroll, preserve the preceding output, and discard the mark when the command starts or the screen clears.
+
 ## Editor / LSP integration
 
 Den ships a Language Server for shell scripts:

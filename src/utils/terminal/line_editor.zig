@@ -325,6 +325,7 @@ pub const LineEditor = struct {
     transient_prompt: ?[]const u8 = null, // Minimal prompt to replace full prompt after Enter
     /// Emit prompt, command and working-directory markers for the terminal.
     shell_integration: bool = false,
+    terminal_prompt_anchor: bool = false,
     shell_integration_pid: i32,
     reported_working_directory: ?[]const u8 = null,
     // Set when the line being returned contains bracketed-paste text. Pasted
@@ -649,9 +650,10 @@ pub const LineEditor = struct {
         if (self.reverse_search_mode) {
             try self.cancelReverseSearch();
             try self.writeBytes("\r\n");
-            try self.writePromptCrlf();
             self.length = 0;
             self.cursor = 0;
+            try self.displayPrompt();
+            self.resetRenderedRowToPrompt();
             return .cont;
         }
 
@@ -1914,7 +1916,8 @@ pub const LineEditor = struct {
             self.in_multiline = true;
 
             try self.writeBytes("\r\n");
-            try self.writeBytes(self.ps2_prompt);
+            try self.savePromptStart();
+            try self.writePromptCrlf();
 
             self.length = 0;
             self.cursor = 0;
@@ -1924,19 +1927,23 @@ pub const LineEditor = struct {
 
         // Input is complete - redraw with the transient prompt if enabled.
         if (self.transient_prompt) |transient| {
-            // Count newlines in the original prompt to handle multi-line prompts.
-            var newline_count: usize = 0;
-            for (self.prompt) |ch| {
-                if (ch == '\n') newline_count += 1;
+            if (self.terminal_prompt_anchor) {
+                try self.clearEditedLine();
+            } else {
+                // Count newlines in the original prompt to handle multi-line prompts.
+                var newline_count: usize = 0;
+                for (self.prompt) |ch| {
+                    if (ch == '\n') newline_count += 1;
+                }
+                // Move the cursor up for each newline in the prompt.
+                if (newline_count > 0) {
+                    var move_buf: [32]u8 = undefined;
+                    const move_seq = std.fmt.bufPrint(&move_buf, "\x1b[{d}A", .{newline_count}) catch "\x1b[1A";
+                    try self.writeBytes(move_seq);
+                }
+                // Move to start of line and clear from here to end of screen.
+                try self.writeBytes("\r\x1b[J");
             }
-            // Move the cursor up for each newline in the prompt.
-            if (newline_count > 0) {
-                var move_buf: [32]u8 = undefined;
-                const move_seq = std.fmt.bufPrint(&move_buf, "\x1b[{d}A", .{newline_count}) catch "\x1b[1A";
-                try self.writeBytes(move_seq);
-            }
-            // Move to start of line and clear from here to end of screen.
-            try self.writeBytes("\r\x1b[J");
             // Write the transient (minimal) prompt plus the typed command.
             try self.writeBytes(transient);
             try self.writeBytes(self.buffer[0..self.length]);
@@ -2237,6 +2244,7 @@ pub const LineEditor = struct {
     }
 
     fn displayPrompt(self: *LineEditor) !void {
+        try self.savePromptStart();
         // In raw mode ONLCR is off, so a bare '\n' in a multi-line prompt would
         // line-feed without returning to column 0 and the prompt would
         // stair-step to the right (e.g. after Ctrl+C). Translate newlines to
@@ -2382,8 +2390,11 @@ pub const LineEditor = struct {
 
     /// Redraw the reverse search prompt and matched line
     fn redrawReverseSearch(self: *LineEditor) !void {
-        // Clear current line
-        try self.writeBytes("\r\x1B[K");
+        if (self.terminal_prompt_anchor) {
+            try self.clearEditedLine();
+        } else {
+            try self.writeBytes("\r\x1B[K");
+        }
 
         // Show reverse search prompt (indicate fuzzy mode with 'f')
         const query = self.reverse_search_query[0..self.reverse_search_query_len];
@@ -2416,20 +2427,21 @@ pub const LineEditor = struct {
         self.reverse_search_query_len = 0;
         self.reverse_search_history_index = 0;
 
-        // Redraw normal prompt and buffer
-        try self.writeBytes("\r\x1B[K");
-        try self.writePromptCrlf();
-        try self.writeBytes(self.buffer[0..self.length]);
-
-        // Move cursor to end
         self.cursor = self.length;
+        if (self.terminal_prompt_anchor) {
+            try self.redrawLine();
+        } else {
+            try self.writeBytes("\r\x1B[K");
+            try self.writePromptCrlf();
+            try self.writeBytes(self.buffer[0..self.length]);
+        }
     }
 
     /// Start visual selection mode (Ctrl+Space)
     fn startVisualMode(self: *LineEditor) !void {
         self.visual_mode = true;
         self.visual_start = self.cursor;
-        try self.redrawWithSelection();
+        try self.redrawLine();
     }
 
     /// Cancel visual selection mode (Escape)
@@ -2484,11 +2496,7 @@ pub const LineEditor = struct {
         try self.redrawLine();
     }
 
-    /// Redraw line with selection highlighting
-    fn redrawWithSelection(self: *LineEditor) !void {
-        try self.writeBytes("\r\x1B[K");
-        try self.writePromptCrlf();
-
+    fn writeSelectedInput(self: *LineEditor) !void {
         const range = self.getSelectionRange();
 
         // Write text before selection
@@ -2507,13 +2515,6 @@ pub const LineEditor = struct {
         if (range.end < self.length) {
             try self.writeBytes(self.buffer[range.end..self.length]);
         }
-
-        // Move cursor to correct position
-        const prompt_len = self.prompt.len;
-        const cursor_col = prompt_len + self.cursor;
-        var buf: [32]u8 = undefined;
-        const pos_cmd = std.fmt.bufPrint(&buf, "\r\x1B[{d}C", .{cursor_col}) catch return;
-        try self.writeBytes(pos_cmd);
     }
 
     /// Start macro recording (Ctrl+X ()
@@ -2577,6 +2578,12 @@ pub const LineEditor = struct {
         self.buffer[self.cursor] = char;
         self.cursor += 1;
         self.length += 1;
+
+        // Editing the middle of wrapped input needs absolute row positioning.
+        if (self.terminal_prompt_anchor and self.cursor < self.length) {
+            try self.redrawLine();
+            return;
+        }
 
         // Redraw from cursor to end
         try self.writeBytes(self.buffer[self.cursor - 1 .. self.length]);
@@ -2842,7 +2849,8 @@ pub const LineEditor = struct {
         }
         self.in_multiline = true;
         try self.writeBytes("\r\n");
-        try self.writeBytes(self.ps2_prompt);
+        try self.savePromptStart();
+        try self.writePromptCrlf();
         self.length = 0;
         self.cursor = 0;
         self.resetRenderedRowToPrompt();
@@ -3349,20 +3357,9 @@ pub const LineEditor = struct {
             try refresh_fn(self);
         }
 
-        // Redisplay prompt
-        try self.displayPrompt();
-
-        // Redraw current buffer
-        if (self.length > 0) {
-            try self.writeBytes(self.buffer[0..self.length]);
-
-            // Move cursor back to correct position
-            const moves_needed = self.length - self.cursor;
-            var i: usize = 0;
-            while (i < moves_needed) : (i += 1) {
-                try self.writeBytes("\x1B[D");
-            }
-        }
+        try self.savePromptStart();
+        self.rendered_cursor_row = 0;
+        try self.redrawLine();
     }
 
     fn handleEscapeSequence(self: *LineEditor, seq: EscapeSequence) !void {
@@ -4109,6 +4106,25 @@ pub const LineEditor = struct {
         return if (self.in_multiline) self.ps2_prompt else self.prompt;
     }
 
+    fn savePromptStart(self: *LineEditor) !void {
+        if (self.terminal_prompt_anchor) try self.writeBytes("\x1b]6973;S\x1b\\");
+    }
+
+    fn clearEditedLine(self: *LineEditor) !void {
+        if (self.terminal_prompt_anchor) {
+            // The terminal knows where the prompt moved during reflow.
+            try self.writeBytes("\x1b]6973;R\x1b\\");
+            return;
+        }
+
+        if (self.rendered_cursor_row > 0) {
+            var buf: [32]u8 = undefined;
+            const seq = std.fmt.bufPrint(&buf, "\x1B[{d}A", .{self.rendered_cursor_row}) catch unreachable;
+            try self.writeBytes(seq);
+        }
+        try self.writeBytes("\r\x1B[0J");
+    }
+
     /// Wrap-aware full-line repaint. Repaints the prompt + buffer and positions
     /// the cursor at its true (row, col), correctly handling lines that wrap
     /// across multiple terminal rows AND prompts that span multiple rows (an
@@ -4134,22 +4150,16 @@ pub const LineEditor = struct {
 
         var buf: [32]u8 = undefined;
 
-        // 1. Move up to the first row of the previously rendered block.
-        if (self.rendered_cursor_row > 0) {
-            const seq = std.fmt.bufPrint(&buf, "\x1B[{d}A", .{self.rendered_cursor_row}) catch "";
-            try self.writeBytes(seq);
-        }
+        try self.clearEditedLine();
 
-        // 2. Column 0, clear everything below.
-        try self.writeBytes("\r\x1B[0J");
-
-        // 3. Prompt. Translate the prompt's own newlines to CRLF: redrawLine runs
+        // Translate the prompt's own newlines to CRLF: redrawLine runs
         //    in raw mode (ONLCR off), so a bare \n line-feeds without returning to
         //    column 0 and a multi-line prompt would stair-step to the right.
         try self.writePromptCrlf();
 
-        // 4. Buffer (optionally syntax-highlighted).
-        if (self.syntax_highlighting and self.length > 0) {
+        if (self.visual_mode) {
+            try self.writeSelectedInput();
+        } else if (self.syntax_highlighting and self.length > 0) {
             var highlighter = SyntaxHighlighter.init(self.allocator);
             const highlighted = highlighter.highlight(self.buffer[0..self.length]) catch null;
             if (highlighted) |h| {
@@ -4162,19 +4172,18 @@ pub const LineEditor = struct {
             try self.writeBytes(self.buffer[0..self.length]);
         }
 
-        // 5. If content fills the last row exactly, force a wrap so row math holds.
+        // If content fills the last row exactly, step into the next row.
         if (total_tail > 0 and total_tail % cols == 0) {
             try self.writeBytes("\r\n");
         }
-        const end_row = if (total_tail > 0 and total_tail % cols == 0) last_row + 1 else last_row;
 
-        // 6. Move up from the end row to the cursor's row.
-        if (end_row > cursor_row) {
-            const seq = std.fmt.bufPrint(&buf, "\x1B[{d}A", .{end_row - cursor_row}) catch "";
+        // Move up from the end row to the cursor's row.
+        if (last_row > cursor_row) {
+            const seq = std.fmt.bufPrint(&buf, "\x1B[{d}A", .{last_row - cursor_row}) catch "";
             try self.writeBytes(seq);
         }
 
-        // 7. Absolute column within the row.
+        // Absolute column within the row.
         try self.writeBytes("\r");
         if (cursor_col > 0) {
             const seq = std.fmt.bufPrint(&buf, "\x1B[{d}C", .{cursor_col}) catch "";
@@ -4186,7 +4195,9 @@ pub const LineEditor = struct {
 
     /// Handle terminal window resize (SIGWINCH)
     fn handleWindowResize(self: *LineEditor) !void {
-        if (self.completion_list != null) {
+        if (self.terminal_prompt_anchor and self.reverse_search_mode) return self.redrawReverseSearch();
+
+        if (!self.terminal_prompt_anchor and self.completion_list != null) {
             try self.clearCompletionDisplay();
         }
 
@@ -4370,20 +4381,7 @@ pub const LineEditor = struct {
         self.cursor = state.cursor;
         self.last_yank_at = null;
 
-        try self.writeBytes("\r");
-        try self.writeBytes("\x1B[K");
-        try self.displayPrompt();
-        if (self.length > 0) {
-            try self.writeBytes(self.buffer[0..self.length]);
-        }
-
-        if (self.cursor < self.length) {
-            const moves_back = self.length - self.cursor;
-            var i: usize = 0;
-            while (i < moves_back) : (i += 1) {
-                try self.writeBytes("\x1B[D");
-            }
-        }
+        try self.redrawLine();
     }
 
     pub fn deinit(self: *LineEditor) void {
@@ -5655,6 +5653,27 @@ test "shell integration reports readiness after bracketed paste is active" {
 
     var after: usize = 0;
     for ([_][]const u8{ "\x1b]7;file://", "\x1b]133;A\x1b\\", "\x1b[?2004h", "\x1b]133;B\x1b\\", "\x1b[?2004l", "\x1b]133;C\x1b\\", "\x1b]133;D;1\x1b\\" }) |marker| {
+        const index = std.mem.indexOfPos(u8, s.screen.items, after, marker) orelse return error.MissingMarker;
+        after = index + marker.len;
+    }
+}
+
+test "a cooperating terminal redraws the continuation from its own prompt position" {
+    var s: Session = undefined;
+    s.init("echo one &&\recho two\x1b[D\r");
+    defer s.deinit();
+    s.editor.terminal_prompt_anchor = true;
+    s.editor.syntax_highlighting = false;
+    const line = try s.submit();
+    defer std.testing.allocator.free(line);
+    try std.testing.expectEqualStrings("echo one &&\necho two", line);
+
+    var after: usize = 0;
+    for ([_][]const u8{
+        "\x1b]6973;S\x1b\\$ ",
+        "\x1b]6973;S\x1b\\> ",
+        "\x1b]6973;R\x1b\\> echo two",
+    }) |marker| {
         const index = std.mem.indexOfPos(u8, s.screen.items, after, marker) orelse return error.MissingMarker;
         after = index + marker.len;
     }

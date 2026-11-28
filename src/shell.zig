@@ -1071,6 +1071,8 @@ pub const Shell = struct {
                         const prompt_str = try self.getPromptString();
                         var editor = LineEditor.init(self.allocator, prompt_str);
                         editor.shell_integration = shell_integration;
+                        editor.terminal_prompt_anchor = shell_integration and
+                            std.mem.eql(u8, getenv("DEN_TERMINAL_PROMPT_ANCHOR") orelse "", "1");
                         editor.syntax_highlighting = self.config.line_editor.syntax_highlighting;
                         editor.autosuggestions = self.config.line_editor.autosuggestions;
                         editor.suggestion_min_chars = @max(1, self.config.line_editor.suggestion_min_chars);
